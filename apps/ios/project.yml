@@ -1,0 +1,23 @@
+name: ReceiptDivider
+options:
+  bundleIdPrefix: com.receiptdivider
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+targets:
+  ReceiptDivider:
+    type: application
+    platform: iOS
+    sources:
+      - path: ReceiptDivider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.receiptdivider.app
+        PRODUCT_NAME: Receipt Divider
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Receipt Divider
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Choose a receipt photo to review and split with your group.
+        INFOPLIST_KEY_NSCameraUsageDescription: Take a photo of a receipt to review and split with your group.

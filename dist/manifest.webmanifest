@@ -1,0 +1,9 @@
+{
+  "name": "Receipt Divider",
+  "short_name": "Divider",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#123b35",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

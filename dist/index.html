@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#123b35" />
+  <meta name="description" content="Capture receipts, select shared items, and split them fairly." />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>Receipt Divider</title>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <a href="#" class="brand" aria-label="Receipt Divider home"><span class="brand-mark">⌁</span> Receipt Divider</a>
+      <button class="profile" type="button" aria-label="Current member, Alex">A</button>
+    </header>
+
+    <section id="home-screen" class="screen active" aria-label="Apartment group history">
+      <div class="group-heading">
+        <div><p class="eyebrow">Shared group</p><h1>Apartment</h1><p class="members">Alex and Jamie</p></div>
+        <button id="new-expense" class="button button-primary" type="button"><span>+</span> Add expense</button>
+      </div>
+      <div class="balance-card">
+        <div><p class="eyebrow light">Your current balance</p><strong id="balance-value">$0.00</strong><p id="balance-detail">You are all settled up.</p></div>
+        <button id="record-payment" class="button button-light" type="button">Record payment</button>
+      </div>
+      <div class="history-heading"><div><h2>Transactions</h2><p>Ordered by purchase date</p></div><button id="reset-demo" class="text-button" type="button">Reset demo</button></div>
+      <div id="history" class="history" aria-live="polite"></div>
+      <div id="empty-history" class="empty-state" hidden><span class="empty-icon">▤</span><h2>No shared expenses yet</h2><p>Take a receipt photo or add an expense manually.</p><button class="button button-primary start-expense" type="button">Add your first expense</button></div>
+    </section>
+
+    <section id="receipt-screen" class="screen" aria-label="New expense receipt">
+      <button class="back-button" data-back="home" type="button">← Back to Apartment</button>
+      <div class="stepper" aria-label="Expense creation progress"><span class="step active">1 <i>Receipt</i></span><b></b><span class="step">2 <i>Select</i></span><b></b><span class="step">3 <i>Split</i></span></div>
+      <h1>Add a receipt</h1><p class="lead">Upload a photo, then check the items before anyone is charged.</p>
+      <label class="upload-zone" for="receipt-file"><input id="receipt-file" type="file" accept="image/*" capture="environment" /><span class="upload-icon">⌁</span><strong>Take a photo or choose a receipt</strong><small>JPG, PNG, or HEIC</small></label>
+      <div id="receipt-preview" class="receipt-preview" hidden><img alt="Selected receipt preview" /><div><strong id="file-name"></strong><button id="remove-photo" class="text-button" type="button">Remove</button></div></div>
+      <div class="or"><span>or</span></div>
+      <button id="manual-entry" class="button button-secondary wide" type="button">Enter items manually</button>
+      <p class="privacy-note">Your receipt is retained as evidence for this expense. This prototype keeps it on this device only.</p>
+    </section>
+
+    <section id="review-screen" class="screen" aria-label="Review receipt items">
+      <button class="back-button" data-back="receipt" type="button">← Receipt</button>
+      <div class="stepper"><span class="step done">✓ <i>Receipt</i></span><b></b><span class="step active">2 <i>Select</i></span><b></b><span class="step">3 <i>Split</i></span></div>
+      <h1>Review shared items</h1><p class="lead">Select what belongs in this shared expense. You can correct anything.</p>
+      <div class="date-row"><label>Purchase date<input id="purchase-date" type="date" /></label><label>Store (optional)<input id="merchant" type="text" placeholder="e.g. Market Basket" /></label></div>
+      <div class="select-all"><label><input id="select-all" type="checkbox" /> Select all items</label><button id="add-line" class="text-button" type="button">+ Add item</button></div>
+      <div id="item-list" class="item-list"></div>
+      <div class="adjustments"><div><span>Tax / fee to include</span><input id="tax" inputmode="decimal" value="0.00" aria-label="Tax or fee to include" /></div><div><span>Discount to include</span><input id="discount" inputmode="decimal" value="0.00" aria-label="Discount to include" /></div></div>
+      <div class="sticky-total"><div><span>Selected total</span><strong id="selected-total">$0.00</strong></div><button id="continue-split" class="button button-primary" type="button">Continue to split →</button></div>
+    </section>
+
+    <section id="split-screen" class="screen" aria-label="Split expense">
+      <button class="back-button" data-back="review" type="button">← Item selection</button>
+      <div class="stepper"><span class="step done">✓ <i>Receipt</i></span><b></b><span class="step done">✓ <i>Select</i></span><b></b><span class="step active">3 <i>Split</i></span></div>
+      <h1>Split this expense</h1><p class="lead">Decide exactly what each person contributes.</p>
+      <label class="field">Description<input id="expense-description" type="text" placeholder="e.g. Shared groceries" /></label>
+      <label class="field">Paid by<select id="payer"><option value="alex">Alex</option><option value="jamie">Jamie</option></select></label>
+      <div class="split-total"><span>Expense total</span><strong id="split-total">$0.00</strong></div>
+      <div class="split-mode" role="group" aria-label="Split method"><button data-mode="equal" class="selected" type="button">Split equally</button><button data-mode="custom" type="button">Custom amounts</button></div>
+      <div id="shares" class="shares"></div>
+      <p id="allocation-message" class="allocation-message"></p>
+      <button id="save-expense" class="button button-primary wide" type="button">Save shared expense</button>
+    </section>
+
+    <section id="payment-screen" class="screen" aria-label="Record repayment">
+      <button class="back-button" data-back="home" type="button">← Back to Apartment</button>
+      <h1>Record a payment</h1><p class="lead">This settles a balance without changing the original expenses.</p>
+      <label class="field">From<select id="payment-from"><option value="jamie">Jamie</option><option value="alex">Alex</option></select></label>
+      <label class="field">To<select id="payment-to"><option value="alex">Alex</option><option value="jamie">Jamie</option></select></label>
+      <label class="field">Amount<input id="payment-amount" inputmode="decimal" placeholder="0.00" /></label>
+      <label class="field">Payment date<input id="payment-date" type="date" /></label>
+      <button id="save-payment" class="button button-primary wide" type="button">Record payment</button>
+    </section>
+  </main>
+  <nav class="bottom-dock" aria-label="Primary navigation">
+    <button class="dock-item active" data-nav="home" type="button" aria-label="View activity">
+      <span class="dock-icon">◷</span><span>Activity</span>
+    </button>
+    <button class="dock-add" data-nav="new" type="button" aria-label="Add a new expense"><span>+</span></button>
+    <button class="dock-item" data-nav="payment" type="button" aria-label="Record a payment">
+      <span class="dock-icon">↗</span><span>Settle</span>
+    </button>
+  </nav>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
