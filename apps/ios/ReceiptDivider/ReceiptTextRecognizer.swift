@@ -49,7 +49,10 @@ enum ReceiptTextRecognizer {
         let enhanced = image.cropped(to: crop)
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0, kCIInputContrastKey: 1.6])
         let second = parse(try fragments(in: enhanced))
-        return score(second) >= score(first) ? second : first
+        // The crop can cut off a date printed outside the item area, so either pass may supply it.
+        var best = score(second) >= score(first) ? second : first
+        best.purchaseDate = best.purchaseDate ?? first.purchaseDate ?? second.purchaseDate
+        return best
     }
 
     private static func fragments(in image: CIImage) throws -> [Fragment] {
@@ -197,23 +200,47 @@ enum ReceiptTextRecognizer {
             .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters).union(.symbols))
     }
 
-    private static func purchaseDate(in lines: [String]) -> Date? {
-        let regex = try! NSRegularExpression(pattern: #"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})\b"#)
-        var dates = Set<Date>()
+    /// Receipts can print several dates, such as a return-by date or a survey deadline. Future dates are
+    /// ignored, a date printed beside a time (the checkout timestamp) wins, and otherwise the latest date is used.
+    static func purchaseDate(in lines: [String], now: Date = Date()) -> Date? {
+        var dates: [Date] = [], timed: [Date] = []
         for line in lines {
-            for match in regex.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
-                let parts = (1...3).compactMap { Range(match.range(at: $0), in: line).flatMap { Int(line[$0]) } }
-                guard parts.count == 3 else { continue }
-                let components = DateComponents(year: parts[2] < 100 ? 2000 + parts[2] : parts[2], month: parts[0], day: parts[1])
-                if components.isValidDate(in: .current), let date = Calendar.current.date(from: components) { dates.insert(date) }
+            let found = self.dates(in: line).filter { $0 <= now }
+            dates += found
+            if line.range(of: #"\b\d{1,2}:\d{2}\b"#, options: .regularExpression) != nil { timed += found }
+        }
+        return timed.max() ?? dates.max()
+    }
+
+    private static let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    /// Numeric dates are read US style (month first). Each pattern captures year, month, and day in the given order.
+    private static let datePatterns: [(NSRegularExpression, order: [Character])] = [
+        (#"\b(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})\b"#, ["y", "m", "d"]),
+        (#"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b"#, ["m", "d", "y"]),
+        (#"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(\d{1,2}),?\s+(\d{4}|\d{2})\b"#, ["m", "d", "y"]),
+        (#"\b(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s+(\d{4}|\d{2})\b"#, ["d", "m", "y"]),
+    ].map { (try! NSRegularExpression(pattern: $0.0, options: .caseInsensitive), $0.1) }
+
+    private static func dates(in line: String) -> [Date] {
+        datePatterns.flatMap { regex, order in
+            regex.matches(in: line, range: NSRange(line.startIndex..., in: line)).compactMap { match -> Date? in
+                var parts: [Character: Int] = [:]
+                for (index, key) in order.enumerated() {
+                    guard let range = Range(match.range(at: index + 1), in: line) else { return nil }
+                    let text = line[range].lowercased()
+                    guard let value = Int(text) ?? months.firstIndex(where: text.hasPrefix).map({ $0 + 1 }) else { return nil }
+                    parts[key] = value
+                }
+                guard let year = parts["y"], let month = parts["m"], let day = parts["d"] else { return nil }
+                let components = DateComponents(year: year < 100 ? 2000 + year : year, month: month, day: day)
+                return components.isValidDate(in: .current) ? Calendar.current.date(from: components) : nil
             }
         }
-        return dates.count == 1 ? dates.first : nil
     }
 }
 
 #if canImport(UIKit)
-private extension UIImage {
+extension UIImage {
     var cgImageOrientation: CGImagePropertyOrientation {
         switch imageOrientation {
         case .up: return .up

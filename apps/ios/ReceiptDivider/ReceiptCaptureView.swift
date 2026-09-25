@@ -1,6 +1,7 @@
 import PhotosUI
 import SwiftUI
 import UIKit
+import VisionKit
 
 struct ReceiptCaptureView: View {
     enum Step: Int { case capture, reading, select, people, split }
@@ -13,6 +14,7 @@ struct ReceiptCaptureView: View {
     @State private var showCamera = false
     @State private var items: [ReceiptItem] = []
     @State private var purchaseDate = Date()
+    @State private var dateNote: String?
     @State private var selectedPeople: Set<Person> = [.alex, .jamie]
     @State private var shares: [Person: Int] = [:]
     @State private var splitMode: SplitMode = .equal
@@ -43,8 +45,8 @@ struct ReceiptCaptureView: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { if step != .capture && step != .reading { ToolbarItem(placement: .topBarLeading) { Button("Back") { back() } } } }
-            .sheet(isPresented: $showCamera) { CameraCapture(image: $image) }
-            .onChange(of: captureRequest) { _, _ in if step == .capture { showCamera = true } }
+            .fullScreenCover(isPresented: $showCamera) { DocumentScanner(image: $image).ignoresSafeArea() }
+            .onChange(of: captureRequest) { _, _ in if step == .capture && canScan { showCamera = true } }
             .onChange(of: image) { _, newImage in if newImage != nil { startReading() } }
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
             .sensoryFeedback(.selection, trigger: items.filter(\.isSelected).count)
@@ -52,12 +54,14 @@ struct ReceiptCaptureView: View {
         }
     }
 
+    /// The scanner is unavailable in Simulator and on devices without a camera.
+    private var canScan: Bool { VNDocumentCameraViewController.isSupported }
     private var title: String { switch step { case .capture: "Add transaction"; case .reading: "Reading receipt"; case .select: "Select items"; case .people: "Who was involved?"; case .split: "Split expense" } }
     private var captureScreen: some View {
         ContentUnavailableView {
             Label("Scan a receipt", systemImage: "camera.viewfinder")
         } description: { Text("Take a photo to find individual costs, then choose only the items to share.") } actions: {
-            Button("Open camera", systemImage: "camera") { showCamera = true }.buttonStyle(.borderedProminent)
+            Button("Scan receipt", systemImage: "doc.viewfinder") { showCamera = true }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
             Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0)]; step = .select }.padding(.top, 12)
         }
@@ -67,7 +71,7 @@ struct ReceiptCaptureView: View {
     }
     private var itemSelectionScreen: some View {
         List {
-            Section("Receipt details") { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date); TextField("Description", text: $description) }
+            Section { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date); TextField("Description", text: $description) } header: { Text("Receipt details") } footer: { if let dateNote { Text(dateNote) } }
             if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
             Section("Select items to share") {
                 ForEach($items) { $item in
@@ -125,12 +129,20 @@ struct ReceiptCaptureView: View {
         }
         .safeAreaInset(edge: .bottom) { ContinueButton(title: "Save transaction", disabled: !isValidSplit) { save() } }
     }
-    private func load(_ photo: PhotosPickerItem?) { Task { guard let data = try? await photo?.loadTransferable(type: Data.self), let picture = UIImage(data: data) else { return }; image = picture } }
-    private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? ReceiptTextRecognizer.scan(image)) ?? ReceiptScan(); items = scan.items; taxCents = scan.taxCents; if let date = scan.purchaseDate { purchaseDate = date }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0)]; error = "No item prices were found. Add them manually." }; step = .select } }
+    /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
+    private func load(_ photo: PhotosPickerItem?) {
+        guard let photo else { return }
+        step = .reading
+        Task { @MainActor in
+            guard let data = try? await photo.loadTransferable(type: Data.self), let picture = UIImage(data: data) else { step = .capture; return }
+            image = await Task.detached { ReceiptImageProcessor.flatten(picture) }.value
+        }
+    }
+    private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; taxCents = scan.taxCents; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0)]; error = "No item prices were found. Add them manually." }; step = .select } }
     private func shareBinding(for person: Person) -> Binding<Int> { Binding(get: { shares[person] ?? 0 }, set: { shares[person] = $0 }) }
     private func setEqualSplit() { let people = selectedPeople.sorted { $0.rawValue < $1.rawValue }; guard !people.isEmpty else { return }; let base = total / people.count; let remainder = total % people.count; shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) }) }
     private func save() { store.add(Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, taxCents: taxCents, discountCents: discountCents, shares: shares, receiptImageData: image?.jpegData(compressionQuality: 0.72))); didSave.toggle(); reset(); finish() }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = [.alex, .jamie]; shares = [:]; taxCents = 0; discountCents = 0; purchaseDate = Date(); error = nil; splitMode = .equal; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = [.alex, .jamie]; shares = [:]; taxCents = 0; discountCents = 0; purchaseDate = Date(); dateNote = nil; error = nil; splitMode = .equal; description = "Shared groceries" }
     private func back() { switch step { case .select: step = .capture; case .people: step = .select; case .split: step = .people; default: break } }
 }
 
