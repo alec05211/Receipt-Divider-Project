@@ -236,10 +236,10 @@ This describes responsibilities, not a committed database schema or technology s
 
 | Entity | Purpose and important fields |
 | --- | --- |
-| User | Identity and display name. |
+| User | Identity, display name, and an optional database-backed profile image. |
 | Group | Name, currency, creator, and timestamps. |
 | Membership | Group, user, role, and membership state. Preserve references needed for historical entries. |
-| Receipt | Uploader, private image reference, merchant/date if known, extraction status, extracted data, reviewed data, and full receipt total. |
+| Receipt | Uploader, private image bytes stored in the database, media type, integrity hash, merchant/date if known, extraction status, extracted data, reviewed data, and full receipt total. |
 | Expense | Group, creator, payer, description, currency, total, transaction date (purchase calendar date), receipt reference if present, effective status, creation timestamp, and modification timestamp. |
 | Expense item | Saved description, quantity if known, selected line total, and source receipt-row reference if available. |
 | Expense adjustment | Included tax, tip, fee, or discount, with amount and allocation method. |
@@ -268,11 +268,11 @@ Visual design, naming, and navigation details remain open.
 
 - Responsive web client for capture, review, allocation, and group history.
 - Authenticated backend for group access, validation, scanning orchestration, and atomic expense writes.
-- Persistent database for identities, memberships, expenses, allocations, repayments, and history.
-- Private object storage for receipt photos.
+- Persistent PostgreSQL database for identities, memberships, expenses, allocations, repayments, history, profile images, and receipt image bytes.
+- Keep image access behind authenticated API endpoints and impose conservative size limits. The initial implementation uses 5 MB per profile image and 15 MB per receipt; these are implementation defaults rather than permanent product requirements.
 - Replaceable receipt extraction service so provider choices do not define the financial model.
 
-Framework, hosting, database, authentication, and extraction providers are not yet selected.
+The initial API implementation uses portable TypeScript HTTP handlers and a PostgreSQL adapter. Hosting, managed PostgreSQL, authentication, and extraction providers are not yet selected.
 
 ### Trust and reliability
 
@@ -341,6 +341,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | D-12 | Are refunds or negative line items needed immediately? | Defer refund transactions; explicitly detect unsupported cases. | Before scan validation. |
 | D-13 | Resolved: which date places an expense in history? | Confirmed: receipt purchase date determines placement; creation time is separate. Proposed: newest-first ordering, transaction-date reporting, and same-day tie-breakers as specified in section 6. | Core decision resolved; proposed details remain refinable. |
 | D-14 | Is a suggested payment plan needed for groups larger than two? | Begin with member net balances; add deterministic settlement suggestions if required. | Before multi-person settlement UI. |
+| D-15 | When should images leave PostgreSQL? | Keep receipt and profile image bytes in PostgreSQL initially. Reconsider only if database size, backup duration, bandwidth, or delivery performance creates a demonstrated problem; preserve the API contract if storage changes. | After measured household or beta usage. |
 
 ## 13. Decision and change log
 
@@ -351,6 +352,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-25 | Began a dependency-free local interaction prototype in `receipt-divider/dist`. It supports manual receipt item entry, selection, exact/equal splits, transaction-date history, and recorded repayments. It uses device-local browser storage only and does not yet provide shared accounts, server validation, receipt extraction, or private cloud image storage. | Prototype started; production architecture remains pending. |
 | 2026-09-25 | Pivoted to a native iPhone reference client in `apps/ios`. The SwiftUI foundation uses system `TabView`, navigation, and toolbars for Liquid Glass behavior on current iOS, plus sensory feedback for selection and successful saves. | Native iOS source scaffold started; requires a Mac with Xcode for generation, compilation, and device validation. |
 | 2026-09-25 | Extended the native local foundation with camera/photo receipt intake, Vision text extraction, editable item rows, dynamic equal/custom allocation, transaction-date history, local ledger persistence, and repayment recording. | Source implementation complete for this local slice; Xcode compilation and on-device validation remain pending. |
+| 2026-09-26 | Added a provider-neutral TypeScript ledger API and PostgreSQL schema with atomic expense writes, idempotency, memberships, repayments, audit versions, derived balances, and database-backed profile and receipt images. | Backend foundation implemented and locally tested; production authentication, invitations, deployment provider, PostgreSQL integration testing, and iOS synchronization remain pending. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

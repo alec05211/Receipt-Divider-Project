@@ -31,6 +31,7 @@ Opening a transaction shows the cost breakdown first, then the receipt image and
 ```text
 apps/ios/                 Native SwiftUI iPhone client
 apps/ios/ReceiptDivider/  App source code
+apps/api/                 Stateless TypeScript ledger API and PostgreSQL schema
 dist/                     Original web workflow prototype
 PRODUCT_SPEC.md           Living product requirements and decisions
 skills/                   Repository-local Codex guidance
@@ -56,11 +57,24 @@ Open `http://127.0.0.1:4173` in a browser.
 5. Select an iPhone running a current iOS release and run the app.
 6. Allow Camera and Photo Library access when prompted.
 
-The initial native app is local-device only. It already covers capture, on-device text recognition, editable receipt items, exact-cent splits, local persistence, payment recording, and transaction detail evidence. The shared backend, accounts, invitations, cloud receipt storage, and server-side validation are the next major implementation phase.
+The initial native app is local-device only. It already covers capture, on-device text recognition, editable receipt items, exact-cent splits, local persistence, payment recording, and transaction detail evidence.
+
+A provider-neutral backend foundation now lives in `apps/api`. It implements profiles, groups, membership, database-backed receipt and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, and derived balances. The iPhone app is not connected to it yet, and production identity verification, invitations, deployment, and receipt-processing providers remain deliberately undecided.
+
+## Test the backend
+
+```powershell
+cd apps/api
+npm install
+npm test
+npm run typecheck
+```
+
+See [`apps/api/README.md`](apps/api/README.md) for local startup, PostgreSQL migration, image limits, and the authentication boundary that must be replaced before deployment.
 
 ## Key documents
 
 - [Product specification](PRODUCT_SPEC.md)
 - [iOS implementation notes](apps/ios/README.md)
+- [Backend implementation notes](apps/api/README.md)
 - [Repository maintenance skill](skills/receipt-divider-maintenance/SKILL.md)
-
