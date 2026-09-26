@@ -57,7 +57,7 @@ struct ReceiptCaptureView: View {
         ContentUnavailableView {
             Label("Scan a receipt", systemImage: "camera.viewfinder")
         } description: { Text("Take a photo to find individual costs, then choose only the items to share.") } actions: {
-            Button("Scan receipt", systemImage: "doc.viewfinder") { showCamera = true }.buttonStyle(.borderedProminent).disabled(!canScan)
+            Button { showCamera = true } label: { Label("Scan receipt", systemImage: "doc.viewfinder").prominentLabel() }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
             Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; step = .select }.padding(.top, 12)
         }
@@ -157,7 +157,19 @@ struct ReceiptCaptureView: View {
     private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }
 
-private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(title, action: action).buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).background(.bar).disabled(disabled) } }
+private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).background(.bar).disabled(disabled) } }
+
+private extension View {
+    func prominentLabel() -> some View { modifier(ProminentLabel()) }
+}
+
+/// The app tint is `.primary`, so a prominent button fills black in light mode and white in dark mode while the
+/// system label stays white. The background color is always the opposite of the fill; a disabled button's fill
+/// is a faint wash of the tint, so its label uses `.primary`, which the disabled style dims to gray.
+private struct ProminentLabel: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    func body(content: Content) -> some View { content.foregroundStyle(isEnabled ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(.primary)) }
+}
 
 /// Trailing selection indicator drawn with the same symbols iOS uses for list selection.
 private struct SelectionCircle: View {
