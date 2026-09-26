@@ -16,7 +16,6 @@ struct ReceiptCaptureView: View {
     @State private var dateNote: String?
     @State private var selectedPeople: Set<Person> = [.alex, .jamie]
     @State private var shares: [Person: Int] = [:]
-    @State private var splitMode: SplitMode = .equal
     @State private var description = "Shared groceries"
     @State private var payer: Person = .alex
     @State private var error: String?
@@ -135,8 +134,8 @@ struct ReceiptCaptureView: View {
     }
     private var splitScreen: some View {
         List {
-            Section { Picker("Paid by", selection: $payer) { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { Text($0.rawValue).tag($0) } }; Picker("Split", selection: $splitMode) { ForEach(SplitMode.allCases) { Text($0.rawValue).tag($0) } }.onChange(of: splitMode) { _, mode in if mode == .equal { setEqualSplit() } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
-            Section("Contributions") { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { person in LabeledContent(person.rawValue) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100).disabled(splitMode == .equal) } } }
+            Section { Picker("Paid by", selection: $payer) { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { Text($0.rawValue).tag($0) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
+            Section("Contributions") { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { person in LabeledContent(person.rawValue) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) } } }
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
         }
         .safeAreaInset(edge: .bottom) { ContinueButton(title: "Save transaction", disabled: !isValidSplit) { save() } }
@@ -154,7 +153,7 @@ struct ReceiptCaptureView: View {
     private func shareBinding(for person: Person) -> Binding<Int> { Binding(get: { shares[person] ?? 0 }, set: { shares[person] = $0 }) }
     private func setEqualSplit() { let people = selectedPeople.sorted { $0.rawValue < $1.rawValue }; guard !people.isEmpty else { return }; let base = total / people.count; let remainder = total % people.count; shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) }) }
     private func save() { store.add(Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, shares: shares, receiptImageData: image?.jpegData(compressionQuality: 0.72))); didSave.toggle(); reset(); finish() }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = [.alex, .jamie]; shares = [:]; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; splitMode = .equal; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = [.alex, .jamie]; shares = [:]; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
     private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }
 

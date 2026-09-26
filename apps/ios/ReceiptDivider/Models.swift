@@ -58,7 +58,6 @@ enum Person: String, CaseIterable, Identifiable, Codable {
     var other: Person { self == .alex ? .jamie : .alex }
     var initials: String { String(rawValue.prefix(1)) }
 }
-enum SplitMode: String, CaseIterable, Identifiable { case equal = "Split equally", custom = "Custom amounts"; var id: String { rawValue } }
 
 @Observable final class ExpenseStore {
     private let storageKey = "receipt-divider-ledger-v1"
