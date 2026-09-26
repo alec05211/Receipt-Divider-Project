@@ -8,19 +8,22 @@ import UIKit
 #endif
 
 struct ReceiptScan {
+    /// Items at their printed prices, with tax and discounts folded into each item's offset.
     var items: [ReceiptItem] = []
     var taxCents = 0
+    /// Discounts printed after the subtotal, which apply to the whole receipt.
+    var discountCents = 0
     /// Set only when the receipt shows exactly one distinct date, so an ambiguous receipt still asks the member.
     var purchaseDate: Date?
     /// The printed balance or total, used to flag misread prices.
     var printedTotalCents: Int?
 
-    /// Nil when the items and tax add up to the printed total, or when no total was found.
+    /// Nil when the items, tax and discounts add up to the printed total, or when no total was found.
     var mismatchWarning: String? {
         guard let printed = printedTotalCents else { return nil }
-        let found = items.reduce(0) { $0 + $1.cents } + taxCents
+        let found = items.reduce(0) { $0 + $1.totalCents }
         guard found != printed else { return nil }
-        return "Items and tax add up to \(found.usd), but the receipt total is \(printed.usd). Check the prices below."
+        return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the prices below."
     }
 }
 
@@ -86,6 +89,8 @@ enum ReceiptTextRecognizer {
     static func parse(_ fragments: [Fragment]) -> ReceiptScan {
         var scan = ReceiptScan()
         var pendingName: String?
+        var lastItem: Int?
+        var sawSubtotal = false
         for row in rows(from: fragments) {
             let text = row.joined(separator: " ")
             let lower = text.lowercased()
@@ -95,21 +100,35 @@ enum ReceiptTextRecognizer {
                 pendingName = lower.contains(where: \.isLetter) && !isExcluded(lower) ? clean(text) : nil
                 continue
             }
-            let name = clean(rawName)
+            // A price printed on its own row belongs to the name on the row above. That name goes through the
+            // same checks, so a "TAX" label whose amount landed on the next row isn't read as an item.
+            let cleaned = clean(rawName)
+            let name = cleaned.contains(where: \.isLetter) ? cleaned : pendingName
+            pendingName = nil
+            guard let name else { continue }
             let lowerName = name.lowercased()
-            if lowerName.range(of: #"\btax\b"#, options: .regularExpression) != nil && !lowerName.contains("total") {
+            if lowerName.range(of: #"\bsub ?total\b"#, options: .regularExpression) != nil { sawSubtotal = true }
+            if cents < 0 {
+                // A negative line before the subtotal is a coupon for the item above it; after the subtotal it
+                // discounts the whole receipt. A negative "total savings" summary repeats those and is skipped.
+                guard !lowerName.contains("total") else { continue }
+                if !sawSubtotal, let lastItem {
+                    scan.items[lastItem].offsetCents += cents
+                } else {
+                    scan.discountCents -= cents
+                }
+            } else if lowerName.range(of: #"\btax(es)?\d*\b"#, options: .regularExpression) != nil && !lowerName.contains("total") {
                 scan.taxCents += cents
             } else if scan.printedTotalCents == nil, lowerName.contains("balance") || (lowerName.contains("total") && !lowerName.contains("sub")) {
                 scan.printedTotalCents = cents
-            } else if isExcluded(lowerName) || cents <= 0 {
+            } else if isExcluded(lowerName) || cents == 0 {
                 // Totals, payment, and savings lines are not purchased items.
-            } else if name.contains(where: \.isLetter) {
+            } else {
                 scan.items.append(ReceiptItem(name: name, cents: cents))
-            } else if let pending = pendingName {
-                scan.items.append(ReceiptItem(name: pending, cents: cents))
+                lastItem = scan.items.count - 1
             }
-            pendingName = nil
         }
+        scan.items.spread(scan.taxCents - scan.discountCents)
         scan.purchaseDate = purchaseDate(in: fragments.map(\.text))
         return scan
     }
@@ -128,7 +147,7 @@ enum ReceiptTextRecognizer {
             .compactMap { $0.min(by: { $0.box.minX < $1.box.minX })?.box.minX }.sorted()
         let nameColumn = nameStarts.isEmpty ? 0 : nameStarts[nameStarts.count / 2]
         let isPricePiece = { (fragment: Fragment) in
-            fragment.box.minX > nameColumn && fragment.text.range(of: #"^\$?[\d.,\s]*[A-Z]{0,2}$"#, options: .regularExpression) != nil
+            fragment.box.minX > nameColumn && fragment.text.range(of: #"^-?\$?-?[\d.,\s]*-?\s*[A-Z]{0,2}$"#, options: .regularExpression) != nil
         }
         var rows = group(fragments.filter { !isPricePiece($0) })
         // A photographed receipt is rarely flat, so the price column drifts up or down relative to the
@@ -155,18 +174,20 @@ enum ReceiptTextRecognizer {
     }
 
     /// Rejoins a price that Vision split into pieces ("8" and ",39", or "4 99") and restores a
-    /// dropped decimal point, since receipt prices always print two decimal places. A price that
-    /// lost digits stays visible so the member can correct it; the total check flags it.
+    /// dropped decimal point, since receipt prices always print two decimal places. A minus sign on
+    /// either side marks a discount. A price that lost digits stays visible so the member can correct
+    /// it; the total check flags it.
     private static func priceText(_ pieces: [Fragment]) -> String {
         let text = pieces.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: " ")
         let flag = text.range(of: #"\s[A-Z]{1,2}$"#, options: .regularExpression).map { String(text[$0]) } ?? ""
+        let sign = text.contains("-") ? "-" : ""
         let number = text.filter { $0.isNumber || $0 == "." || $0 == "," }.replacingOccurrences(of: ",", with: ".")
         guard number.contains(where: \.isNumber) else { return text }
         let parts = number.split(separator: ".", omittingEmptySubsequences: false)
-        if parts.count == 2, parts[1].count == 2 { return "\(parts[0].isEmpty ? "0" : String(parts[0])).\(parts[1])\(flag)" }
+        if parts.count == 2, parts[1].count == 2 { return "\(sign)\(parts[0].isEmpty ? "0" : String(parts[0])).\(parts[1])\(flag)" }
         let digits = number.filter(\.isNumber)
         guard parts.count == 1, digits.count >= 2 else { return text }
-        return "\(digits.count == 2 ? "0" : String(digits.dropLast(2))).\(digits.suffix(2))\(flag)"
+        return "\(sign)\(digits.count == 2 ? "0" : String(digits.dropLast(2))).\(digits.suffix(2))\(flag)"
     }
 
     /// Groups fragments that sit on the same printed line, top to bottom.
@@ -185,14 +206,17 @@ enum ReceiptTextRecognizer {
         return rows
     }
 
-    /// Splits a row ending in a price, ignoring a trailing tax flag such as "F" or "T".
+    /// Splits a row ending in a price, ignoring a trailing tax flag such as "F" or "T". A discount prints
+    /// with a minus sign before or after the amount ("-1.00", "1.00-") and comes back negative.
     private static func priced(_ text: String) -> (String, Int)? {
-        let pattern = #"^(.*?)\s*\$?(\d{1,5}[.,]\d{2})\s*[A-Z]{0,2}\s*$"#
+        let pattern = #"^(.*?)\s*(-?)\s*\$?(-?)(\d{1,5}[.,]\d{2})(-?)\s*[A-Z]{0,2}\s*$"#
         guard let match = try? NSRegularExpression(pattern: pattern).firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let nameRange = Range(match.range(at: 1), in: text),
-              let priceRange = Range(match.range(at: 2), in: text),
+              let priceRange = Range(match.range(at: 4), in: text),
               let decimal = Decimal(string: text[priceRange].replacingOccurrences(of: ",", with: ".")) else { return nil }
-        return (String(text[nameRange]), NSDecimalNumber(decimal: decimal * 100).intValue)
+        let isNegative = [2, 3, 5].contains { match.range(at: $0).length > 0 }
+        let cents = NSDecimalNumber(decimal: decimal * 100).intValue
+        return (String(text[nameRange]), isNegative ? -cents : cents)
     }
 
     private static func clean(_ name: String) -> String {

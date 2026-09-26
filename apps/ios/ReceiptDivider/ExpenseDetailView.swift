@@ -54,8 +54,7 @@ struct ExpenseDetailView: View {
                 ForEach(expense.items.filter(\.isSelected)) { item in
                     LabeledContent(item.name, value: item.cents.usd)
                 }
-                if expense.taxCents > 0 { LabeledContent("Tax or fee", value: expense.taxCents.usd) }
-                if expense.discountCents > 0 { LabeledContent("Discount", value: "−\(expense.discountCents.usd)") }
+                if expense.offsetTotal != 0 { LabeledContent("Tax and discounts", value: expense.offsetTotal < 0 ? "−\((-expense.offsetTotal).usd)" : expense.offsetTotal.usd) }
             }
 
             Section("Recent transactions with these people") {
