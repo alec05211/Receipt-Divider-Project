@@ -1,8 +1,8 @@
 import { serve } from "@hono/node-server";
-import { createApp } from "./app.js";
-import { MemoryRepository } from "./memory-repository.js";
-import { PostgresRepository } from "./postgres-repository.js";
-import { createSupabaseAuthenticator } from "./supabase-auth.js";
+import { createApp } from "./app.ts";
+import { MemoryRepository } from "./memory-repository.ts";
+import { PostgresRepository } from "./postgres-repository.ts";
+import { createSupabaseAuthenticator } from "./supabase-auth.ts";
 
 const port = Number(process.env.PORT ?? 8787);
 const databaseUrl = process.env.DATABASE_URL;

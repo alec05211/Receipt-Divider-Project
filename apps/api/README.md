@@ -1,17 +1,21 @@
 # Receipt Divider API
 
-This is the provider-neutral ledger backend. It uses Hono's Web-standard request handler, a PostgreSQL adapter for durable use, and an in-memory adapter for local tests.
+This is the stateless transaction-ledger backend. It uses Hono, Supabase Auth access tokens, and PostgreSQL as the canonical store. The phone submits reviewed commands and renders snapshots; it does not reconcile balances or race concurrent writes locally.
 
-## What is implemented
+## Implemented model
 
-- User profiles and database-backed profile images.
-- Groups and direct owner-managed membership (invitations remain open).
-- Private database-backed receipt images.
-- Atomic expenses, items, allocations, repayments, audit events, and group versions.
-- Integer-cent validation, server-recalculated totals, idempotent retries, and derived balances.
-- Authorization checks at every group and image boundary.
+- One private ledger per authenticated account, initially in USD.
+- Local `people` records; a person can optionally link to a future app account but does not need one.
+- Saved people filters (called groups in the UI) that have no membership, invitation, permission, or balance semantics.
+- General expenses with an explicit total, payer, date, and exact allocations. Item rows are optional.
+- Optional evidence assets for receipts, restaurant checks, ticket confirmations, and other image paper trails.
+- Database-backed profile and evidence images (`bytea`), capped at 5 MB and 15 MB respectively.
+- Atomic expenses, repayments, ledger versions, audit events, exact-cent validation, idempotent retries, and server-derived balances.
+- A saved filter uses **any-person/OR matching**: a transaction is included if its payer, allocation, sender, or recipient overlaps the filter. Returned balances remain account-ledger-wide; selecting a filter never creates or calculates a separate group pool.
 
-## Run locally without PostgreSQL
+The deliberately unanswered production decisions are multi-account sharing/invitations, edit and deletion policy, image retention, extraction provider, and eventual multi-currency behavior. Supabase Edge Functions are the selected production API runtime.
+
+## Run locally
 
 ```powershell
 cd apps/api
@@ -20,62 +24,68 @@ $env:ALLOW_INSECURE_DEV_AUTH = "true"
 npm run dev
 ```
 
-This mode is intentionally non-persistent. Send a valid UUID in `x-user-id`, create that profile with `PUT /v1/profile`, and then create a group. Never expose this development authentication mode publicly.
+This mode is non-persistent. Send a UUID in `x-user-id`, create the profile with `PUT /v1/profile`, then create local people. Never expose development authentication publicly.
 
-## Run with PostgreSQL
+## Supabase PostgreSQL
 
-1. Create a PostgreSQL database.
-2. Apply `db/migrations/001_initial.sql` with the provider's SQL console or migration tool.
-3. Copy `.env.example` values into your local environment and set `DATABASE_URL`.
-4. Set `SUPABASE_URL`, leave `ALLOW_INSECURE_DEV_AUTH` unset, and use an asymmetric Supabase JWT signing key. The API verifies bearer tokens against the project's cached JWKS.
+1. Create a Supabase project and apply `db/migrations/001_initial.sql` in its SQL editor or migration runner.
+2. For the local Node test harness, copy Supabase’s **Session pooler** URI into `DATABASE_URL`, set `SUPABASE_URL`, and leave `ALLOW_INSECURE_DEV_AUTH` false. Copy `.env.example` to the Git-ignored `.env.local` and run `npm run dev:local`.
+3. Run this API as a trusted backend. Public tables have RLS enabled and direct `anon`/`authenticated` grants revoked; mobile clients use only the API.
 
-The PostgreSQL pool is deliberately capped at five connections per function instance. A deployed serverless platform should use a provider pooler or database proxy.
+The adapter uses one encrypted database connection and disables prepared statements. Local Node uses the Session pooler for IPv4 access. The production Edge Function uses Supabase’s injected `SUPABASE_DB_URL` with a one-connection adapter, so no database URL or service-role key is committed or manually configured for the deployed function.
 
 ## HTTP contract
 
-Every `/v1` request requires authenticated identity. The local adapter reads `x-user-id`; deployed requests use `Authorization: Bearer <Supabase access token>`. The API verifies the signature, issuer, audience, expiry, authenticated role, and UUID subject before using the identity.
+Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in production.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `PUT` | `/v1/profile` | Create or update the caller's display name. |
-| `PUT` | `/v1/profile/avatar` | Store raw image bytes in the caller's profile row. |
-| `GET` | `/v1/users/{userId}/avatar` | Read an avatar visible through shared membership. |
-| `POST` | `/v1/groups` | Create a group with the caller as owner. |
-| `POST` | `/v1/groups/{groupId}/members` | Directly add an existing profile; invitation acceptance is not implemented. |
-| `GET` | `/v1/groups/{groupId}/snapshot` | Read the canonical ledger, version, and derived balances. |
-| `POST` | `/v1/groups/{groupId}/receipts` | Store raw receipt image bytes in PostgreSQL. |
-| `GET` | `/v1/receipts/{receiptId}/image` | Read receipt bytes after membership authorization. |
-| `POST` | `/v1/groups/{groupId}/expenses` | Atomically post reviewed items and exact allocations. |
-| `POST` | `/v1/groups/{groupId}/payments` | Atomically record a repayment. |
+| `GET` | `/health` | Confirm that the API process is running. |
+| `GET` | `/ready` | Confirm that the API can reach its configured datastore. |
+| `PUT` | `/v1/profile` | Create/update the account profile and ledger. |
+| `PUT` | `/v1/profile/avatar` | Store the account avatar. |
+| `GET` | `/v1/users/{userId}/avatar` | Read self or a linked local person’s avatar. |
+| `POST/GET` | `/v1/people` | Create/list local people. |
+| `POST/GET` | `/v1/saved-filters` | Create/list named people filters. |
+| `POST` | `/v1/evidence?kind=receipt` | Store optional evidence image bytes. |
+| `GET` | `/v1/evidence/{evidenceId}/image` | Read caller-owned evidence bytes. |
+| `POST` | `/v1/expenses` | Atomically post a reviewed general expense. |
+| `POST` | `/v1/payments` | Record a repayment between local people. |
+| `GET` | `/v1/transactions?filterId={id}` | Read the ledger, optionally filtered by saved people. |
 
-Images use their actual image media type as `Content-Type` and the raw bytes as the request body. JSON ledger operations include a UUID `clientRequestId`; retrying the same operation returns its original record, while reusing that UUID with different data returns `409`.
-
-Example expense body:
+Example manual expense (no image and no itemization):
 
 ```json
 {
   "clientRequestId": "10000000-0000-4000-8000-000000000001",
-  "description": "Groceries",
+  "description": "Utilities",
   "transactionDate": "2026-09-18",
-  "payerId": "00000000-0000-4000-8000-000000000001",
+  "payerPersonId": "00000000-0000-4000-8000-000000000011",
   "currency": "USD",
-  "items": [{ "name": "Shared groceries", "amountCents": 6000, "offsetCents": 0 }],
+  "totalCents": 6000,
   "allocations": [
-    { "userId": "00000000-0000-4000-8000-000000000001", "amountCents": 2000 },
-    { "userId": "00000000-0000-4000-8000-000000000002", "amountCents": 4000 }
+    { "personId": "00000000-0000-4000-8000-000000000011", "amountCents": 2000 },
+    { "personId": "00000000-0000-4000-8000-000000000012", "amountCents": 4000 }
   ]
 }
 ```
 
-## Tests
+For receipt-assisted entry, upload evidence first, then add its ID in `evidenceIds` and optionally add reviewed `items`. When items exist, their adjusted sum must equal `totalCents`; allocations must always equal `totalCents`.
+
+## Verification
 
 ```powershell
 npm test
 npm run typecheck
+npm run smoke:postgres
 ```
 
-The test suite covers concurrent additive entries, zero-sum balances, retries, conflicting idempotency keys, binary image round-trips, and authorization boundaries. PostgreSQL integration tests require a provisioned database and remain pending.
+The unit suite covers concurrent additive writes, zero-sum balances, manual and itemized expenses, any-person filters, evidence privacy, retry idempotency, exact totals, and Supabase JWT verification. `smoke:postgres` uses `.env.local` to exercise the same API contract against the configured Supabase database and removes its temporary account and all cascaded records afterward.
 
-## Image decision
+## Deploy as a Supabase Edge Function
 
-Avatar bytes (`user_profiles.avatar_data`) and receipt bytes (`receipts.image_data`) live in PostgreSQL. Limits are 5 MB per avatar and 15 MB per receipt. API consumers never depend on that physical choice: they upload and retrieve image bytes through API endpoints, so storage can be migrated later without changing the mobile contract.
+The production entry point is `supabase/functions/ledger-api/index.ts`. It reuses these tested handlers and connects through the `SUPABASE_DB_URL` and `SUPABASE_URL` values Supabase injects automatically. See [`supabase/functions/README.md`](../../supabase/functions/README.md) for linking and deployment commands.
+
+The public process check is `/health`; `/ready` also verifies database access. Every `/v1/*` route performs application-level Supabase JWT verification. `verify_jwt` is therefore disabled only at the Edge gateway so the health routes remain public; protected application routes do not permit anonymous requests.
+
+The deployed base URL is `https://lurdfvsnscylvwvvepos.supabase.co/functions/v1/ledger-api`. Redeploy from `apps/api` with `npm run deploy:edge`.

@@ -1,0 +1,6 @@
+project_id = "receipt-divider"
+
+[functions.ledger-api]
+verify_jwt = false
+entrypoint = "./functions/ledger-api/index.ts"
+

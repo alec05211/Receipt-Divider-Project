@@ -14,10 +14,10 @@ struct SettingsView: View {
                 }
                 .disabled(authentication.isWorking)
             }
-            Section("App") { LabeledContent("Currency", value: "USD"); LabeledContent("Receipt storage", value: "On this device") }
-            Section("Data") { Button("Reset local data", role: .destructive) { showResetConfirmation = true } }
+            Section("App") { LabeledContent("Currency", value: "USD"); LabeledContent("Ledger", value: "Supabase"); LabeledContent("Receipt storage", value: "Supabase database") }
+            Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
         }
         .navigationTitle("Settings")
-        .confirmationDialog("Reset this device's local ledger?", isPresented: $showResetConfirmation, titleVisibility: .visible) { Button("Reset local data", role: .destructive) { store.reset() } }
+        .confirmationDialog("Clear this device's cached ledger?", isPresented: $showResetConfirmation, titleVisibility: .visible) { Button("Clear cache", role: .destructive) { store.resetLocalCache() } }
     }
 }

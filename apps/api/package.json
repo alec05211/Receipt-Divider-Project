@@ -4,7 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/node.ts",
+    "dev:local": "node --env-file=.env.local --import tsx --watch src/node.ts",
     "start": "tsx src/node.ts",
+    "start:local": "node --env-file=.env.local --import tsx src/node.ts",
+    "deploy:edge": "supabase functions deploy ledger-api --project-ref lurdfvsnscylvwvvepos --use-api --no-verify-jwt --workdir ../..",
+    "smoke:postgres": "node --env-file=.env.local --import tsx scripts/smoke-postgres.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/api.test.ts"
   },
@@ -16,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "supabase": "^2.118.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },

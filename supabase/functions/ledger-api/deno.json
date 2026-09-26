@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["deno.window", "deno.ns"]
+  },
+  "imports": {
+    "hono": "npm:hono@4.9.9",
+    "jose": "npm:jose@6.2.12",
+    "postgres": "npm:postgres@3.4.7"
+  }
+}
+

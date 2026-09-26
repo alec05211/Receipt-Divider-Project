@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { CreateExpenseInput, CreatePaymentInput, Expense, Payment, UUID } from "./types.js";
-import { ApiError } from "./types.js";
+import type { CreateExpenseInput, CreatePaymentInput, Expense, Payment, UUID } from "./types.ts";
+import { ApiError } from "./types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -20,66 +20,76 @@ export function requireCurrency(value: unknown): string {
   return value;
 }
 
-export function validateExpense(input: CreateExpenseInput): number {
+export function validateExpense(input: CreateExpenseInput): void {
   requireUuid(input.clientRequestId, "clientRequestId");
-  requireUuid(input.payerId, "payerId");
+  requireUuid(input.payerPersonId, "payerPersonId");
   requireCurrency(input.currency);
-  if (input.receiptId !== undefined) requireUuid(input.receiptId, "receiptId");
+  requireCents(input.totalCents, "totalCents", false);
   if (!input.description?.trim() || input.description.length > 200) {
     throw new ApiError(400, "description must contain 1–200 characters", "invalid_input");
   }
   requireDate(input.transactionDate);
-  if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 250) {
-    throw new ApiError(400, "an expense must have 1–250 items", "invalid_input");
+  const items = input.items ?? [];
+  if (!Array.isArray(items) || items.length > 250) {
+    throw new ApiError(400, "an expense may have at most 250 items", "invalid_input");
   }
   if (!Array.isArray(input.allocations) || input.allocations.length === 0 || input.allocations.length > 100) {
     throw new ApiError(400, "an expense must have 1–100 allocations", "invalid_input");
   }
 
   let total = 0;
-  for (const item of input.items) {
+  for (const item of items) {
     if (!item.name?.trim() || item.name.length > 300) throw new ApiError(400, "each item needs a name", "invalid_input");
     requireCents(item.amountCents, "item amountCents", false);
     requireCents(item.offsetCents ?? 0, "item offsetCents", true);
     total += item.amountCents + (item.offsetCents ?? 0);
   }
-  requireCents(total, "expense total", false);
+  if (items.length && total !== input.totalCents) {
+    throw new ApiError(422, `items total ${total} does not equal expense total ${input.totalCents}`, "item_total_mismatch");
+  }
 
   const memberIds = new Set<string>();
   let allocationTotal = 0;
   for (const allocation of input.allocations) {
-    requireUuid(allocation.userId, "allocation userId");
+    requireUuid(allocation.personId, "allocation personId");
     requireCents(allocation.amountCents, "allocation amountCents", false, true);
-    if (memberIds.has(allocation.userId)) throw new ApiError(400, "each member may be allocated once", "invalid_input");
-    memberIds.add(allocation.userId);
+    if (memberIds.has(allocation.personId)) throw new ApiError(400, "each person may be allocated once", "invalid_input");
+    memberIds.add(allocation.personId);
     allocationTotal += allocation.amountCents;
   }
-  if (allocationTotal !== total) {
-    throw new ApiError(422, `allocations total ${allocationTotal} does not equal expense total ${total}`, "allocation_mismatch");
+  if (allocationTotal !== input.totalCents) {
+    throw new ApiError(422, `allocations total ${allocationTotal} does not equal expense total ${input.totalCents}`, "allocation_mismatch");
   }
-  return total;
+  const evidenceIds = input.evidenceIds ?? [];
+  if (!Array.isArray(evidenceIds) || evidenceIds.length > 10) throw new ApiError(400, "an expense may have at most 10 evidence images", "invalid_input");
+  const uniqueEvidence = new Set<string>();
+  for (const evidenceId of evidenceIds) {
+    requireUuid(evidenceId, "evidenceId");
+    if (uniqueEvidence.has(evidenceId)) throw new ApiError(400, "evidenceIds must be unique", "invalid_input");
+    uniqueEvidence.add(evidenceId);
+  }
 }
 
 export function validatePayment(input: CreatePaymentInput): void {
   requireUuid(input.clientRequestId, "clientRequestId");
-  requireUuid(input.fromUserId, "fromUserId");
-  requireUuid(input.toUserId, "toUserId");
-  if (input.fromUserId === input.toUserId) throw new ApiError(400, "payment sender and recipient must differ", "invalid_input");
+  requireUuid(input.fromPersonId, "fromPersonId");
+  requireUuid(input.toPersonId, "toPersonId");
+  if (input.fromPersonId === input.toPersonId) throw new ApiError(400, "payment sender and recipient must differ", "invalid_input");
   requireCents(input.amountCents, "amountCents", false);
   requireDate(input.transactionDate);
 }
 
-export function calculateBalances(memberIds: UUID[], expenses: Expense[], payments: Payment[]): Record<UUID, number> {
-  const balances = Object.fromEntries(memberIds.map((id) => [id, 0]));
+export function calculateBalances(personIds: UUID[], expenses: Expense[], payments: Payment[]): Record<UUID, number> {
+  const balances = Object.fromEntries(personIds.map((id) => [id, 0]));
   for (const expense of expenses) {
-    balances[expense.payerId] = (balances[expense.payerId] ?? 0) + expense.totalCents;
+    balances[expense.payerPersonId] = (balances[expense.payerPersonId] ?? 0) + expense.totalCents;
     for (const allocation of expense.allocations) {
-      balances[allocation.userId] = (balances[allocation.userId] ?? 0) - allocation.amountCents;
+      balances[allocation.personId] = (balances[allocation.personId] ?? 0) - allocation.amountCents;
     }
   }
   for (const payment of payments) {
-    balances[payment.fromUserId] = (balances[payment.fromUserId] ?? 0) + payment.amountCents;
-    balances[payment.toUserId] = (balances[payment.toUserId] ?? 0) - payment.amountCents;
+    balances[payment.fromPersonId] = (balances[payment.fromPersonId] ?? 0) + payment.amountCents;
+    balances[payment.toPersonId] = (balances[payment.toPersonId] ?? 0) - payment.amountCents;
   }
   return balances;
 }

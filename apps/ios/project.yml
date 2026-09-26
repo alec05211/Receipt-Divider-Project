@@ -28,5 +28,6 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Choose a receipt photo to review and split with your group.
         INFOPLIST_KEY_NSCameraUsageDescription: Take a photo of a receipt to review and split with your group.
-        INFOPLIST_KEY_SUPABASE_URL: https://YOUR_PROJECT.supabase.co
-        INFOPLIST_KEY_SUPABASE_PUBLISHABLE_KEY: YOUR_PUBLISHABLE_KEY
+        INFOPLIST_KEY_SUPABASE_URL: https://lurdfvsnscylvwvvepos.supabase.co
+        INFOPLIST_KEY_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ooNI0Eex792fD6MGp6XX_g_QofO07OY
+        INFOPLIST_KEY_API_BASE_URL: https://lurdfvsnscylvwvvepos.supabase.co/functions/v1/ledger-api

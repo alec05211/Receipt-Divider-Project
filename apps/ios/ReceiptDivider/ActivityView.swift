@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActivityView: View {
     @Environment(ExpenseStore.self) private var store
+    @Environment(AuthenticationStore.self) private var authentication
     @State private var showResetConfirmation = false
     @State private var showSettleUp = false
     private var transactions: [Transaction] { (store.expenses.map(Transaction.expense) + store.payments.map(Transaction.payment)).sorted { $0.date > $1.date } }
@@ -22,6 +23,10 @@ struct ActivityView: View {
             .navigationTitle("Summary")
             .navigationDestination(isPresented: $showSettleUp) { SettleUpView() }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { NavigationLink { SettingsView(showResetConfirmation: $showResetConfirmation) } label: { Image(systemName: "gearshape") } } }
+            .refreshable {
+                guard let token = try? await authentication.accessToken() else { return }
+                try? await store.refresh(accessToken: token)
+            }
         }
     }
 }

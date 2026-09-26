@@ -14,6 +14,7 @@ enum AppAuthenticationState: Equatable {
 @Observable final class AuthenticationStore {
     private(set) var state: AppAuthenticationState = .loading
     private(set) var email: String?
+    private(set) var userID: UUID?
     private(set) var isWorking = false
     var errorMessage: String?
 
@@ -30,6 +31,7 @@ enum AppAuthenticationState: Equatable {
         isObserving = true
         for await (_, session) in client.auth.authStateChanges {
             email = session?.user.email
+            userID = session?.user.id
             state = session == nil ? .signedOut : .authenticated
             isWorking = false
         }
@@ -98,6 +100,16 @@ enum AppAuthenticationState: Equatable {
         await perform { try await client.auth.signOut() }
     }
 
+    func accessToken() async throws -> String {
+        guard let client else { throw AuthenticationStoreError.configurationMissing }
+        return try await client.auth.session.accessToken
+    }
+
+    var defaultDisplayName: String {
+        guard let prefix = email?.split(separator: "@").first, !prefix.isEmpty else { return "Receipt Divider User" }
+        return String(prefix).replacingOccurrences(of: ".", with: " ").capitalized
+    }
+
     func show(error: Error) {
         let authorizationError = error as NSError
         if authorizationError.domain == ASAuthorizationError.errorDomain,
@@ -144,6 +156,8 @@ enum AppAuthenticationState: Equatable {
         return "Authentication is unavailable right now. Please try again."
     }
 }
+
+private enum AuthenticationStoreError: Error { case configurationMissing }
 
 private enum SupabaseConfiguration {
     static func client(from bundle: Bundle) -> SupabaseClient? {

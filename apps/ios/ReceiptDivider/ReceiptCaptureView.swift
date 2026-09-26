@@ -6,6 +6,7 @@ import VisionKit
 struct ReceiptCaptureView: View {
     enum Step: Int { case capture, reading, select, people, split }
     @Environment(ExpenseStore.self) private var store
+    @Environment(AuthenticationStore.self) private var authentication
     let finish: () -> Void
     @State private var step: Step = .capture
     @State private var image: UIImage?
@@ -22,6 +23,7 @@ struct ReceiptCaptureView: View {
     @State private var editingItemID: UUID?
     @State private var didSave = false
     @State private var personSearch = ""
+    @State private var isSaving = false
 
     /// Includes each selected item's share of tax and discounts, which the item list doesn't show.
     private var total: Int { max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
@@ -137,8 +139,9 @@ struct ReceiptCaptureView: View {
             Section { Picker("Paid by", selection: $payer) { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { Text($0.rawValue).tag($0) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
             Section("Contributions") { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { person in LabeledContent(person.rawValue) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) } } }
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
+            if let error { Section { Text(error).foregroundStyle(.red) } }
         }
-        .safeAreaInset(edge: .bottom) { ContinueButton(title: "Save transaction", disabled: !isValidSplit) { save() } }
+        .safeAreaInset(edge: .bottom) { ContinueButton(title: isSaving ? "Saving…" : "Save transaction", disabled: !isValidSplit || isSaving) { save() } }
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
     private func load(_ photo: PhotosPickerItem?) {
@@ -152,7 +155,23 @@ struct ReceiptCaptureView: View {
     private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No item prices were found. Add them manually." }; step = .select } }
     private func shareBinding(for person: Person) -> Binding<Int> { Binding(get: { shares[person] ?? 0 }, set: { shares[person] = $0 }) }
     private func setEqualSplit() { let people = selectedPeople.sorted { $0.rawValue < $1.rawValue }; guard !people.isEmpty else { return }; let base = total / people.count; let remainder = total % people.count; shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) }) }
-    private func save() { store.add(Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, shares: shares, receiptImageData: image?.jpegData(compressionQuality: 0.72))); didSave.toggle(); reset(); finish() }
+    private func save() {
+        let expense = Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, shares: shares, receiptImageData: image?.jpegData(compressionQuality: 0.72))
+        isSaving = true
+        error = nil
+        Task {
+            do {
+                let token = try await authentication.accessToken()
+                try await store.add(expense, accessToken: token)
+                didSave.toggle()
+                reset()
+                finish()
+            } catch {
+                self.error = error.localizedDescription
+            }
+            isSaving = false
+        }
+    }
     private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = [.alex, .jamie]; shares = [:]; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
     private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }

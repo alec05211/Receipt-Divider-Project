@@ -1,7 +1,7 @@
 # Receipt Divider — Living Product Specification
 
 Status: Draft for refinement; local interaction prototype started  
-Last updated: 2026-09-25  
+Last updated: 2026-09-26
 Working name: Receipt Divider
 
 ## 1. Purpose and how to use this document
@@ -19,7 +19,7 @@ Requirement IDs are stable so implementation work and acceptance checks can refe
 
 ## 2. Product vision
 
-**Confirmed:** Make it easy to photograph a receipt, extract its individual items and costs, select the items to share, assign individual contributions, and maintain a shared group expense history with accurate running totals.
+**Confirmed:** Make it easy to record and share general expenses, with receipt capture as the primary fast-entry flow. The app can extract items, costs, and dates from receipts, restaurant checks, ticket confirmations, or similar images, but also supports expenses with no image or itemization. It maintains accurate running totals from reviewed transaction data.
 
 The immediate audience is the product owner and their roommate. The longer-term ambition is a product usable by many independent groups. The intended audience includes both iOS and Android users.
 
@@ -45,16 +45,16 @@ Measure scanning corrections, time required to save an expense, failed uploads, 
 | --- | --- | --- |
 | S-01 | Confirmed | Photograph or upload receipts from a phone. |
 | S-02 | Confirmed | Extract individual items and costs into a multi-select interface. |
-| S-03 | Confirmed | Combine selected items into an expense total for a group. |
-| S-04 | Confirmed | Use a subsequent screen to assign individual group member contributions. |
-| S-05 | Confirmed | Sum individual responsibilities across group entries. |
-| S-06 | Confirmed | Maintain an expense log with descriptions, actual items, attribution, contribution breakdowns, and original receipt photos. |
+| S-03 | Confirmed | Combine selected items into an expense total, or accept an explicit total for manual entry. |
+| S-04 | Confirmed | Use a subsequent screen to assign individual participant contributions. |
+| S-05 | Confirmed | Sum individual responsibilities across ledger entries. |
+| S-06 | Confirmed | Maintain an expense log with descriptions, optional items/evidence, attribution, and contribution breakdowns. |
 | S-07 | Confirmed | Support users with iOS and Android phones. |
 | S-08 | Confirmed | Use a native SwiftUI iPhone app as the reference client, including Apple system navigation, Liquid Glass behavior, and meaningful haptic feedback. |
-| S-09 | Proposed | Provide accounts, private groups, and invitation-based membership. |
+| S-09 | Confirmed | Provide accounts, local people, and personal named people collections used only as filters; creating one does not invite anyone or create a separate ledger pool. |
 | S-10 | Proposed | Track who paid, net balances, and manually recorded repayments. |
-| S-11 | Proposed | Permit manual expense entry when a receipt is unavailable or scanning fails. |
-| S-12 | Proposed | Use one payer per expense and one currency per group. |
+| S-11 | Confirmed | Permit manual expense entry with no image or item rows. |
+| S-12 | Proposed | Use one payer per expense and one currency per account ledger initially. |
 | S-13 | Confirmed | Gate the native app behind a custom SwiftUI Supabase Auth experience, using email one-time codes as the primary sign-in/create-account flow and native Sign in with Apple as the secondary option. |
 | S-14 | Confirmed | Restore a previously authenticated session on the device and open the main app without requiring sign-in again while the session remains valid and refreshable. |
 
@@ -66,7 +66,7 @@ Measure scanning corrections, time required to save an expense, failed uploads, 
 - Multiple payers for a single expense.
 - Automatic recurring charges, subscriptions, and monetization.
 - Complex approval workflows and assigning every individual item to different subsets of members.
-- Receipt splitting across multiple groups in one guided flow.
+- Splitting one evidence image into multiple expense entries in one guided flow.
 
 **Confirmed:** The iPhone app is the reference experience. It uses standard SwiftUI navigation, tabs, toolbars, sheets, and controls so the current iOS system supplies Liquid Glass behavior. Avoid custom recreation of Liquid Glass effects. Use haptics only for meaningful selection and successful completion feedback.
 
@@ -82,7 +82,7 @@ Android remains a required future client. Keep the backend, money rules, API con
 
 **Confirmed authentication entry:** When no valid session exists, show a custom-designed native authentication screen before the tab bar. Default to email OTP sign-in, provide a visible Create account mode using the same code-verification interaction, and place the native Sign in with Apple button below the email action. A stored valid session bypasses this screen. Authentication provider screens must not dictate the surrounding visual design, while the Apple button and authorization sheet follow Apple’s required native treatment.
 
-Do not make saved groups the primary navigation model. A transaction can include any subset of people from the roster without requiring the user to create a separate group for every combination. Saved groups may later exist as optional templates for recurring households, trips, or teams.
+Do not make saved groups the primary navigation model. A transaction can include any subset of people from the roster without entering a group pool. A saved group is a local, personal name for a collection of people, created in Settings without invitations. It appears as a filter above Transactions and uses any-person matching: “Roommates” shows transactions involving at least one saved roommate. It changes only the view, never balances, ownership, or access control.
 
 ### Core add-transaction flow
 
@@ -101,9 +101,9 @@ The receipt’s purchase date, rather than time of entry, determines its positio
 
 **Confirmed:** Opening a transaction shows the cost breakdown before the receipt image: total cost, who paid the purchase, and the exact assigned share for every tagged person. Scrolling then reveals the original receipt photo and selected line items as the paper trail. The final section shows recent transactions involving one or more of the same tagged people, with their avatars visible.
 
-### A. Open the group
+### A. Open Transactions
 
-**Confirmed:** The group’s primary default view is a chronological transaction history organized by when purchases occurred, rather than when entries were added. **Proposed:** Show newest purchase dates first and group entries under date headings. Group spending, each member’s assigned costs, and proposed net balances remain accessible. A prominent action begins a new expense.
+**Confirmed:** The primary default view is a chronological account-ledger history organized by when purchases occurred, rather than when entries were added. **Proposed:** Show newest purchase dates first and entries under date headings. Spending, each person’s assigned costs, and proposed net balances remain accessible. Saved people groups appear only as optional filters.
 
 ### B. Capture the receipt
 
@@ -119,7 +119,7 @@ The original receipt is accessible during review. Unselected personal items do n
 
 ### D. Allocate contributions
 
-On the next screen, the member confirms the group, enters a description, identifies the payer, and assigns member contributions. Proposed split modes are equal shares, percentages, and exact amounts.
+On the next screen, the member confirms the tagged people, enters a description, identifies the payer, and assigns contributions. Proposed split modes are equal shares, percentages, and exact amounts.
 
 The screen displays the expense total, each contribution, and the remaining unallocated amount. Saving is blocked until the allocation matches the expense total.
 
@@ -158,17 +158,18 @@ The saved entry appears in the group log at its transaction date, even when ente
 | E-06 | Proposed | Save the expense, items, and allocations atomically and prevent duplicate saves caused by retries. |
 | E-07 | Proposed | Copy reviewed item values into a saved expense snapshot so later extraction changes cannot silently alter balances. |
 
-### Groups and history
+### People filters and history
 
 | ID | Status | Requirement |
 | --- | --- | --- |
-| G-01 | Proposed | Restrict group data and receipts to authorized group members. |
+| G-01 | Confirmed | Restrict each account ledger and its optional evidence to its authenticated owner until a future explicit sharing model is designed. |
 | G-02 | Confirmed | Show an expense log with description, items, attribution, split, and receipt evidence. |
-| G-03 | Confirmed | Aggregate assigned costs by member across the group. |
+| G-03 | Confirmed | Aggregate assigned costs by person across the account ledger. |
 | G-04 | Proposed | Separately show amounts paid, assigned costs, repayments, and net balances. |
 | G-05 | Proposed | Preserve attributable revisions when an expense is edited or voided; recalculate balances from the current effective entries. |
 | G-06 | Proposed | Record repayments separately from purchases and allow erroneous repayments to be reversed with history. |
-| G-07 | Confirmed | Make chronological transaction history the primary default group view, ordered by transaction date rather than entry creation time. Backdated purchases appear on the date they occurred. |
+| G-07 | Confirmed | Make chronological transaction history the primary default view, ordered by transaction date rather than entry creation time. Backdated purchases appear on the date they occurred. |
+| G-09 | Confirmed | Allow named local collections of people to filter Transactions by any participant overlap without changing ledger math or access. |
 | G-08 | Proposed | Default to newest transaction date first, use date headings, and apply date filters and spending periods to transaction dates. Keep creation timestamps available in entry details for auditing. |
 
 ## 6. Financial rules and invariants
@@ -179,7 +180,7 @@ These are proposed implementation rules. They should be settled before implement
 
 - Store money as integer minor units, such as cents for USD, with an explicit currency.
 - Use deterministic application logic for calculations. Receipt AI proposes data; it does not determine authoritative arithmetic.
-- Use one currency per group in the first release. A receipt in a different currency must be rejected or handled manually under an explicitly decided policy.
+- Use one currency per account ledger in the first release. A receipt in a different currency must be rejected or handled manually under an explicitly decided policy.
 - The initial scope is nonnegative purchases and repayments. Refunds and credits need an explicit later policy.
 
 ### Expense total
@@ -198,14 +199,14 @@ For partial receipt selection, show how receipt-level tax, fees, and discounts a
 - Equal and percentage splits use a deterministic rounding rule. Proposed rule: distribute leftover cents by largest fractional remainder, breaking ties by stable member order, and show the resulting amounts before saving.
 - A payer can have a zero assigned share. A member can have a share without being the payer or creator.
 
-### Group balances
+### Ledger balances
 
 For each member:
 
 `net balance = expenses paid − assigned expense shares + repayments sent − repayments received`
 
 - Positive means the member should receive money; negative means they owe money.
-- Member net balances sum to zero within a group.
+- Person net balances sum to zero across the full account ledger. Transaction filters do not recalculate a separate group balance.
 - Repayments change balances but do not change purchase totals.
 - Aggregate balances are derived from saved records, not independently editable totals.
 
@@ -216,7 +217,7 @@ For each member:
 | Groceries: $60 | Owner | $20 | $40 |
 | Supplies: $30 | Roommate | $15 | $15 |
 
-The owner paid $60 and owes $35 in assigned costs, yielding +$25. The roommate paid $30 and owes $55, yielding −$25. A $25 repayment from the roommate to the owner brings both balances to zero. Group purchase spending remains $90.
+The owner paid $60 and owes $35 in assigned costs, yielding +$25. The roommate paid $30 and owes $55, yielding −$25. A $25 repayment from the roommate to the owner brings both balances to zero. Purchase spending remains $90.
 
 ### Transaction dates and chronology
 
@@ -236,27 +237,28 @@ For example, a receipt dated September 18 entered on September 23 belongs under 
 
 ## 7. Proposed conceptual data model
 
-This describes responsibilities, not a committed database schema or technology stack.
+This describes the committed initial Supabase PostgreSQL model; sharing and extraction details remain open.
 
 | Entity | Purpose and important fields |
 | --- | --- |
 | User | Identity, display name, and an optional database-backed profile image. |
-| Group | Name, currency, creator, and timestamps. |
-| Membership | Group, user, role, and membership state. Preserve references needed for historical entries. |
-| Receipt | Uploader, private image bytes stored in the database, media type, integrity hash, merchant/date if known, extraction status, extracted data, reviewed data, and full receipt total. |
-| Expense | Group, creator, payer, description, currency, total, transaction date (purchase calendar date), receipt reference if present, effective status, creation timestamp, and modification timestamp. |
+| Ledger | One account-owned transaction scope, currency, version, and timestamps. |
+| Person | Ledger-owned local contact with display name and an optional future link to a User account; no invitation is required. |
+| Saved filter | Ledger-owned name plus a collection of Person IDs; it has no ownership, permission, invitation, or balance semantics. |
+| Evidence asset | Uploader, private image bytes stored in PostgreSQL, kind, media type, integrity hash, extraction status, and optional extracted data. Evidence is optional and may represent a receipt, restaurant check, ticket confirmation, or other paper trail. |
+| Expense | Ledger, creator, payer Person, description, currency, explicit total, transaction date, zero or more evidence references, effective status, creation timestamp, and modification timestamp. |
 | Expense item | Saved description, quantity if known, selected line total, and source receipt-row reference if available. |
 | Expense adjustment | Included tax, tip, fee, or discount, with amount and allocation method. |
-| Expense allocation | Expense, member, and exact assigned amount; preserve chosen split mode where useful for editing. |
-| Repayment | Group, sender, recipient, amount, transaction date (actual payment date), creation timestamp, recorder, and effective status. |
+| Expense allocation | Expense, Person, and exact assigned amount; preserve chosen split mode where useful for editing. |
+| Repayment | Ledger, sender Person, recipient Person, amount, transaction date (actual payment date), creation timestamp, recorder, and effective status. |
 | Revision/audit event | Actor, time, action, affected record, and sufficient change information to explain balance changes. |
 
 ## 8. Interface expectations
 
 **Proposed:** Use a clear, touch-friendly interface designed first for phone screens.
 
-- Primary screens: group overview, capture/upload, receipt review, allocation, expense detail, and repayment entry.
-- Make the chronological transaction list the main group view. Show purchase dates prominently and keep “added on” timestamps secondary in entry details.
+- Primary screens: Transactions, capture/upload or manual entry, optional evidence review, allocation, expense detail, and repayment entry.
+- Make the chronological transaction list the main view. Show purchase dates prominently and keep “added on” timestamps secondary in entry details.
 - Keep receipt item names and monetary amounts readable without horizontal scrolling.
 - Make selected states, missing allocation, extraction errors, and save success explicit.
 - Preserve draft state when moving between review and allocation.
@@ -270,17 +272,17 @@ Visual design, naming, and navigation details remain open.
 
 ### Proposed architecture
 
-- Responsive web client for capture, review, allocation, and group history.
-- Authenticated backend for group access, validation, scanning orchestration, and atomic expense writes.
-- Persistent PostgreSQL database for identities, memberships, expenses, allocations, repayments, history, profile images, and receipt image bytes.
+- Native iOS reference client for capture, review, allocation, and transaction history; Android remains a future client.
+- Supabase Edge Function API for authenticated ledger access, validation, extraction orchestration, and atomic expense writes. Clients do not independently reconcile concurrent snapshots.
+- Supabase hosted PostgreSQL for profiles, ledgers, local people, saved filters, expenses, allocations, repayments, history, profile images, and optional evidence bytes.
 - Keep image access behind authenticated API endpoints and impose conservative size limits. The initial implementation uses 5 MB per profile image and 15 MB per receipt; these are implementation defaults rather than permanent product requirements.
 - Replaceable receipt extraction service so provider choices do not define the financial model.
 
-The initial API implementation uses portable TypeScript HTTP handlers and a PostgreSQL adapter. Hosting, managed PostgreSQL, authentication, and extraction providers are not yet selected.
+The production API uses the portable TypeScript HTTP handlers inside a Supabase Edge Function, Supabase Auth, and the hosted PostgreSQL database. The Node entry point remains a local verification harness. The extraction provider is not yet selected.
 
 ### Trust and reliability
 
-- Enforce group access on the server, including access to original images.
+- Enforce account-ledger ownership on the server, including access to original images.
 - Keep service credentials on the server.
 - Validate file types and upload limits; exact limits are to be selected.
 - Require confirmation of reviewed receipt data before posting.
@@ -308,20 +310,22 @@ These scenarios define observable behavior and should guide implementation check
 | A-07 | Save the two expenses in the worked example. | Balances are +$25 and −$25, with $90 total group spending. |
 | A-08 | Record the example’s $25 repayment. | Both balances become zero and purchase history still totals $90. |
 | A-09 | Retry a save after a delayed response. | Only one expense and allocation set exist. |
-| A-10 | Open another group’s expense or receipt without membership. | Access is denied on the server. |
+| A-10 | Open another account’s expense or evidence image. | Access is denied on the server. |
 | A-11 | Edit or void a saved expense under the chosen permission policy. | Balances update and the actor and change remain explainable through history. |
 | A-12 | Receipt analysis fails. | The user can retry or complete a manual expense without a partial ledger entry. |
 | A-13 | Enter a September 18 receipt on September 23. | Extraction targets September 18; the saved expense appears under September 18, while details retain the September 23 creation timestamp. |
-| A-14 | Open the group after entering several older receipts in arbitrary order. | The default transaction list follows transaction dates, newest first under the proposed ordering, rather than upload order. |
+| A-14 | Open Transactions after entering several older receipts in arbitrary order. | The default list follows transaction dates, newest first under the proposed ordering, rather than upload order. |
 | A-15 | Upload a receipt with a missing or ambiguous purchase date. | The user must choose or confirm a date; the app does not silently substitute the upload date. |
 | A-16 | Correct a saved expense’s transaction date. | Its chronological position and applicable reporting period update, its monetary balance effect remains unchanged, and the change is recorded in history. |
 | A-17 | View the same expense from devices in different time zones. | Its stored purchase calendar date remains the same. |
+| A-18 | Create a local “Roommates” group containing three people. | No invitations are sent and no ledger pool is created; selecting it shows transactions involving any of those people. |
+| A-19 | Save a manual expense without items or an image. | It is stored and calculated like an evidence-backed expense using its explicit reviewed total, date, payer, and allocations. |
 
 ## 11. Proposed implementation sequence
 
-1. **Settle core decisions:** Confirm platform, initial currency, permissions, adjustment policy, and receipt visibility. Choose infrastructure and extraction providers.
-2. **Build the ledger:** Implement accounts, groups, manual expenses, contribution allocation, history, and deterministic balance calculation.
-3. **Add receipts:** Implement private uploads, extraction, editable review, item selection, and preserved evidence.
+1. **Settle remaining core decisions:** Confirm initial currency, mutation permissions, adjustment policy, sharing, and evidence visibility. Choose API hosting and extraction providers.
+2. **Build the ledger:** Implement accounts, local people, saved filters, manual expenses, contribution allocation, history, and deterministic balance calculation.
+3. **Add evidence-assisted entry:** Implement private uploads, extraction, editable review, item selection, and preserved optional evidence.
 4. **Complete household use:** Add repayments, revision behavior, error recovery, and phone usability checks. Verify section 10 with representative receipts.
 5. **Evaluate expansion:** Use real household feedback to refine the flow before public registration, commercial features, or native distribution.
 
@@ -332,21 +336,22 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | ID | Decision | Proposed starting point | When needed |
 | --- | --- | --- | --- |
 | D-01 | Resolved: reference client platform | Confirmed: native SwiftUI iPhone app. The existing web prototype remains a workflow reference; Android follows after the backend and contracts are defined. | Core decision resolved. |
-| D-02 | Initial currency? | One selected currency per group; confirm the household currency. | Before ledger implementation. |
+| D-02 | Initial currency? | The backend currently defaults each account ledger to USD; confirm settings and multi-currency behavior before broader use. | Before production use outside the initial household. |
 | D-03 | What does “who added what” include? | Show creator, payer, selected items, and each member’s assigned amount. | Before finalizing expense detail. |
 | D-04 | Who can edit or void expenses? | Creator can edit/void their entries, with visible history; confirm administrator powers. | Before mutation permissions. |
 | D-05 | How are tax and receipt-wide discounts allocated? | Suggest proportional amounts, clearly disclosed and editable. | Before receipt calculation implementation. |
 | D-06 | Can an item be partially selected, such as one of three units? | Initially select whole rows; decide whether quantity splitting is essential. | Before selection interface. |
-| D-07 | Who can see the full receipt, including personal items? | All group members can see the original attached receipt; clearly disclose this before posting. | Before sharing receipts. |
+| D-07 | Who can see full evidence when account sharing arrives? | Evidence is owner-private now. Define visibility explicitly before enabling multi-account sharing. | Before sharing ledgers. |
 | D-08 | Can one receipt produce multiple expense entries? | Initially one entry per upload flow; decide duplicate-receipt handling. | Before receipt persistence design. |
 | D-09 | Do members approve allocations or repayments? | Immediate posting with attribution and history; no approval step initially. | Before finalizing posting behavior. |
-| D-10 | What happens when members leave a group? | Preserve historical references and balances; define access and outstanding-debt behavior. | Before membership removal. |
-| D-11 | Which infrastructure and extraction providers? | Supabase Auth is selected for identity. Select hosting, managed PostgreSQL, and receipt extraction for accuracy, cost, privacy, and operational simplicity. | Before deployment and receipt integration. |
+| D-10 | Resolved: what is a saved group? | A personal local collection of people used as an any-person transaction filter. It has no membership lifecycle, invitations, ledger pool, or access semantics. | Core decision resolved. |
+| D-11 | Resolved: which core infrastructure? | Supabase Auth, hosted PostgreSQL, and Supabase Edge Functions are selected so authentication, canonical data, and stateless API compute stay in one platform. The evidence extraction provider remains open. | Core infrastructure resolved; extraction remains open. |
 | D-12 | Are refunds or negative line items needed immediately? | Defer refund transactions; explicitly detect unsupported cases. | Before scan validation. |
 | D-13 | Resolved: which date places an expense in history? | Confirmed: receipt purchase date determines placement; creation time is separate. Proposed: newest-first ordering, transaction-date reporting, and same-day tie-breakers as specified in section 6. | Core decision resolved; proposed details remain refinable. |
-| D-14 | Is a suggested payment plan needed for groups larger than two? | Begin with member net balances; add deterministic settlement suggestions if required. | Before multi-person settlement UI. |
+| D-14 | Is a suggested payment plan needed for ledgers with more than two people? | Begin with person net balances; add deterministic settlement suggestions if required. | Before multi-person settlement UI. |
 | D-15 | When should images leave PostgreSQL? | Keep receipt and profile image bytes in PostgreSQL initially. Reconsider only if database size, backup duration, bandwidth, or delivery performance creates a demonstrated problem; preserve the API contract if storage changes. | After measured household or beta usage. |
 | D-16 | Resolved: primary native authentication flow? | Confirmed: custom SwiftUI email OTP sign-in and account creation, secondary native Sign in with Apple, automatic local session restoration, and explicit sign out in Settings. | Authentication direction resolved; account linking and deletion remain open. |
+| D-17 | How should separate account ledgers eventually become shared? | Keep the initial ledger owner-private. Design explicit invitations, linked-person reconciliation, conflict/edit permissions, and evidence visibility before enabling collaboration. | Before multi-account sync. |
 
 ## 13. Decision and change log
 
@@ -357,8 +362,11 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-25 | Began a dependency-free local interaction prototype in `receipt-divider/dist`. It supports manual receipt item entry, selection, exact/equal splits, transaction-date history, and recorded repayments. It uses device-local browser storage only and does not yet provide shared accounts, server validation, receipt extraction, or private cloud image storage. | Prototype started; production architecture remains pending. |
 | 2026-09-25 | Pivoted to a native iPhone reference client in `apps/ios`. The SwiftUI foundation uses system `TabView`, navigation, and toolbars for Liquid Glass behavior on current iOS, plus sensory feedback for selection and successful saves. | Native iOS source scaffold started; requires a Mac with Xcode for generation, compilation, and device validation. |
 | 2026-09-25 | Extended the native local foundation with camera/photo receipt intake, Vision text extraction, editable item rows, dynamic equal/custom allocation, transaction-date history, local ledger persistence, and repayment recording. | Source implementation complete for this local slice; Xcode compilation and on-device validation remain pending. |
-| 2026-09-26 | Added a provider-neutral TypeScript ledger API and PostgreSQL schema with atomic expense writes, idempotency, memberships, repayments, audit versions, derived balances, and database-backed profile and receipt images. | Backend foundation implemented and locally tested; production authentication, invitations, deployment provider, PostgreSQL integration testing, and iOS synchronization remain pending. |
+| 2026-09-26 | Added the first TypeScript ledger API and PostgreSQL schema with atomic expense writes, idempotency, memberships, repayments, audit versions, derived balances, and database-backed profile and receipt images. | Superseded later that day by the transaction-first, account-owned ledger model below. |
 | 2026-09-26 | Selected Supabase Auth and added a custom native authentication gate with primary email OTP sign-in/create-account, secondary native Sign in with Apple, stored-session restoration, sign out, and backend JWT verification through Supabase JWKS. | Source implementation complete; Supabase project configuration and Mac/Xcode device validation remain pending. |
+| 2026-09-26 | Selected Supabase hosted PostgreSQL and replaced group-owned pools with account-owned transaction ledgers. Local people can be collected into named saved filters without invitations; filters use any-person matching and never affect balances or access. General expenses now support optional itemization and optional database-backed evidence for receipts, checks, tickets, or other images. | Backend schema, memory/PostgreSQL adapters, stateless API routes, and tests implemented locally; deployment, PostgreSQL integration testing, iOS sync, extraction, and multi-account sharing remain pending. |
+| 2026-09-26 | Selected Supabase Edge Functions as the production API runtime, keeping Auth, PostgreSQL, injected database connectivity, and stateless compute within Supabase. The existing Node runtime remains only as a local test harness and behavioral reference. | Edge Function deployed; process health, PostgreSQL readiness, and anonymous-route rejection verified. iOS ledger integration remains pending. |
+| 2026-09-26 | Connected the native SwiftUI client to the live Supabase Edge Function. Authenticated launch provisions the profile and prototype people, loads server transactions and balances, and scopes its local cache by account. Expense saves upload optional evidence and post an idempotent server command; repayments are also server-first. | Source integration complete; Xcode compilation and signed-in device testing remain pending. The fixed four-person UI remains an explicit temporary bridge to dynamic people management. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

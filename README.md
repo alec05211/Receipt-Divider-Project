@@ -1,6 +1,6 @@
 # Receipt Divider
 
-Receipt Divider is a mobile-first expense-sharing app for splitting a mixed receipt with the specific friends involved in each purchase. It treats the receipt image as evidence, stores individual selected items, and keeps a chronological transaction history based on the purchase date.
+Receipt Divider is a mobile-first general expense-sharing app. Receipt capture is its primary fast-entry path, but a transaction can also come from a restaurant check, ticket-confirmation image, other evidence, or fully manual entry. Images are optional evidence; reviewed costs, dates, participants, and allocations are the financial record.
 
 ## Current direction
 
@@ -13,7 +13,7 @@ The main navigation is:
 - **Profile:** personal balance, repayment, and people management.
 - **Settings:** the `gearshape` button in Transactions.
 
-Saved groups are not the main navigation model. Each transaction has its own participant list; future saved groups will be optional shortcuts for repeat rosters.
+Saved groups are personal named collections of people used only as transaction filters. Each transaction has its own participant list and never enters a group pool. A “Roommates” filter, for example, shows transactions involving any person in that saved collection; creating it sends no invitations and changes no balances or access rights.
 
 ## Main receipt flow
 
@@ -32,6 +32,7 @@ Opening a transaction shows the cost breakdown first, then the receipt image and
 apps/ios/                 Native SwiftUI iPhone client
 apps/ios/ReceiptDivider/  App source code
 apps/api/                 Stateless TypeScript ledger API and PostgreSQL schema
+supabase/                 Production Edge Function configuration and entry point
 dist/                     Original web workflow prototype
 PRODUCT_SPEC.md           Living product requirements and decisions
 skills/                   Repository-local Codex guidance
@@ -51,15 +52,15 @@ Open `http://127.0.0.1:4173` in a browser.
 ## Build the native iPhone app on a Mac
 
 1. Install the newest Xcode and XcodeGen.
-2. Configure the Supabase project URL and publishable key in `apps/ios/project.yml` as described in `apps/ios/README.md`.
+2. Verify the configured Supabase project URL and publishable key in `apps/ios/project.yml` as described in `apps/ios/README.md`.
 3. Open Terminal in `apps/ios` and run `xcodegen generate`.
 4. Open `ReceiptDivider.xcodeproj` in Xcode.
 5. Select an iPhone running a current iOS release and run the app.
 6. Allow Camera and Photo Library access when prompted.
 
-The initial native app is local-device only. It already covers capture, on-device text recognition, editable receipt items, exact-cent splits, local persistence, payment recording, and transaction detail evidence.
+The native app now restores a Supabase session, provisions its account ledger, downloads canonical transactions and balances from the deployed Edge Function, and posts new expenses, optional receipt evidence, and repayments back to Supabase. It retains an account-scoped device cache for display continuity. Capture and text recognition remain on-device, and users still review editable receipt items and exact-cent splits before upload.
 
-A provider-neutral backend foundation now lives in `apps/api`. It implements profiles, groups, membership, database-backed receipt and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, derived balances, and Supabase access-token verification. The iPhone ledger is not connected to it yet; invitations, deployment, and receipt-processing providers remain deliberately undecided.
+A Supabase-only backend foundation lives in `apps/api` and `supabase/functions/ledger-api`. It implements account-owned ledgers, local people, saved people filters, optional database-backed evidence and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, derived balances, and Supabase access-token verification. Supabase Edge Functions are the selected production runtime; the Node entry point remains a local test harness. The iPhone client is wired to this live API. Multi-account sharing, dynamic people management, and extraction providers remain deliberately undecided.
 
 ## Test the backend
 
@@ -68,9 +69,10 @@ cd apps/api
 npm install
 npm test
 npm run typecheck
+npm run smoke:postgres
 ```
 
-See [`apps/api/README.md`](apps/api/README.md) for local startup, PostgreSQL migration, image limits, and the authentication boundary that must be replaced before deployment.
+The PostgreSQL smoke test requires the Git-ignored `apps/api/.env.local`; it creates and then removes an isolated test ledger. See [`apps/api/README.md`](apps/api/README.md) for local startup, PostgreSQL migration, image limits, authentication, and Supabase Edge Function deployment.
 
 ## Key documents
 

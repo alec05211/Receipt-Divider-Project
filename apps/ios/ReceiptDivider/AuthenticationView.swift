@@ -4,6 +4,7 @@ import SwiftUI
 
 struct AppRootView: View {
     @Environment(AuthenticationStore.self) private var authentication
+    @Environment(ExpenseStore.self) private var store
 
     var body: some View {
         Group {
@@ -14,7 +15,8 @@ struct AppRootView: View {
             case .signedOut:
                 AuthenticationView()
             case .authenticated:
-                AppTabView()
+                if let userID = authentication.userID { ConnectedLedgerView(userID: userID) }
+                else { ProgressView("Preparing your account…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             case .configurationMissing:
                 ContentUnavailableView(
                     "Connect Supabase",
@@ -25,6 +27,44 @@ struct AppRootView: View {
         }
         .animation(.snappy, value: authentication.state)
         .task { await authentication.observeSession() }
+        .onChange(of: authentication.state) { _, state in if state == .signedOut { store.disconnect() } }
+    }
+}
+
+private struct ConnectedLedgerView: View {
+    @Environment(AuthenticationStore.self) private var authentication
+    @Environment(ExpenseStore.self) private var store
+    let userID: UUID
+
+    var body: some View {
+        Group {
+            if store.activeUserID == userID && store.hasLoadedRemoteData {
+                AppTabView()
+            } else if let message = store.syncError, !store.isSyncing {
+                ContentUnavailableView {
+                    Label("Couldn’t load your ledger", systemImage: "wifi.exclamationmark")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Try again") { Task { await connect() } }.buttonStyle(.borderedProminent)
+                }
+            } else {
+                ProgressView("Loading your ledger…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: userID) { await connect() }
+    }
+
+    private func connect() async {
+        do {
+            await store.synchronize(
+                userID: userID,
+                displayName: authentication.defaultDisplayName,
+                accessToken: try await authentication.accessToken()
+            )
+        } catch {
+            store.syncError = error.localizedDescription
+        }
     }
 }
 
