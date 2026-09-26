@@ -41,8 +41,6 @@ struct ExpenseDetailView: View {
                         Text(expense.shares[person, default: 0].usd).fontWeight(.semibold)
                     }
                 }
-                Text("The payer covered the full amount at purchase; each amount above is that person’s assigned share.")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
 
             Section("Receipt evidence") {
