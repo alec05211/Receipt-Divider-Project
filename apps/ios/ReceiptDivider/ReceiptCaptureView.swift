@@ -6,7 +6,6 @@ import VisionKit
 struct ReceiptCaptureView: View {
     enum Step: Int { case capture, reading, select, people, split }
     @Environment(ExpenseStore.self) private var store
-    @Binding var captureRequest: Int
     let finish: () -> Void
     @State private var step: Step = .capture
     @State private var image: UIImage?
@@ -45,7 +44,6 @@ struct ReceiptCaptureView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { if step != .capture && step != .reading { ToolbarItem(placement: .topBarLeading) { Button("Back") { back() } } } }
             .fullScreenCover(isPresented: $showCamera) { DocumentScanner(image: $image).ignoresSafeArea() }
-            .onChange(of: captureRequest) { _, _ in if step == .capture && canScan { showCamera = true } }
             .onChange(of: image) { _, newImage in if newImage != nil { startReading() } }
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
             .sensoryFeedback(.selection, trigger: items.filter(\.isSelected).count)
