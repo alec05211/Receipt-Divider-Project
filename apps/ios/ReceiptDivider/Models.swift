@@ -66,7 +66,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
     init() { restore() }
     var alexBalance: Int {
         let expenses = expenses.reduce(0) { $0 + ($1.payer == .alex ? $1.total : 0) - ($1.shares[.alex] ?? 0) }
-        let payments = payments.reduce(0) { $0 + ($1.to == .alex ? $1.amount : 0) - ($1.from == .alex ? $1.amount : 0) }
+        let payments = payments.reduce(0) { $0 + ($1.from == .alex ? $1.amount : 0) - ($1.to == .alex ? $1.amount : 0) }
         return expenses + payments
     }
     func add(_ expense: Expense) { expenses.append(expense); expenses.sort { $0.transactionDate > $1.transactionDate } }
