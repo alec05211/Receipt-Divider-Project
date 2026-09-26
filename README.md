@@ -4,7 +4,7 @@ Receipt Divider is a mobile-first expense-sharing app for splitting a mixed rece
 
 ## Current direction
 
-The native iPhone app is the product reference client. It uses SwiftUI system components so current iOS can provide its native navigation, Liquid Glass treatment, and haptic feedback. The existing web prototype remains a workflow reference only.
+The native iPhone app is the product reference client. It uses SwiftUI system components so current iOS can provide its native navigation, Liquid Glass treatment, and haptic feedback. A custom Supabase authentication gate makes email one-time codes the primary sign-in/create-account flow, provides native Sign in with Apple, and restores prior device sessions. The existing web prototype remains a workflow reference only.
 
 The main navigation is:
 
@@ -51,15 +51,15 @@ Open `http://127.0.0.1:4173` in a browser.
 ## Build the native iPhone app on a Mac
 
 1. Install the newest Xcode and XcodeGen.
-2. Open Terminal in `apps/ios`.
-3. Run `xcodegen generate`.
+2. Configure the Supabase project URL and publishable key in `apps/ios/project.yml` as described in `apps/ios/README.md`.
+3. Open Terminal in `apps/ios` and run `xcodegen generate`.
 4. Open `ReceiptDivider.xcodeproj` in Xcode.
 5. Select an iPhone running a current iOS release and run the app.
 6. Allow Camera and Photo Library access when prompted.
 
 The initial native app is local-device only. It already covers capture, on-device text recognition, editable receipt items, exact-cent splits, local persistence, payment recording, and transaction detail evidence.
 
-A provider-neutral backend foundation now lives in `apps/api`. It implements profiles, groups, membership, database-backed receipt and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, and derived balances. The iPhone app is not connected to it yet, and production identity verification, invitations, deployment, and receipt-processing providers remain deliberately undecided.
+A provider-neutral backend foundation now lives in `apps/api`. It implements profiles, groups, membership, database-backed receipt and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, derived balances, and Supabase access-token verification. The iPhone ledger is not connected to it yet; invitations, deployment, and receipt-processing providers remain deliberately undecided.
 
 ## Test the backend
 

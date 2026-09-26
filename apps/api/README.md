@@ -27,13 +27,13 @@ This mode is intentionally non-persistent. Send a valid UUID in `x-user-id`, cre
 1. Create a PostgreSQL database.
 2. Apply `db/migrations/001_initial.sql` with the provider's SQL console or migration tool.
 3. Copy `.env.example` values into your local environment and set `DATABASE_URL`.
-4. Replace the development header authenticator in `src/node.ts` with a verified identity-token adapter before deployment.
+4. Set `SUPABASE_URL`, leave `ALLOW_INSECURE_DEV_AUTH` unset, and use an asymmetric Supabase JWT signing key. The API verifies bearer tokens against the project's cached JWKS.
 
 The PostgreSQL pool is deliberately capped at five connections per function instance. A deployed serverless platform should use a provider pooler or database proxy.
 
 ## HTTP contract
 
-Every `/v1` request requires authenticated identity. The local adapter reads `x-user-id`; a deployment must verify a bearer token and supply its subject instead.
+Every `/v1` request requires authenticated identity. The local adapter reads `x-user-id`; deployed requests use `Authorization: Bearer <Supabase access token>`. The API verifies the signature, issuer, audience, expiry, authenticated role, and UUID subject before using the identity.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

@@ -55,6 +55,8 @@ Measure scanning corrections, time required to save an expense, failed uploads, 
 | S-10 | Proposed | Track who paid, net balances, and manually recorded repayments. |
 | S-11 | Proposed | Permit manual expense entry when a receipt is unavailable or scanning fails. |
 | S-12 | Proposed | Use one payer per expense and one currency per group. |
+| S-13 | Confirmed | Gate the native app behind a custom SwiftUI Supabase Auth experience, using email one-time codes as the primary sign-in/create-account flow and native Sign in with Apple as the secondary option. |
+| S-14 | Confirmed | Restore a previously authenticated session on the device and open the main app without requiring sign-in again while the session remains valid and refreshable. |
 
 ### Deferred scope
 
@@ -77,6 +79,8 @@ Android remains a required future client. Keep the backend, money rules, API con
 **Confirmed:** The main view is a chronological, transaction-first activity list. Each transaction visibly shows the people included in that transaction through their avatars. The app maintains a reusable people roster, ordered with recently used people first during participant selection.
 
 **Confirmed native navigation:** The bottom tab bar contains Transactions (`clock`), Add expense (`plus.circle.fill`), and Profile (`person.crop.circle`). Settings lives in the Transactions screen’s top-right `gearshape` button. Use SF Symbols and system components rather than custom navigation icon artwork. Settlement and people management live under Profile.
+
+**Confirmed authentication entry:** When no valid session exists, show a custom-designed native authentication screen before the tab bar. Default to email OTP sign-in, provide a visible Create account mode using the same code-verification interaction, and place the native Sign in with Apple button below the email action. A stored valid session bypasses this screen. Authentication provider screens must not dictate the surrounding visual design, while the Apple button and authorization sheet follow Apple’s required native treatment.
 
 Do not make saved groups the primary navigation model. A transaction can include any subset of people from the roster without requiring the user to create a separate group for every combination. Saved groups may later exist as optional templates for recurring households, trips, or teams.
 
@@ -337,11 +341,12 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | D-08 | Can one receipt produce multiple expense entries? | Initially one entry per upload flow; decide duplicate-receipt handling. | Before receipt persistence design. |
 | D-09 | Do members approve allocations or repayments? | Immediate posting with attribution and history; no approval step initially. | Before finalizing posting behavior. |
 | D-10 | What happens when members leave a group? | Preserve historical references and balances; define access and outstanding-debt behavior. | Before membership removal. |
-| D-11 | Which infrastructure and extraction providers? | Select for accuracy, cost, privacy, and operational simplicity after a receipt sample evaluation. | Before integration work. |
+| D-11 | Which infrastructure and extraction providers? | Supabase Auth is selected for identity. Select hosting, managed PostgreSQL, and receipt extraction for accuracy, cost, privacy, and operational simplicity. | Before deployment and receipt integration. |
 | D-12 | Are refunds or negative line items needed immediately? | Defer refund transactions; explicitly detect unsupported cases. | Before scan validation. |
 | D-13 | Resolved: which date places an expense in history? | Confirmed: receipt purchase date determines placement; creation time is separate. Proposed: newest-first ordering, transaction-date reporting, and same-day tie-breakers as specified in section 6. | Core decision resolved; proposed details remain refinable. |
 | D-14 | Is a suggested payment plan needed for groups larger than two? | Begin with member net balances; add deterministic settlement suggestions if required. | Before multi-person settlement UI. |
 | D-15 | When should images leave PostgreSQL? | Keep receipt and profile image bytes in PostgreSQL initially. Reconsider only if database size, backup duration, bandwidth, or delivery performance creates a demonstrated problem; preserve the API contract if storage changes. | After measured household or beta usage. |
+| D-16 | Resolved: primary native authentication flow? | Confirmed: custom SwiftUI email OTP sign-in and account creation, secondary native Sign in with Apple, automatic local session restoration, and explicit sign out in Settings. | Authentication direction resolved; account linking and deletion remain open. |
 
 ## 13. Decision and change log
 
@@ -353,6 +358,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-25 | Pivoted to a native iPhone reference client in `apps/ios`. The SwiftUI foundation uses system `TabView`, navigation, and toolbars for Liquid Glass behavior on current iOS, plus sensory feedback for selection and successful saves. | Native iOS source scaffold started; requires a Mac with Xcode for generation, compilation, and device validation. |
 | 2026-09-25 | Extended the native local foundation with camera/photo receipt intake, Vision text extraction, editable item rows, dynamic equal/custom allocation, transaction-date history, local ledger persistence, and repayment recording. | Source implementation complete for this local slice; Xcode compilation and on-device validation remain pending. |
 | 2026-09-26 | Added a provider-neutral TypeScript ledger API and PostgreSQL schema with atomic expense writes, idempotency, memberships, repayments, audit versions, derived balances, and database-backed profile and receipt images. | Backend foundation implemented and locally tested; production authentication, invitations, deployment provider, PostgreSQL integration testing, and iOS synchronization remain pending. |
+| 2026-09-26 | Selected Supabase Auth and added a custom native authentication gate with primary email OTP sign-in/create-account, secondary native Sign in with Apple, stored-session restoration, sign out, and backend JWT verification through Supabase JWKS. | Source implementation complete; Supabase project configuration and Mac/Xcode device validation remain pending. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

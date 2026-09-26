@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createApp } from "../src/app.js";
 import { MemoryRepository } from "../src/memory-repository.js";
+import { createSupabaseAuthenticator } from "../src/supabase-auth.js";
 
 const alex = "00000000-0000-4000-8000-000000000001";
 const jamie = "00000000-0000-4000-8000-000000000002";
@@ -125,4 +127,47 @@ test("invalid allocations and unauthorized snapshots are rejected", async () => 
   });
   assert.equal(invalid.status, 422);
   assert.equal((await request(app, `/v1/groups/${groupId}/snapshot`, stranger)).status, 403);
+});
+
+test("Supabase JWT authentication accepts only signed authenticated-user tokens", async () => {
+  const projectUrl = "https://receipt-divider.supabase.co";
+  const issuer = `${projectUrl}/auth/v1`;
+  const { publicKey, privateKey } = await generateKeyPair("ES256");
+  const publicJwk = await exportJWK(publicKey);
+  publicJwk.kid = "test-key";
+  publicJwk.alg = "ES256";
+  const authenticate = createSupabaseAuthenticator(projectUrl, createLocalJWKSet({ keys: [publicJwk] }));
+  const app = createApp(new MemoryRepository(), authenticate);
+
+  async function token(role: string, subject = alex) {
+    return new SignJWT({ role })
+      .setProtectedHeader({ alg: "ES256", kid: "test-key" })
+      .setIssuer(issuer)
+      .setAudience("authenticated")
+      .setSubject(subject)
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(privateKey);
+  }
+
+  const valid = await app.request("/v1/profile", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${await token("authenticated")}`, "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Alex" }),
+  });
+  assert.equal(valid.status, 200);
+
+  const wrongRole = await app.request("/v1/profile", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${await token("anon")}`, "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Alex" }),
+  });
+  assert.equal(wrongRole.status, 401);
+
+  const invalidSubject = await app.request("/v1/profile", {
+    method: "PUT",
+    headers: { authorization: `Bearer ${await token("authenticated", "not-a-uuid")}`, "content-type": "application/json" },
+    body: JSON.stringify({ displayName: "Alex" }),
+  });
+  assert.equal(invalidSubject.status, 401);
 });
