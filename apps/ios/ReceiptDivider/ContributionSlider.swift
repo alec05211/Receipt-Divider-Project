@@ -1,20 +1,52 @@
 import SwiftUI
 import UIKit
 
-/// The unit the contribution sliders lead with; chosen in Settings. Both units are always shown, with this one on top
-/// and the other beneath it, and this one snaps more firmly. Values are always stored in cents.
+/// The unit contributions lead with; chosen in Settings. The amount is entered in this unit with the other shown beneath
+/// it, and the slider snaps more firmly to it. Values are always stored in cents.
 enum ContributionSliderUnit: String, CaseIterable, Identifiable {
     case dollars, percent
     static let storageKey = "contributionSliderUnit"
     var id: Self { self }
     var title: String { self == .dollars ? "Dollars" : "Percent" }
     var other: Self { self == .dollars ? .percent : .dollars }
+
+    /// `value` cents in this unit; percent is of `total`, rounded to a whole percent.
+    func format(_ value: Int, of total: Int) -> String {
+        switch self {
+        case .dollars: value.usd
+        case .percent: (total > 0 ? Double(value) / Double(total) : 0).formatted(.percent.precision(.fractionLength(0)))
+        }
+    }
 }
 
-/// A system slider over 0…`total` cents with a native tick at `detent` (the person's equal share), showing the
-/// contribution in the Settings unit with the other unit beneath it. Dragging is magnetic in three tiers, sized in
-/// points of drag so they feel the same whatever the total: the equal share pulls hardest, then every whole unit in the
-/// Settings unit, then faintly every whole unit in the other. Outside those zones the value moves freely to the cent.
+/// A contribution entered exactly in the Settings unit (dollars, or percent of `total` converted to cents), with the
+/// other unit in small gray text beneath it. The only place a contribution's value is shown.
+struct ContributionAmountField: View {
+    let name: String
+    @Binding var cents: Int
+    let total: Int
+    @AppStorage(ContributionSliderUnit.storageKey) private var unit: ContributionSliderUnit = .dollars
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Group {
+                switch unit {
+                case .dollars: CentsField(title: "0.00", cents: $cents)
+                case .percent: PercentField(cents: $cents, total: total)
+                }
+            }
+            .accessibilityLabel("\(name)’s contribution")
+            Text(unit.other.format(cents, of: total)).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+        }
+        .monospacedDigit()
+        .fixedSize()
+    }
+}
+
+/// A system slider over 0…`total` cents with a native tick at `detent` (the person's equal share). It has no value
+/// label of its own; `ContributionAmountField` shows the value. Dragging is magnetic in three tiers, sized in points of
+/// drag so they feel the same whatever the total: the equal share pulls hardest, then every whole unit in the Settings
+/// unit, then faintly every whole unit in the other. Outside those zones the value moves freely to the cent.
 struct ContributionSlider: View {
     let name: String
     @Binding var cents: Int
@@ -23,26 +55,9 @@ struct ContributionSlider: View {
     @AppStorage(ContributionSliderUnit.storageKey) private var unit: ContributionSliderUnit = .dollars
 
     var body: some View {
-        HStack(spacing: 12) {
-            SystemSlider(cents: $cents, total: total, detent: detent, unit: unit, label: "\(name)’s contribution",
-                         valueText: "\(format(cents, in: unit)), \(format(cents, in: unit.other))",
-                         hint: "Equal share is \(format(detent, in: unit))")
-            VStack(alignment: .trailing, spacing: 0) {
-                Text(format(cents, in: unit)).font(.subheadline)
-                Text(format(cents, in: unit.other)).font(.caption2).foregroundStyle(.secondary)
-            }
-            .monospacedDigit()
-            .frame(minWidth: 64, alignment: .trailing)
-            .accessibilityHidden(true)
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private func format(_ value: Int, in unit: ContributionSliderUnit) -> String {
-        switch unit {
-        case .dollars: value.usd
-        case .percent: (total > 0 ? Double(value) / Double(total) : 0).formatted(.percent.precision(.fractionLength(0)))
-        }
+        SystemSlider(cents: $cents, total: total, detent: detent, unit: unit, label: "\(name)’s contribution",
+                     valueText: "\(unit.format(cents, of: total)), \(unit.other.format(cents, of: total))",
+                     hint: "Equal share is \(unit.format(detent, of: total))")
     }
 }
 

@@ -14,7 +14,6 @@ struct ReceiptCaptureView: View {
     @State private var showCamera = false
     @State private var items: [ReceiptItem] = []
     @State private var purchaseDate = Date()
-    @State private var dateNote: String?
     @State private var recognizedText: String?
     /// The receipt's evidence once an earlier expense from it was saved; later expenses from it reuse this instead of uploading again.
     @State private var receiptEvidenceID: UUID?
@@ -73,20 +72,19 @@ struct ReceiptCaptureView: View {
     private var captureScreen: some View {
         ContentUnavailableView {
             Label("Scan a receipt", systemImage: "camera.viewfinder")
-        } description: { Text("Take a photo to find individual costs, then choose only the items to share.") } actions: {
+        } description: { EmptyView() } actions: {
             Button { showCamera = true } label: { Label("Scan receipt", systemImage: "doc.viewfinder").prominentLabel() }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
             Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; step = .select }.padding(.top, 12)
         }
     }
     private var readingScreen: some View {
-        VStack(spacing: 16) { ProgressView().controlSize(.large); Text("Finding individual costs").font(.headline); Text("You’ll be able to review every item before sharing it.").foregroundStyle(.secondary).multilineTextAlignment(.center) }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 16) { ProgressView().controlSize(.large); Text("Finding items").font(.headline) }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     private var itemSelectionScreen: some View {
         List {
-            Section { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date) } header: { Text("Receipt details") } footer: { if let dateNote { Text(dateNote) } }
+            Section("Receipt details") { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date) }
             if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
-            if !claimedItemIDs.isEmpty { Section { Text("Dimmed items are already in an expense you saved from this receipt.").font(.footnote).foregroundStyle(.secondary) } }
             Section("Select items to share") {
                 ForEach($items) { $item in
                     Button { withAnimation(.snappy(duration: 0.15)) { item.isSelected.toggle() } } label: {
@@ -136,7 +134,7 @@ struct ReceiptCaptureView: View {
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             } footer: {
-                if store.splitCandidates.count <= 1 { Text("Add friends from Profile → Friends to split expenses with them.") }
+                if store.splitCandidates.count <= 1 { Text("Add friends in Settings.") }
             }
         }
         .searchable(text: $personSearch, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search friends")
@@ -170,7 +168,11 @@ struct ReceiptCaptureView: View {
             Section("Contributions") {
                 ForEach(orderedSelection, id: \.self) { person in
                     VStack(spacing: 4) {
-                        LabeledContent(store.name(for: person)) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) }
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(store.name(for: person))
+                            Spacer()
+                            ContributionAmountField(name: store.name(for: person), cents: shareBinding(for: person), total: total)
+                        }
                         if selectedPeople.count > 1 { ContributionSlider(name: store.name(for: person), cents: shareBinding(for: person), total: total, detent: equalShare(for: person)) }
                     }
                 }
@@ -179,14 +181,14 @@ struct ReceiptCaptureView: View {
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
         .safeAreaInset(edge: .bottom) {
+            // Save keeps its natural width; the pair is centered together, so Save sits just left of center.
             HStack(spacing: 12) {
-                Button { save() } label: { Text(isSaving ? "Saving…" : "Save expense").prominentLabel().frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
+                Button { save() } label: { Text(isSaving ? "Saving…" : "Save expense").prominentLabel() }.buttonStyle(.borderedProminent)
                 Button { save(createNew: true) } label: { Image(systemName: "plus").fontWeight(.semibold) }
                     .buttonStyle(.bordered).buttonBorderShape(.circle)
                     .accessibilityLabel("Save and add another")
-                    .accessibilityHint("Saves this expense and starts another split from the same receipt.")
             }
-            .controlSize(.large).padding(.horizontal).padding(.vertical, 10).disabled(!isValidSplit || isSaving)
+            .controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(!isValidSplit || isSaving)
         }
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
@@ -198,7 +200,7 @@ struct ReceiptCaptureView: View {
             image = await Task.detached { ReceiptImageProcessor.flatten(picture) }.value
         }
     }
-    private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; recognizedText = scan.recognizedText; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No item prices were found. Add them manually." }; step = .select } }
+    private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; recognizedText = scan.recognizedText; if let date = scan.purchaseDate { purchaseDate = date }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No prices found." }; step = .select } }
     /// Editing one contribution rebalances the others so they always add up to the total.
     private func shareBinding(for person: UUID) -> Binding<Int> {
         Binding(get: { shares[person] ?? 0 }, set: { cents in
@@ -241,7 +243,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); dateNote = nil; recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries" }
     /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
     /// saved as claimed, and clears the item, people and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
