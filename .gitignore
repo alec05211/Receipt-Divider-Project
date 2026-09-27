@@ -7,6 +7,9 @@ apps/ios/build/
 apps/ios/*.xcodeproj/
 xcuserdata/
 
+# Per-developer signing team (see apps/ios/Signing.local.xcconfig.example)
+apps/ios/Signing.local.xcconfig
+
 # JavaScript / TypeScript dependencies and local backend configuration
 node_modules/
 .env

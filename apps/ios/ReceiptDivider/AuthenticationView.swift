@@ -15,6 +15,8 @@ struct AppRootView: View {
                 AuthenticationView()
             case .authenticated:
                 AppTabView()
+            case .resettingPassword:
+                NewPasswordView()
             case .configurationMissing:
                 ContentUnavailableView(
                     "Connect Supabase",
@@ -25,6 +27,7 @@ struct AppRootView: View {
         }
         .animation(.snappy, value: authentication.state)
         .task { await authentication.observeSession() }
+        .onOpenURL { url in Task { await authentication.handleIncomingURL(url) } }
     }
 }
 
@@ -34,26 +37,26 @@ private enum AuthenticationMode: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
-private enum AuthenticationStep { case email, code }
+private enum AuthenticationStep { case credentials, resetSent }
 
 struct AuthenticationView: View {
     @Environment(AuthenticationStore.self) private var authentication
     @Environment(\.colorScheme) private var colorScheme
     @State private var mode: AuthenticationMode = .signIn
-    @State private var step: AuthenticationStep = .email
+    @State private var step: AuthenticationStep = .credentials
     @State private var email = ""
-    @State private var code = ""
+    @State private var password = ""
     @State private var appleNonce = ""
     @FocusState private var focusedField: Field?
 
-    private enum Field { case email, code }
+    private enum Field { case email, password }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 28) {
-                    brand
-                    if step == .email { emailEntry } else { codeEntry }
+                    AuthenticationBrand()
+                    if step == .credentials { credentialsEntry } else { resetSent }
                 }
                 .frame(maxWidth: 480)
                 .padding(.horizontal, 24)
@@ -67,25 +70,7 @@ struct AuthenticationView: View {
         .onChange(of: mode) { _, _ in authentication.clearError() }
     }
 
-    private var brand: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "receipt.fill")
-                .font(.system(size: 38, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 76, height: 76)
-                .background(.primary, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .accessibilityHidden(true)
-            VStack(spacing: 6) {
-                Text("Receipt Divider").font(.largeTitle.bold())
-                Text("Shared costs, without the guesswork.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .multilineTextAlignment(.center)
-    }
-
-    private var emailEntry: some View {
+    private var credentialsEntry: some View {
         VStack(spacing: 20) {
             Picker("Account action", selection: $mode) {
                 ForEach(AuthenticationMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
@@ -95,30 +80,49 @@ struct AuthenticationView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Email address").font(.headline)
                 TextField("you@example.com", text: $email)
-                    .textContentType(.emailAddress)
+                    .textContentType(.username)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .email)
-                    .submitLabel(.continue)
-                    .onSubmit(sendCode)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .password }
+                    .padding(14)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Password").font(.headline)
+                    Spacer()
+                    if mode == .signIn {
+                        Button("Forgot password?", action: sendReset)
+                            .font(.subheadline)
+                            .disabled(authentication.isWorking)
+                    }
+                }
+                SecureField(mode == .signIn ? "Password" : "At least \(AuthenticationStore.minimumPasswordLength) characters", text: $password)
+                    .textContentType(mode == .signIn ? .password : .newPassword)
+                    .focused($focusedField, equals: .password)
+                    .submitLabel(.go)
+                    .onSubmit(submit)
                     .padding(14)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
 
             errorMessage
 
-            Button(action: sendCode) {
+            Button(action: submit) {
                 Group {
                     if authentication.isWorking { ProgressView() }
-                    else { Text(mode == .signIn ? "Email me a sign-in code" : "Create account with email") }
+                    else { Text(mode == .signIn ? "Sign in" : "Create account") }
                 }
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 28)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(authentication.isWorking || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(authentication.isWorking || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
 
             HStack {
                 Rectangle().frame(height: 1).foregroundStyle(.quaternary)
@@ -131,87 +135,60 @@ struct AuthenticationView: View {
                 .frame(height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .disabled(authentication.isWorking)
-
-            Text("Email codes can sign you in or create a private Receipt Divider account—no password required.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
         }
         .onAppear { focusedField = .email }
     }
 
-    private var codeEntry: some View {
+    private var resetSent: some View {
         VStack(spacing: 20) {
+            Image(systemName: "envelope.badge")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+
             VStack(spacing: 6) {
                 Text("Check your email").font(.title2.bold())
-                Text("Enter the six-digit code sent to **\(email.trimmingCharacters(in: .whitespacesAndNewlines))**.")
+                Text("We sent a password reset link to **\(email.trimmingCharacters(in: .whitespacesAndNewlines))**. Open it on this iPhone to choose a new password.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
 
-            TextField("000000", text: $code)
-                .textContentType(.oneTimeCode)
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.center)
-                .font(.title2.monospacedDigit().weight(.semibold))
-                .focused($focusedField, equals: .code)
-                .onChange(of: code) { _, value in
-                    code = String(value.filter(\.isNumber).prefix(6))
-                    if code.count == 6 { verifyCode() }
-                }
-                .padding(14)
-                .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if authentication.isWorking { ProgressView() }
 
             errorMessage
 
-            Button(action: verifyCode) {
-                Group {
-                    if authentication.isWorking { ProgressView() }
-                    else { Text("Continue") }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 28)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(authentication.isWorking || code.count != 6)
-
             HStack(spacing: 18) {
-                Button("Use a different email") {
-                    code = ""
-                    step = .email
+                Button("Back to sign in") {
+                    step = .credentials
                     authentication.clearError()
                 }
-                Button("Send another code", action: sendCode)
+                Button("Send another link", action: sendReset)
                     .disabled(authentication.isWorking)
             }
             .font(.subheadline)
         }
-        .onAppear { focusedField = .code }
     }
 
-    @ViewBuilder private var errorMessage: some View {
-        if let message = authentication.errorMessage {
-            Label(message, systemImage: "exclamationmark.circle.fill")
-                .font(.footnote)
-                .foregroundStyle(.red)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLiveRegion(.assertive)
-        }
-    }
+    private var errorMessage: some View { AuthenticationErrorMessage() }
 
-    private func sendCode() {
+    private func submit() {
+        guard !authentication.isWorking else { return }
         Task {
-            if await authentication.sendEmailCode(to: email, createAccount: mode == .createAccount) {
-                withAnimation { step = .code }
+            if mode == .signIn {
+                await authentication.signIn(email: email, password: password)
+            } else {
+                await authentication.createAccount(email: email, password: password)
             }
         }
     }
 
-    private func verifyCode() {
-        guard !authentication.isWorking else { return }
-        Task { await authentication.verifyEmailCode(code, email: email) }
+    private func sendReset() {
+        Task {
+            if await authentication.sendPasswordReset(to: email) {
+                withAnimation { step = .resetSent }
+            }
+        }
     }
 
     private func prepareAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
@@ -247,3 +224,103 @@ struct AuthenticationView: View {
 }
 
 private enum AuthenticationViewError: Error { case missingAppleCredential }
+
+private struct AuthenticationBrand: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "receipt.fill")
+                .font(.system(size: 38, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 76, height: 76)
+                .background(.primary, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(spacing: 6) {
+                Text("Receipt Divider").font(.largeTitle.bold())
+                Text("Shared costs, without the guesswork.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .multilineTextAlignment(.center)
+    }
+}
+
+private struct AuthenticationErrorMessage: View {
+    @Environment(AuthenticationStore.self) private var authentication
+
+    var body: some View {
+        if let message = authentication.errorMessage {
+            Label(message, systemImage: "exclamationmark.circle.fill")
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onAppear { AccessibilityNotification.Announcement(message).post() }
+                .onChange(of: message) { _, newMessage in
+                    AccessibilityNotification.Announcement(newMessage).post()
+                }
+        }
+    }
+}
+
+private struct NewPasswordView: View {
+    @Environment(AuthenticationStore.self) private var authentication
+    @State private var password = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 28) {
+                    AuthenticationBrand()
+
+                    VStack(spacing: 20) {
+                        VStack(spacing: 6) {
+                            Text("Choose a new password").font(.title2.bold())
+                            Text("Use at least \(AuthenticationStore.minimumPasswordLength) characters.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        SecureField("New password", text: $password)
+                            .textContentType(.newPassword)
+                            .focused($isFocused)
+                            .submitLabel(.done)
+                            .onSubmit(save)
+                            .padding(14)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        AuthenticationErrorMessage()
+
+                        Button(action: save) {
+                            Group {
+                                if authentication.isWorking { ProgressView() }
+                                else { Text("Save password") }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 28)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(authentication.isWorking || password.isEmpty)
+
+                        Button("Cancel") { Task { await authentication.signOut() } }
+                            .font(.subheadline)
+                            .disabled(authentication.isWorking)
+                    }
+                }
+                .frame(maxWidth: 480)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 36)
+                .frame(maxWidth: .infinity)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .background(Color(uiColor: .systemGroupedBackground))
+        }
+        .onAppear { isFocused = true }
+    }
+
+    private func save() {
+        guard !authentication.isWorking else { return }
+        Task { await authentication.updatePassword(password) }
+    }
+}

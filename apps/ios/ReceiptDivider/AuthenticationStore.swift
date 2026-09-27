@@ -7,6 +7,7 @@ enum AppAuthenticationState: Equatable {
     case loading
     case signedOut
     case authenticated
+    case resettingPassword
     case configurationMissing
 }
 
@@ -19,6 +20,7 @@ enum AppAuthenticationState: Equatable {
 
     private let client: SupabaseClient?
     private var isObserving = false
+    private var isResettingPassword = false
 
     init(bundle: Bundle = .main) {
         client = SupabaseConfiguration.client(from: bundle)
@@ -30,44 +32,56 @@ enum AppAuthenticationState: Equatable {
         isObserving = true
         for await (_, session) in client.auth.authStateChanges {
             email = session?.user.email
-            state = session == nil ? .signedOut : .authenticated
+            if session == nil { isResettingPassword = false }
+            state = session == nil ? .signedOut : isResettingPassword ? .resettingPassword : .authenticated
             isWorking = false
         }
     }
 
     @discardableResult
-    func sendEmailCode(to address: String, createAccount: Bool) async -> Bool {
-        guard let client else { return false }
-        let normalizedEmail = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard Self.looksLikeEmail(normalizedEmail) else {
-            errorMessage = "Enter a valid email address."
+    func signIn(email address: String, password: String) async -> Bool {
+        guard let client, let email = validatedEmail(address) else { return false }
+        guard !password.isEmpty else {
+            errorMessage = "Enter your password."
             return false
         }
+        return await perform { _ = try await client.auth.signIn(email: email, password: password) }
+    }
 
+    @discardableResult
+    func createAccount(email address: String, password: String) async -> Bool {
+        guard let client, let email = validatedEmail(address), validateNewPassword(password) else { return false }
         return await perform {
-            try await client.auth.signInWithOTP(
-                email: normalizedEmail,
-                shouldCreateUser: createAccount
-            )
+            let response = try await client.auth.signUp(email: email, password: password)
+            if response.session == nil { throw AuthenticationStoreError.confirmationRequired }
         }
     }
 
     @discardableResult
-    func verifyEmailCode(_ code: String, email address: String) async -> Bool {
-        guard let client else { return false }
-        let digits = code.filter(\.isNumber)
-        guard digits.count == 6 else {
-            errorMessage = "Enter the six-digit code from your email."
-            return false
-        }
-
+    func sendPasswordReset(to address: String) async -> Bool {
+        guard let client, let email = validatedEmail(address) else { return false }
         return await perform {
-            _ = try await client.auth.verifyOTP(
-                email: address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                token: digits,
-                type: .email
-            )
+            try await client.auth.resetPasswordForEmail(email, redirectTo: SupabaseConfiguration.passwordResetURL)
         }
+    }
+
+    /// Completes the password reset link from the email; the user then chooses a new password.
+    func handleIncomingURL(_ url: URL) async {
+        guard let client, url.scheme == SupabaseConfiguration.passwordResetURL.scheme else { return }
+        isResettingPassword = true
+        let succeeded = await perform { _ = try await client.auth.session(from: url) }
+        if succeeded { state = .resettingPassword } else { isResettingPassword = false }
+    }
+
+    @discardableResult
+    func updatePassword(_ password: String) async -> Bool {
+        guard let client, validateNewPassword(password) else { return false }
+        let succeeded = await perform { _ = try await client.auth.update(user: UserAttributes(password: password)) }
+        if succeeded {
+            isResettingPassword = false
+            state = .authenticated
+        }
+        return succeeded
     }
 
     func signInWithApple(idToken: String, rawNonce: String, fullName: PersonNameComponents?) async {
@@ -122,30 +136,55 @@ enum AppAuthenticationState: Equatable {
         }
     }
 
+    private func validatedEmail(_ address: String) -> String? {
+        let email = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard Self.looksLikeEmail(email) else {
+            errorMessage = "Enter a valid email address."
+            return nil
+        }
+        return email
+    }
+
+    private func validateNewPassword(_ password: String) -> Bool {
+        guard password.count >= Self.minimumPasswordLength else {
+            errorMessage = "Use at least \(Self.minimumPasswordLength) characters for your password."
+            return false
+        }
+        return true
+    }
+
+    static let minimumPasswordLength = 8
+
     private static func looksLikeEmail(_ value: String) -> Bool {
         let pieces = value.split(separator: "@", omittingEmptySubsequences: false)
         return pieces.count == 2 && pieces[0].count > 0 && pieces[1].contains(".")
     }
 
     private static func friendlyMessage(for error: Error) -> String {
-        let description = error.localizedDescription.lowercased()
-        if description.contains("rate") || description.contains("too many") {
-            return "Too many attempts. Wait a moment before requesting another code."
+        if case AuthenticationStoreError.confirmationRequired = error {
+            return "Check your email to confirm your account, then sign in."
         }
-        if description.contains("expired") {
-            return "That code has expired. Request a new one and try again."
-        }
-        if description.contains("token") || description.contains("code") {
-            return "That code is not valid. Check the email and try again."
-        }
-        if description.contains("user not found") || description.contains("signup") {
-            return "No account was found for that email. Choose Create account to get started."
+        if let authError = error as? AuthError {
+            switch authError.errorCode {
+            case .invalidCredentials: return "That email and password don't match. Try again or reset your password."
+            case .userAlreadyExists, .emailExists: return "An account already exists for that email. Choose Sign in instead."
+            case .weakPassword: return "Choose a stronger password."
+            case .samePassword: return "Choose a password you haven't used before."
+            case .overRequestRateLimit, .overEmailSendRateLimit: return "Too many attempts. Wait a moment and try again."
+            case .flowStateExpired, .otpExpired: return "That reset link has expired. Request a new one and try again."
+            default: break
+            }
         }
         return "Authentication is unavailable right now. Please try again."
     }
 }
 
+private enum AuthenticationStoreError: Error { case confirmationRequired }
+
 private enum SupabaseConfiguration {
+    /// Must be listed under Authentication → URL Configuration → Redirect URLs in Supabase.
+    static let passwordResetURL = URL(string: "receiptdivider://reset-password")!
+
     static func client(from bundle: Bundle) -> SupabaseClient? {
         guard
             let urlString = bundle.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
