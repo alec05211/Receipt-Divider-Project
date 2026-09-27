@@ -27,6 +27,9 @@ xcrun --find devicectl >/dev/null
 # failure when the phone is offline or the pairing needs attention.
 xcrun devicectl --timeout 60 device info details --device "$IPHONE_ID"
 cd "$IOS_DIR"
+# Signing.xcconfig includes Signing.local.xcconfig, which is how a blank setting there (such as dropping the
+# entitlements on a Personal Team) takes effect; an empty value passed with -xcconfig doesn't clear it.
+if [[ "$SIGNING_CONFIG" -ef "$IOS_DIR/Signing.local.xcconfig" ]]; then :; else cp "$SIGNING_CONFIG" "$IOS_DIR/Signing.local.xcconfig"; fi
 xcodegen generate
 xcodebuild \
   -project ReceiptDivider.xcodeproj \
