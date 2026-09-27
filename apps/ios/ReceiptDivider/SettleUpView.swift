@@ -85,11 +85,6 @@ enum BalanceText {
     static func describe(_ cents: Int, name: String) -> String {
         cents > 0 ? "\(name) owes you \(cents.usd)" : cents < 0 ? "You owe \(name) \((-cents).usd)" : "Settled up"
     }
-    /// "Alec and Willem owe you $6.00 each", "You owe $6.00 each to Alec, Willem, and Luke"; one name reads as `describe(_:name:)`.
-    static func describe(_ cents: Int, names: [String]) -> String {
-        guard names.count > 1 else { return describe(cents, name: names.first ?? "") }
-        return cents > 0 ? "\(list(names)) owe you \(cents.usd) each" : cents < 0 ? "You owe \((-cents).usd) each to \(list(names))" : "Settled up"
-    }
     /// Joins names in English with an Oxford comma: "A", "A and B", "A, B, and C".
     static func list(_ names: [String]) -> String {
         switch names.count {
@@ -98,16 +93,9 @@ enum BalanceText {
         default: names.dropLast().joined(separator: ", ") + ", and " + names[names.count - 1]
         }
     }
-    /// Merges people with the same signed balance into one group, largest amount first (owed to you before owed by you on ties), names A–Z.
-    static func grouped(_ balances: [(person: LedgerPerson, cents: Int)]) -> [BalanceGroup] {
-        Dictionary(grouping: balances.filter { $0.cents != 0 }, by: \.cents)
-            .map { BalanceGroup(cents: $0.key, people: $0.value.map(\.person).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) }
-            .sorted { abs($0.cents) != abs($1.cents) ? abs($0.cents) > abs($1.cents) : $0.cents > $1.cents }
+    /// "Owed by Alec and Willem", "Owed to Luke", or both as "Owed by Alec · Owed to Luke"; empty when all settled.
+    static func summary(_ balances: [(person: LedgerPerson, cents: Int)]) -> String {
+        let owedBy = list(balances.filter { $0.cents > 0 }.map(\.person.name)), owedTo = list(balances.filter { $0.cents < 0 }.map(\.person.name))
+        return [owedBy.isEmpty ? nil : "Owed by \(owedBy)", owedTo.isEmpty ? nil : "Owed to \(owedTo)"].compactMap { $0 }.joined(separator: " · ")
     }
-}
-/// Everyone who owes you, or whom you owe, the same amount.
-struct BalanceGroup: Identifiable, Hashable {
-    let cents: Int; let people: [LedgerPerson]
-    var id: Int { cents }
-    var text: String { BalanceText.describe(cents, names: people.map(\.name)) }
 }
