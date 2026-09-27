@@ -28,15 +28,21 @@ export function requireCurrency(value: unknown): string {
   return value;
 }
 
+/** Returns the trimmed name of an expense, which must contain 1–200 characters. */
+export function requireDescription(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 200) {
+    throw new ApiError(400, "description must contain 1–200 characters", "invalid_input");
+  }
+  return value.trim();
+}
+
 /** Validates `input` and lowercases its IDs in place. */
 export function validateExpense(input: CreateExpenseInput): void {
   input.clientRequestId = requireUuid(input.clientRequestId, "clientRequestId");
   input.payerId = requireUuid(input.payerId, "payerId");
   requireCurrency(input.currency);
   requireCents(input.totalCents, "totalCents", false);
-  if (!input.description?.trim() || input.description.length > 200) {
-    throw new ApiError(400, "description must contain 1–200 characters", "invalid_input");
-  }
+  requireDescription(input.description);
   requireDate(input.transactionDate);
   const items = input.items ?? [];
   if (!Array.isArray(items) || items.length > 250) {

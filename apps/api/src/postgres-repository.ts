@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpense, validatePayment } from "./domain.ts";
+import { calculateBalances, filterTransactions, fingerprint, imageEtag, requireDescription, searchTerm, validateExpense, validatePayment } from "./domain.ts";
 import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseItemInput, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -141,6 +141,18 @@ export class PostgresRepository implements LedgerRepository {
       for (const [position, evidenceId] of evidenceIds.entries()) await tx`INSERT INTO expense_evidence (expense_id, evidence_id, position) VALUES (${row!.id}, ${evidenceId}, ${position})`;
       await tx`INSERT INTO audit_events (actor_id, event_type, entity_id) VALUES (${creatorId}, 'expense.created', ${row!.id})`;
       return mapExpense(row!, input.items ?? [], input.allocations, evidenceIds);
+    });
+  }
+
+  async updateExpenseDescription(userId: UUID, expenseId: UUID, description: string): Promise<Expense> {
+    const name = requireDescription(description);
+    return this.sql.begin(async (tx) => {
+      const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
+      if (!row) throw new ApiError(404, "expense not found", "not_found");
+      if (row.description === name) return this.loadExpense(tx, row);
+      const [updated] = await tx`UPDATE expenses SET description=${name} WHERE id=${expenseId} RETURNING *`;
+      await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, 'expense.description_changed', ${expenseId}, ${tx.json({ from: row.description, to: name })})`;
+      return this.loadExpense(tx, updated!);
     });
   }
 

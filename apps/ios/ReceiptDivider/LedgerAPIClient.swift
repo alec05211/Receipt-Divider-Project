@@ -99,6 +99,11 @@ actor LedgerAPIClient {
         try await send(path: "/v1/expenses", method: "POST", token: token, body: encoder.encode(request))
     }
 
+    /// Renames an expense for everyone on it; any participant may do this.
+    func renameExpense(id: UUID, description: String, token: String) async throws -> APIExpense {
+        try await send(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "PATCH", token: token, body: encoder.encode(["description": description]))
+    }
+
     func createPayment(_ request: CreateAPIPayment, token: String) async throws -> APIPayment {
         try await send(path: "/v1/payments", method: "POST", token: token, body: encoder.encode(request))
     }

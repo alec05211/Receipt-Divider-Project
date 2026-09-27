@@ -99,6 +99,11 @@ export interface LedgerRepository {
   /** Stores the text the uploader's device recognized in their evidence image; returns false if it isn't theirs. */
   putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean>;
   createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
+  /**
+   * Renames an active expense. Anyone on it (creator, payer, or someone with a share) may rename it; to anyone else
+   * it doesn't exist. Each change is recorded as an attributable revision holding the old and new names.
+   */
+  updateExpenseDescription(userId: UUID, expenseId: UUID, description: string): Promise<Expense>;
   createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
   close?(): Promise<void>;
