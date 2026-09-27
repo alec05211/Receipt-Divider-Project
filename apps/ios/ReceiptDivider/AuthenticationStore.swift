@@ -191,6 +191,7 @@ struct AccountIdentity: Codable, Sendable, Equatable {
             case .samePassword: return "Choose a password you haven't used before."
             case .overRequestRateLimit, .overEmailSendRateLimit: return "Too many attempts. Wait a moment and try again."
             case .flowStateExpired, .otpExpired: return "That reset link has expired. Request a new one and try again."
+            case .emailProviderDisabled: return "Email sign-in is turned off for this app. Use Sign in with Apple for now."
             default: break
             }
         }
