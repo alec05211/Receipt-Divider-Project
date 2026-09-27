@@ -65,7 +65,7 @@ struct FriendsView: View {
         }
         Section("Friends") {
             if accepted.isEmpty {
-                ContentUnavailableView("No friends yet", systemImage: "person.2", description: Text("Search for someone by name or username to invite them."))
+                ContentUnavailableView("No friends yet", systemImage: "person.2")
             } else {
                 ForEach(accepted) { friend in
                     personRow(friend) { EmptyView() }

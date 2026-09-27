@@ -197,7 +197,7 @@ struct AuthenticationView: View {
 
             VStack(spacing: 6) {
                 Text("Check your email").font(.title2.bold())
-                Text("We sent a password reset link to **\(email.trimmingCharacters(in: .whitespacesAndNewlines))**. Open it on this iPhone to choose a new password.")
+                Text("We sent a password reset link to **\(email.trimmingCharacters(in: .whitespacesAndNewlines))**. Open it on this iPhone.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
