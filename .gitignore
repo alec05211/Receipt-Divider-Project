@@ -17,3 +17,6 @@ node_modules/
 !.env.example
 coverage/
 supabase/.temp/
+
+# Agent worktrees
+.claude/worktrees/

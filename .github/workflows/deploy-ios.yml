@@ -1,0 +1,32 @@
+name: Deploy iOS to iPhone
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-ios-iphone
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, receipt-divider-ios]
+    timeout-minutes: 30
+    env:
+      IPHONE_ID: ${{ vars.IPHONE_ID }}
+      IOS_SIGNING_CONFIG: ${{ vars.IOS_SIGNING_CONFIG }}
+      LAUNCH_APP: ${{ vars.IOS_LAUNCH_APP || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and install
+        shell: bash
+        run: |
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          caffeinate -i bash apps/ios/scripts/deploy-to-iphone.sh
