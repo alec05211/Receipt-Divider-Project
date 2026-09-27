@@ -6,11 +6,12 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const currencyPattern = /^[A-Z]{3}$/;
 
+/** Returns the UUID in lowercase, the form PostgreSQL and the auth token use, so IDs compare equal whatever case a client sends. */
 export function requireUuid(value: unknown, field: string): UUID {
   if (typeof value !== "string" || !uuidPattern.test(value)) {
     throw new ApiError(400, `${field} must be a UUID`, "invalid_input");
   }
-  return value;
+  return value.toLowerCase();
 }
 
 /** Trims a user search query; 2–60 characters keeps results relevant and discourages listing everyone. */
@@ -27,9 +28,10 @@ export function requireCurrency(value: unknown): string {
   return value;
 }
 
+/** Validates `input` and lowercases its IDs in place. */
 export function validateExpense(input: CreateExpenseInput): void {
-  requireUuid(input.clientRequestId, "clientRequestId");
-  requireUuid(input.payerId, "payerId");
+  input.clientRequestId = requireUuid(input.clientRequestId, "clientRequestId");
+  input.payerId = requireUuid(input.payerId, "payerId");
   requireCurrency(input.currency);
   requireCents(input.totalCents, "totalCents", false);
   if (!input.description?.trim() || input.description.length > 200) {
@@ -58,7 +60,7 @@ export function validateExpense(input: CreateExpenseInput): void {
   const memberIds = new Set<string>();
   let allocationTotal = 0;
   for (const allocation of input.allocations) {
-    requireUuid(allocation.userId, "allocation userId");
+    allocation.userId = requireUuid(allocation.userId, "allocation userId");
     requireCents(allocation.amountCents, "allocation amountCents", false, true);
     if (memberIds.has(allocation.userId)) throw new ApiError(400, "each person may be allocated once", "invalid_input");
     memberIds.add(allocation.userId);
@@ -70,17 +72,18 @@ export function validateExpense(input: CreateExpenseInput): void {
   const evidenceIds = input.evidenceIds ?? [];
   if (!Array.isArray(evidenceIds) || evidenceIds.length > 10) throw new ApiError(400, "an expense may have at most 10 evidence images", "invalid_input");
   const uniqueEvidence = new Set<string>();
-  for (const evidenceId of evidenceIds) {
-    requireUuid(evidenceId, "evidenceId");
+  if (input.evidenceIds) input.evidenceIds = evidenceIds.map((id) => requireUuid(id, "evidenceId"));
+  for (const evidenceId of input.evidenceIds ?? []) {
     if (uniqueEvidence.has(evidenceId)) throw new ApiError(400, "evidenceIds must be unique", "invalid_input");
     uniqueEvidence.add(evidenceId);
   }
 }
 
+/** Validates `input` and lowercases its IDs in place. */
 export function validatePayment(recorderId: UUID, input: CreatePaymentInput): void {
-  requireUuid(input.clientRequestId, "clientRequestId");
-  requireUuid(input.fromUserId, "fromUserId");
-  requireUuid(input.toUserId, "toUserId");
+  input.clientRequestId = requireUuid(input.clientRequestId, "clientRequestId");
+  input.fromUserId = requireUuid(input.fromUserId, "fromUserId");
+  input.toUserId = requireUuid(input.toUserId, "toUserId");
   if (input.fromUserId !== recorderId && input.toUserId !== recorderId) throw new ApiError(422, "you can only record payments you sent or received", "invalid_person");
   if (input.fromUserId === input.toUserId) throw new ApiError(400, "payment sender and recipient must differ", "invalid_input");
   requireCents(input.amountCents, "amountCents", false);

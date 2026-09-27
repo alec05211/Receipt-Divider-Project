@@ -74,6 +74,22 @@ test("you can only split with yourself and your friends", async () => {
   assert.equal((await jsonRequest(app, "/v1/payments", alex, "POST", { clientRequestId: "12000000-0000-4000-8000-000000000005", fromUserId: jamie, toUserId: morgan, amountCents: 100, transactionDate: "2026-09-21" })).status, 422);
 });
 
+test("IDs are matched regardless of case, since Swift sends UUIDs in uppercase", async () => {
+  const app = createApp(new MemoryRepository(), async (context) => context.req.header("x-user-id") ?? null);
+  const ben = "d139b19d-e1f9-420e-ac59-079893a37044", luke = "fbbde5da-ce1e-45e9-a286-05ee860209bb";
+  for (const [user, username] of [[ben, "ben"], [luke, "luke"]] as const) {
+    assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
+    assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: username, lastName: "Test", username })).status, 200);
+  }
+  const invite = await jsonRequest(app, "/v1/friend-requests", ben, "POST", { username: "luke" });
+  const { requestId } = await invite.json() as { requestId: string };
+  assert.equal((await jsonRequest(app, `/v1/friend-requests/${requestId}/accept`, luke, "POST", {})).status, 200);
+  const up = (id: string) => id.toUpperCase();
+  assert.equal((await jsonRequest(app, "/v1/expenses", ben, "POST", expense(up("13000000-0000-4000-8000-00000000000a"), up(ben), [[up(ben), 1000], [up(luke), 1000]]))).status, 201);
+  assert.equal((await jsonRequest(app, "/v1/payments", luke, "POST", { clientRequestId: up("13000000-0000-4000-8000-00000000000b"), fromUserId: up(luke), toUserId: up(ben), amountCents: 1000, transactionDate: "2026-09-21" })).status, 201);
+  assert.equal((await snapshot(app, ben)).balances[luke] ?? 0, 0);
+});
+
 test("removing a friend keeps shared history and still allows settling up", async () => {
   const { app } = await setupFriends();
   assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", expense("13000000-0000-4000-8000-000000000001", alex, [[jamie, 1500]]))).status, 201);
