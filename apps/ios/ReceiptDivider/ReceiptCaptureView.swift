@@ -181,7 +181,7 @@ struct ReceiptCaptureView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 ContinueButton(title: isSaving ? "Saving…" : "Save expense", disabled: !isValidSplit || isSaving) { save() }
-                Button("Save & create new") { save(createNew: true) }.controlSize(.large).padding(.bottom, 10).disabled(!isValidSplit || isSaving)
+                Button("Save and add another") { save(createNew: true) }.controlSize(.large).padding(.bottom, 10).disabled(!isValidSplit || isSaving)
             }
         }
     }

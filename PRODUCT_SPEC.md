@@ -76,15 +76,17 @@ Android remains a required future client. Keep the backend, money rules, API con
 
 ### Navigation model
 
-**Confirmed:** The main view is a chronological, transaction-first activity list. Each transaction visibly shows the people included in that transaction through their avatars. Participant selection offers you and your accepted friends, with recently used people first.
+**Confirmed:** The main view is Summary: your balance with each person, followed by chronological Expenses and Payments sections. Each expense visibly shows the people included in it through their avatars. Participant selection offers you and your accepted friends, with recently used people first.
 
-**Confirmed native navigation:** The bottom tab bar contains Transactions (`clock`), Add expense (`plus.circle.fill`), and Profile (`person.crop.circle`). Settings lives in the Transactions screen’s top-right `gearshape` button. Use SF Symbols and system components rather than custom navigation icon artwork. Settlement and people management live under Profile.
+**Confirmed terminology:** The interface calls a shared purchase an “expense” and a settle-up a “payment” (stored as a repayment). It does not say “transaction”; “transaction date” remains the data term for when a purchase or payment happened.
+
+**Confirmed native navigation:** The bottom tab bar contains Summary (`clock`), Add expense (`plus.circle.fill`), and Profile (`person.crop.circle`). Settings lives in the Summary screen’s top-right `gearshape` button. Use SF Symbols and system components rather than custom navigation icon artwork. Settlement and people management live under Profile.
 
 **Confirmed authentication entry:** When no valid session exists, show a custom-designed native authentication screen before the tab bar. Default to email/password sign-in, provide a visible Create account mode that also collects real first name, real last name, and unique username, offer emailed password reset, and place the native Sign in with Apple button below the email action. A stored valid session bypasses this screen. Authentication provider screens must not dictate the surrounding visual design, while the Apple button and authorization sheet follow Apple’s required native treatment.
 
-Do not make saved groups the primary navigation model. A transaction can include any subset of people from the roster without entering a group pool. A saved group is a local, personal name for a collection of people, created in Settings without invitations. It appears as a filter above Transactions and uses any-person matching: “Roommates” shows transactions involving at least one saved roommate. It changes only the view, never balances, ownership, or access control.
+Do not make saved groups the primary navigation model. An expense can include any subset of people from the roster without entering a group pool. A saved group is a local, personal name for a collection of people, created in Settings without invitations. It appears as a filter on Summary and uses any-person matching: “Roommates” shows expenses and payments involving at least one saved roommate. It changes only the view, never balances, ownership, or access control.
 
-### Core add-transaction flow
+### Core add-expense flow
 
 **Confirmed:** The central Add action in the native iOS tab bar begins a receipt capture flow:
 
@@ -92,16 +94,16 @@ Do not make saved groups the primary navigation model. A transaction can include
 2. Show a short loading state while receipt item rows and likely costs are extracted.
 3. Present an editable multi-select list of receipt rows: item description, cost, and include control. The user confirms selected items and any adjustments.
 4. Present a participant picker, ordered by recently used people. The user tags the friends involved and confirms.
-5. Present the split screen. Equal shares are the default; the user can switch to exact custom contributions. Saving requires contributions to equal the transaction total.
-6. Return to the chronological transaction list, where the saved transaction displays its associated participant avatars.
+5. Present the split screen, where the user names the expense. Equal shares are the default; each person’s contribution can be adjusted exactly or with a system slider that has a detent at their equal share and haptic ticks at every whole dollar or whole percent (chosen in Settings). Saving requires contributions to equal the expense total.
+6. **Save expense** returns to Summary, where the saved expense displays its associated participant avatars. **Save and add another** saves it and returns to item selection on the same receipt, keeping its photo, recognized text, and items while clearing the item, people, and contribution choices; items claimed by an earlier expense are dimmed but still selectable.
 
-The receipt’s purchase date, rather than time of entry, determines its position in the transaction list.
+The receipt’s purchase date, rather than time of entry, determines its position in Summary.
 
-### Transaction detail and evidence
+### Expense detail and evidence
 
-**Confirmed:** Opening a transaction shows the cost breakdown before the receipt image: total cost, who paid the purchase, and the exact assigned share for every tagged person. Scrolling then reveals the original receipt photo and selected line items as the paper trail. The final section shows recent transactions involving one or more of the same tagged people, with their avatars visible.
+**Confirmed:** Opening an expense shows the cost breakdown before the receipt image: total cost, who paid the purchase, and the exact assigned share for every tagged person. Scrolling then reveals the original receipt photo and selected line items as the paper trail. The final section shows recent expenses involving one or more of the same tagged people, with their avatars visible.
 
-### A. Open Transactions
+### A. Open Summary
 
 **Confirmed:** The primary default view is a chronological account-ledger history organized by when purchases occurred, rather than when entries were added. **Proposed:** Show newest purchase dates first and entries under date headings. Spending, each person’s assigned costs, and proposed net balances remain accessible. Saved people groups appear only as optional filters.
 
@@ -164,12 +166,12 @@ The saved entry appears in the group log at its transaction date, even when ente
 | --- | --- | --- |
 | G-01 | Confirmed | An expense and its optional evidence are visible to its creator, its payer, and everyone with a share; a repayment is visible to its sender and recipient. Nobody else can see them. |
 | G-02 | Confirmed | Show an expense log with description, items, attribution, split, and receipt evidence. |
-| G-03 | Confirmed | Show each user their balance with every person they share transactions with, and their overall net balance. |
+| G-03 | Confirmed | Show each user their balance with every person they share expenses with, and their overall net balance. |
 | G-04 | Proposed | Separately show amounts paid, assigned costs, repayments, and net balances. |
 | G-05 | Proposed | Preserve attributable revisions when an expense is edited or voided; recalculate balances from the current effective entries. |
 | G-06 | Proposed | Record repayments separately from purchases and allow erroneous repayments to be reversed with history. |
-| G-07 | Confirmed | Make chronological transaction history the primary default view, ordered by transaction date rather than entry creation time. Backdated purchases appear on the date they occurred. |
-| G-09 | Confirmed | Allow named local collections of people to filter Transactions by any participant overlap without changing ledger math or access. |
+| G-07 | Confirmed | Make chronological expense and payment history the primary default view, ordered by transaction date rather than entry creation time. Backdated purchases appear on the date they occurred. |
+| G-09 | Confirmed | Allow named local collections of people to filter Summary by any participant overlap without changing ledger math or access. |
 | G-08 | Proposed | Default to newest transaction date first, use date headings, and apply date filters and spending periods to transaction dates. Keep creation timestamps available in entry details for auditing. |
 
 ## 6. Financial rules and invariants
@@ -207,7 +209,7 @@ For each member:
 
 - Positive means the member should receive money; negative means they owe money.
 - Balances are also shown pairwise: on each expense, every member owes their share to the payer, and a repayment reduces what its sender owes its recipient. A member's net balance is the sum of their pairwise balances.
-- Transaction filters do not recalculate a separate group balance.
+- Saved people filters do not recalculate a separate group balance.
 - Repayments change balances but do not change purchase totals.
 - Aggregate balances are derived from saved records, not independently editable totals.
 
@@ -258,8 +260,8 @@ This describes the committed initial Supabase PostgreSQL model; sharing and extr
 
 **Proposed:** Use a clear, touch-friendly interface designed first for phone screens.
 
-- Primary screens: Transactions, capture/upload or manual entry, optional evidence review, allocation, expense detail, and repayment entry.
-- Make the chronological transaction list the main view. Show purchase dates prominently and keep “added on” timestamps secondary in entry details.
+- Primary screens: Summary, capture/upload or manual entry, optional evidence review, allocation, expense detail, and payment entry.
+- Make the chronological expense and payment list the main view. Show purchase dates prominently and keep “added on” timestamps secondary in entry details.
 - Keep receipt item names and monetary amounts readable without horizontal scrolling.
 - Make selected states, missing allocation, extraction errors, and save success explicit.
 - Preserve draft state when moving between review and allocation.
@@ -273,7 +275,7 @@ Visual design, naming, and navigation details remain open.
 
 ### Proposed architecture
 
-- Native iOS reference client for capture, review, allocation, and transaction history; Android remains a future client.
+- Native iOS reference client for capture, review, allocation, and expense and payment history; Android remains a future client.
 - Supabase Edge Function API for authenticated ledger access, validation, extraction orchestration, and atomic expense writes. Clients do not independently reconcile concurrent snapshots.
 - Supabase hosted PostgreSQL for profiles, friendships, saved filters, expenses, allocations, repayments, history, profile images, and optional evidence bytes.
 - Keep image access behind authenticated API endpoints and impose conservative size limits. The initial implementation uses 5 MB per profile image and 15 MB per receipt; these are implementation defaults rather than permanent product requirements.
@@ -315,11 +317,12 @@ These scenarios define observable behavior and should guide implementation check
 | A-11 | Edit or void a saved expense under the chosen permission policy. | Balances update and the actor and change remain explainable through history. |
 | A-12 | Receipt analysis fails. | The user can retry or complete a manual expense without a partial ledger entry. |
 | A-13 | Enter a September 18 receipt on September 23. | Extraction targets September 18; the saved expense appears under September 18, while details retain the September 23 creation timestamp. |
-| A-14 | Open Transactions after entering several older receipts in arbitrary order. | The default list follows transaction dates, newest first under the proposed ordering, rather than upload order. |
+| A-14 | Open Summary after entering several older receipts in arbitrary order. | The default list follows transaction dates, newest first under the proposed ordering, rather than upload order. |
 | A-15 | Upload a receipt with a missing or ambiguous purchase date. | The user must choose or confirm a date; the app does not silently substitute the upload date. |
 | A-16 | Correct a saved expense’s transaction date. | Its chronological position and applicable reporting period update, its monetary balance effect remains unchanged, and the change is recorded in history. |
 | A-17 | View the same expense from devices in different time zones. | Its stored purchase calendar date remains the same. |
-| A-18 | Create a local “Roommates” group containing three people. | No invitations are sent and no ledger pool is created; selecting it shows transactions involving any of those people. |
+| A-18 | Create a local “Roommates” group containing three people. | No invitations are sent and no ledger pool is created; selecting it shows expenses and payments involving any of those people. |
+| A-20 | Split one receipt into two expenses with Save and add another. | Both expenses are saved with their own items, people, and shares, and both reference the same single uploaded receipt. |
 | A-19 | Save a manual expense without items or an image. | It is stored and calculated like an evidence-backed expense using its explicit reviewed total, date, payer, and allocations. |
 
 ## 11. Proposed implementation sequence
@@ -343,7 +346,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | D-05 | How are tax and receipt-wide discounts allocated? | Suggest proportional amounts, clearly disclosed and editable. | Before receipt calculation implementation. |
 | D-06 | Can an item be partially selected, such as one of three units? | Initially select whole rows; decide whether quantity splitting is essential. | Before selection interface. |
 | D-07 | Resolved: who can see evidence? | Everyone on the expense it's attached to (creator, payer, and members with a share). Unattached uploads stay private to the uploader. | Resolved with shared expenses. |
-| D-08 | Can one receipt produce multiple expense entries? | Initially one entry per upload flow; decide duplicate-receipt handling. | Before receipt persistence design. |
+| D-08 | Resolved: can one receipt produce multiple expense entries? | Yes. Save and add another splits further expenses from the same scan; they all reference one uploaded evidence asset through `expense_evidence` rather than copies. Everyone on any of those expenses can see the whole receipt. Duplicate-receipt detection across separate scans remains open. | Resolved 2026-09-27. |
 | D-09 | Do members approve allocations or repayments? | Immediate posting with attribution and history; no approval step initially. | Before finalizing posting behavior. |
 | D-10 | Resolved: what is a saved group? | A personal local collection of people used as an any-person transaction filter. It has no membership lifecycle, invitations, ledger pool, or access semantics. | Core decision resolved. |
 | D-11 | Resolved: which core infrastructure? | Supabase Auth, hosted PostgreSQL, and Supabase Edge Functions are selected so authentication, canonical data, and stateless API compute stay in one platform. The evidence extraction provider remains open. | Core infrastructure resolved; extraction remains open. |
@@ -352,7 +355,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | D-14 | Is a suggested payment plan needed for ledgers with more than two people? | Begin with person net balances; add deterministic settlement suggestions if required. | Before multi-person settlement UI. |
 | D-15 | When should images leave PostgreSQL? | Keep receipt and profile image bytes in PostgreSQL initially. Reconsider only if database size, backup duration, bandwidth, or delivery performance creates a demonstrated problem; preserve the API contract if storage changes. | After measured household or beta usage. |
 | D-16 | Resolved: primary native authentication flow? | Confirmed: custom SwiftUI email/password sign-in and account creation, emailed password reset, secondary native Sign in with Apple, automatic local session restoration, and explicit sign out in Settings. | Authentication direction resolved; account linking and deletion remain open. |
-| D-17 | Resolved: how are transactions shared? | Confirmed: an expense appears for everyone on it and counts toward both sides' balances; you can only split with accepted friends. Removing a friend keeps shared history, and repayments stay possible with anyone you've shared an expense with. Edit and void permissions remain open under D-04. | Resolved 2026-09-27. |
+| D-17 | Resolved: how are expenses shared? | Confirmed: an expense appears for everyone on it and counts toward both sides' balances; you can only split with accepted friends. Removing a friend keeps shared history, and repayments stay possible with anyone you've shared an expense with. Edit and void permissions remain open under D-04. | Resolved 2026-09-27. |
 | D-18 | Resolved: how are accounts identified and connected? | Profiles use a real first and last name for display, a unique lowercase username for exact-match discovery, and a private email for authentication. Friends are accepted account relationships and are distinct from saved filter groups. | Core identity and friendship direction resolved. |
 
 ## 13. Decision and change log
@@ -371,6 +374,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-26 | Connected the native SwiftUI client to the live Supabase Edge Function. Authenticated launch provisions the profile and prototype people, loads server transactions and balances, and scopes its local cache by account. Expense saves upload optional evidence and post an idempotent server command; repayments are also server-first. | Source integration complete; Xcode compilation and signed-in device testing remain pending. The fixed four-person UI remains an explicit temporary bridge to dynamic people management. |
 | 2026-09-26 | Made Friends a first-class account relationship. Added real-name profile fields, unique usernames, exact-match invitations, accepted/pending states, automatic linked participant creation, signup identity fields, and a Liquid Glass Friends entry with count and list UI. | Database migration applied, Edge API deployed, and two-account smoke test passed. Xcode/device validation and replacement of the fixed participant enum remain pending. |
 | 2026-09-27 | Removed local and placeholder people: every participant is an app account, and you split with yourself and accepted friends. Expenses are shared with everyone on them, balances are shown per person and overall, evidence is visible to everyone on the expense, and removing a friend keeps shared history. Existing test transactions between placeholder people were deleted. | Confirmed by the product owner. API unit tests and a full Postgres smoke test pass; migration 004 applied and Edge API deployed. Device testing pending. |
+| 2026-09-27 | Added Save and add another, which splits several expenses from one receipt that share a single uploaded evidence asset. Contribution sliders became system sliders with an equal-share detent and whole-dollar or whole-percent haptic ticks, selectable in Settings. Text fields show a Done key, and the interface consistently says “expense” and “payment” instead of “transaction”. | Confirmed by the product owner. API tests pass; installed on paired iPhones. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

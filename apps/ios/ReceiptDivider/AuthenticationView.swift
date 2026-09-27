@@ -134,7 +134,7 @@ struct AuthenticationView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .email)
-                    .submitLabel(.done)
+                    .submitLabel(.next)
                     .onSubmit { focusedField = .password }
                     .padding(14)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
