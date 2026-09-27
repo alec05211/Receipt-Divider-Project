@@ -23,6 +23,10 @@ export interface SavedFilter {
 export type EvidenceKind = "receipt" | "restaurant_check" | "ticket_confirmation" | "other";
 export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: string; etag: string; createdAt: string; }
 
+/** A manually chosen label for what an expense was for; expenses without one have none. */
+export const expenseCategories = ["groceries", "restaurant", "movie", "concert"] as const;
+export type ExpenseCategory = typeof expenseCategories[number];
+
 export interface ExpenseItemInput { name: string; amountCents: number; offsetCents?: number; }
 /** The fields of an existing expense that can be edited; omitted fields are left as they are. */
 export interface ExpenseChanges { description?: string; transactionDate?: string; }
@@ -32,6 +36,8 @@ export interface AllocationInput { userId: UUID; amountCents: number; }
 export interface CreateExpenseInput {
   clientRequestId: UUID;
   description: string;
+  /** Optional; omitted or null means uncategorized. */
+  category?: ExpenseCategory | null;
   transactionDate: string;
   payerId: UUID;
   currency: string;
@@ -41,8 +47,9 @@ export interface CreateExpenseInput {
   allocations: AllocationInput[];
 }
 
-export interface Expense extends Omit<CreateExpenseInput, "items" | "evidenceIds"> {
+export interface Expense extends Omit<CreateExpenseInput, "items" | "evidenceIds" | "category"> {
   id: UUID;
+  category: ExpenseCategory | null;
   creatorId: UUID;
   items: ExpenseItemInput[];
   evidenceIds: UUID[];

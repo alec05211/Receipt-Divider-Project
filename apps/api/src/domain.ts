@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseChanges, Payment, UUID } from "./types.ts";
-import { ApiError } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseCategory, ExpenseChanges, Payment, UUID } from "./types.ts";
+import { ApiError, expenseCategories } from "./types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,13 +47,27 @@ export function validateExpenseChanges(changes: ExpenseChanges): ExpenseChanges 
   return result;
 }
 
-/** Validates `input` and lowercases its IDs in place. */
+/** Returns the category, or null when none is given. */
+export function optionalCategory(value: unknown): ExpenseCategory | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !(expenseCategories as readonly string[]).includes(value)) {
+    throw new ApiError(400, `category must be one of ${expenseCategories.join(", ")}`, "invalid_input");
+  }
+  return value as ExpenseCategory;
+}
+
+/**
+ * Validates `input` and lowercases its IDs in place. A missing or null category is removed, so requests without
+ * one keep the retry fingerprint they had before categories existed.
+ */
 export function validateExpense(input: CreateExpenseInput): void {
   input.clientRequestId = requireUuid(input.clientRequestId, "clientRequestId");
   input.payerId = requireUuid(input.payerId, "payerId");
   requireCurrency(input.currency);
   requireCents(input.totalCents, "totalCents", false);
   requireDescription(input.description);
+  const category = optionalCategory(input.category);
+  if (category) input.category = category; else delete input.category;
   requireDate(input.transactionDate);
   const items = input.items ?? [];
   if (!Array.isArray(items) || items.length > 250) {

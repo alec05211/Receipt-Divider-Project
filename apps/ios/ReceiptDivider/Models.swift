@@ -36,10 +36,32 @@ extension Array where Element == ReceiptItem {
 /// saved receipts are fetched by `evidenceIDs`. Expenses split from the same receipt share its evidence ID.
 struct Expense: Identifiable, Hashable, Codable {
     var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?; var evidenceIDs: [UUID] = []; var recognizedText: String?
+    var category: ExpenseCategory? = nil
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     /// Tax and discounts included in the selected items.
     var offsetTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.offsetCents } }
     var participants: [UUID] { Array(shares.keys) }
+}
+/// What an expense was for, chosen by hand. Optional; older expenses have none.
+enum ExpenseCategory: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
+    case groceries, restaurant, movie, concert
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .groceries: "Groceries"
+        case .restaurant: "Restaurant"
+        case .movie: "Movie"
+        case .concert: "Concert"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .groceries: "cart.fill"
+        case .restaurant: "fork.knife"
+        case .movie: "film.fill"
+        case .concert: "music.mic"
+        }
+    }
 }
 struct Payment: Identifiable, Hashable, Codable { var id = UUID(); var amount: Int; var from: UUID; var to: UUID; var transactionDate: Date; var createdAt = Date() }
 /// An app user who appears in the signed-in user's ledger: themselves, a friend, or someone they share a transaction with.
@@ -226,6 +248,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         let request = CreateAPIExpense(
             clientRequestId: expense.id,
             description: expense.description,
+            category: expense.category?.rawValue,
             transactionDate: Self.dayFormatter.string(from: expense.transactionDate),
             payerId: expense.payer,
             currency: "USD",
@@ -342,7 +365,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 receiptImageData: nil,
                 createdAt: Self.isoDate(remote.createdAt),
                 recordedTotalCents: remote.totalCents,
-                evidenceIDs: remote.evidenceIds
+                evidenceIDs: remote.evidenceIds,
+                category: remote.category.flatMap(ExpenseCategory.init(rawValue:))
             )
         }
         payments = snapshot.payments.map { remote in

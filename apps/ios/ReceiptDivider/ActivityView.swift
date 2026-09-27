@@ -87,7 +87,8 @@ private struct ExpenseRow: View {
     let expense: Expense
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "receipt").foregroundStyle(.secondary)
+            Image(systemName: expense.category?.symbol ?? "receipt").foregroundStyle(.secondary).frame(width: 24)
+                .accessibilityLabel(expense.category?.title ?? "Expense")
             VStack(alignment: .leading, spacing: 4) {
                 Text(expense.description).font(.headline)
                 HStack(spacing: 6) { AvatarStack(people: expense.participants); Text(expense.transactionDate, style: .date).font(.caption).foregroundStyle(.secondary) }

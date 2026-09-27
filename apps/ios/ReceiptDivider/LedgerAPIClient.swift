@@ -155,6 +155,8 @@ struct APIAllocation: Codable, Sendable { let userId: UUID; let amountCents: Int
 struct CreateAPIExpense: Encodable, Sendable {
     let clientRequestId: UUID
     let description: String
+    /// Omitted when nil.
+    let category: String?
     let transactionDate: String
     let payerId: UUID
     let currency: String
@@ -173,6 +175,8 @@ struct UpdateAPIExpense: Encodable, Sendable {
 struct APIExpense: Decodable, Sendable {
     let id: UUID
     let description: String
+    /// Kept as a string so a category this build doesn't know shows as uncategorized instead of failing the snapshot.
+    let category: String?
     let transactionDate: String
     let payerId: UUID
     let totalCents: Int

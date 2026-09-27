@@ -26,6 +26,7 @@ struct ReceiptCaptureView: View {
     @State private var balancer = ContributionBalancer()
     @State private var description = "Shared groceries"
     @State private var payer: UUID?
+    @State private var category: ExpenseCategory?
     @State private var error: String?
     @State private var editingItemID: UUID?
     @State private var didSave = false
@@ -163,7 +164,13 @@ struct ReceiptCaptureView: View {
     }
     private var splitScreen: some View {
         List {
-            Section("Name") { TextField("What was this for?", text: $description).submitLabel(.done) }
+            Section("Name") {
+                TextField("What was this for?", text: $description).submitLabel(.done)
+                Picker("Category", selection: $category) {
+                    Text("None").tag(ExpenseCategory?.none)
+                    ForEach(ExpenseCategory.allCases) { Label($0.title, systemImage: $0.symbol).tag(Optional($0)) }
+                }
+            }
             Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
             Section("Contributions") {
                 ForEach(orderedSelection, id: \.self) { person in
@@ -226,7 +233,7 @@ struct ReceiptCaptureView: View {
     private func save(createNew: Bool = false) {
         guard let payer else { return }
         let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        var expense = Expense(description: name.isEmpty ? "Shared groceries" : name, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText)
+        var expense = Expense(description: name.isEmpty ? "Shared groceries" : name, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category)
         // A receipt already saved with an earlier expense is attached again rather than uploaded twice.
         if let receiptEvidenceID { expense.evidenceIDs = [receiptEvidenceID]; expense.receiptImageData = nil }
         isSaving = true
@@ -243,14 +250,14 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries"; category = nil }
     /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
     /// saved as claimed, and clears the item, people and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
         receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
         claimedItemIDs.formUnion(items.filter(\.isSelected).map(\.id))
         for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared groceries"
+        selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared groceries"; category = nil
         step = .select
     }
     /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.

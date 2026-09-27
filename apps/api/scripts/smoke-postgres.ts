@@ -26,7 +26,7 @@ async function requireStatus(response: Response, expected: number): Promise<void
   }
 }
 
-interface Snapshot { appliedFilterId?: string; people: Array<{ userId: string }>; expenses: Array<{ id: string; transactionDate: string }>; payments: unknown[]; balances: Record<string, number>; netBalance: number; }
+interface Snapshot { appliedFilterId?: string; people: Array<{ userId: string }>; expenses: Array<{ id: string; transactionDate: string; category: string | null }>; payments: unknown[]; balances: Record<string, number>; netBalance: number; }
 
 try {
   for (const [userId, lastName] of [[ownerId, "Owner"], [roommateId, "Roommate"]] as const) {
@@ -54,6 +54,7 @@ try {
   const expenseInput = {
     clientRequestId: randomUUID(),
     description: "Integration dinner",
+    category: "restaurant",
     transactionDate: "2026-09-26",
     payerId: ownerId,
     currency: "USD",
@@ -79,6 +80,7 @@ try {
   assert.equal(filtered.appliedFilterId, filterId);
   assert.deepEqual(filtered.expenses.map((expense) => expense.id), [expenseId]);
   assert.equal(filtered.expenses[0]!.transactionDate, "2026-09-26");
+  assert.equal(filtered.expenses[0]!.category, "restaurant");
   assert.equal(filtered.balances[roommateId], 1500);
   assert.equal(filtered.netBalance, 1500);
 
