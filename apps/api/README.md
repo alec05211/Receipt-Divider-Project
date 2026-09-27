@@ -30,7 +30,7 @@ This mode is non-persistent. Send a UUID in `x-user-id`, create the profile with
 
 ## Supabase PostgreSQL
 
-1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `004_shared_expenses.sql`) in its SQL editor or migration runner.
+1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `005_expense_revisions.sql`) in its SQL editor or migration runner.
 2. For the local Node test harness, copy Supabase’s **Session pooler** URI into `DATABASE_URL`, set `SUPABASE_URL`, and leave `ALLOW_INSECURE_DEV_AUTH` false. Copy `.env.example` to the Git-ignored `.env.local` and run `npm run dev:local`.
 3. Run this API as a trusted backend. Public tables have RLS enabled and direct `anon`/`authenticated` grants revoked; mobile clients use only the API.
 
@@ -59,6 +59,7 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `GET` | `/v1/evidence/{evidenceId}/image` | Read evidence you uploaded or that is attached to an expense you're on. |
 | `PUT` | `/v1/evidence/{evidenceId}/text` | Store the text your device recognized in evidence you uploaded (`{ "text": … }`), kept in `extracted_data` for troubleshooting. |
 | `POST` | `/v1/expenses` | Atomically post a reviewed general expense between you and your friends. |
+| `PATCH` | `/v1/expenses/:expenseId` | Rename an expense you're on; records a revision with the old and new name. |
 | `POST` | `/v1/payments` | Record a repayment you sent or received (`fromUserId`, `toUserId`). |
 | `GET` | `/v1/transactions?filterId={id}` | Read every transaction you're on, the people in them, and your balance with each person, optionally filtered by a saved filter. |
 
