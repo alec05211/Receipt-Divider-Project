@@ -91,7 +91,10 @@ export interface LedgerRepository {
   createSavedFilter(ownerId: UUID, name: string, userIds: UUID[]): Promise<SavedFilter>;
   listSavedFilters(ownerId: UUID): Promise<SavedFilter[]>;
   createEvidence(ownerId: UUID, kind: EvidenceKind, contentType: string, bytes: Uint8Array): Promise<EvidenceAsset>;
-  /** Evidence is visible to its uploader and to everyone on an expense it's attached to. */
+  /**
+   * Evidence is visible to its uploader and to everyone on an expense it's attached to. One receipt may be attached
+   * to several expenses split from it, so expenses sharing an evidence ID came from the same receipt.
+   */
   getEvidence(requesterId: UUID, evidenceId: UUID): Promise<StoredImage | null>;
   /** Stores the text the uploader's device recognized in their evidence image; returns false if it isn't theirs. */
   putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean>;

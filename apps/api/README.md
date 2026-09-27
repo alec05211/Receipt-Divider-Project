@@ -79,7 +79,7 @@ Example manual expense (no image and no itemization):
 }
 ```
 
-For receipt-assisted entry, upload evidence first, then add its ID in `evidenceIds` and optionally add reviewed `items`. When items exist, their adjusted sum must equal `totalCents`; allocations must always equal `totalCents`.
+For receipt-assisted entry, upload evidence first, then add its ID in `evidenceIds` and optionally add reviewed `items`. To split one receipt into several expenses, upload it once and put the same evidence ID on each; the uploaded evidence is the receipt record (image and recognized text), and expenses sharing an ID came from the same receipt. When items exist, their adjusted sum must equal `totalCents`; allocations must always equal `totalCents`.
 
 ## Verification
 

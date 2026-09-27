@@ -95,11 +95,11 @@ struct EditProfileView: View {
             }
             .listRowBackground(Color.clear)
             Section {
-                TextField("First name", text: $firstName).textContentType(.givenName)
-                TextField("Last name", text: $lastName).textContentType(.familyName)
+                TextField("First name", text: $firstName).textContentType(.givenName).submitLabel(.done)
+                TextField("Last name", text: $lastName).textContentType(.familyName).submitLabel(.done)
             } footer: { Text("Friends see your first and last name.") }
             Section {
-                TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.done)
             } footer: { Text("3–24 lowercase letters, numbers, or underscores. Friends find you by username.") }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
         }

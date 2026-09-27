@@ -4,6 +4,7 @@ import Foundation
 struct CentsField: View {
     let title: String
     @Binding var cents: Int
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 1) {
@@ -17,8 +18,17 @@ struct CentsField: View {
                 }
             ))
             .keyboardType(.decimalPad)
+            .focused($isFocused)
             .multilineTextAlignment(.trailing)
             .fixedSize()
+        }
+        .toolbar {
+            if isFocused {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isFocused = false }.fontWeight(.semibold)
+                }
+            }
         }
     }
 }

@@ -53,7 +53,7 @@ private struct BalanceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(balance.usd).font(.title.bold()).foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
-            Text(balance == 0 ? "All settled up" : balance > 0 ? "You're owed in total" : "You owe in total").font(.subheadline)
+            Text(balance == 0 ? "All settled up" : balance > 0 ? "You’re owed in total" : "You owe in total").font(.subheadline)
         }
         .foregroundStyle(.primary)
         .frame(maxWidth: .infinity, alignment: .leading)

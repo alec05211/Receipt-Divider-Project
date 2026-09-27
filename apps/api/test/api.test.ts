@@ -125,6 +125,22 @@ test("receipt evidence is visible to everyone on the expense and nobody else", a
   assert.equal((await request(app, "/v1/evidence?kind=receipt", alex, { method: "POST", headers: { "content-type": "image/png" }, body: bytes })).status, 415);
 });
 
+test("several expenses can be split from one uploaded receipt", async () => {
+  const { app } = await setupFriends(); const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 5, 6, 7, 8]);
+  const upload = await request(app, "/v1/evidence?kind=receipt", alex, { method: "POST", headers: { "content-type": "image/jpeg" }, body: bytes });
+  const { id } = await upload.json() as { id: string };
+  const withJamie = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("31000000-0000-4000-8000-000000000001", alex, [[alex, 300], [jamie, 300]], { evidenceIds: [id], items: [{ name: "Bread", amountCents: 600 }] }));
+  const withMorgan = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("31000000-0000-4000-8000-000000000002", alex, [[morgan, 450]], { evidenceIds: [id], items: [{ name: "Coffee", amountCents: 450 }] }));
+  assert.equal(withJamie.status, 201); assert.equal(withMorgan.status, 201);
+  // Both expenses point at the one receipt, so the app can group them.
+  const expenses = (await snapshot(app, alex)).expenses as unknown as Array<{ evidenceIds: string[] }>;
+  assert.deepEqual(expenses.map((e) => e.evidenceIds), [[id], [id]]);
+  // Each person sees only their own expense, but the receipt through it; a stranger sees neither.
+  assert.equal((await snapshot(app, jamie)).expenses.length, 1); assert.equal((await snapshot(app, morgan)).expenses.length, 1);
+  for (const user of [alex, jamie, morgan]) assert.equal((await request(app, `/v1/evidence/${id}/image`, user)).status, 200);
+  assert.equal((await request(app, `/v1/evidence/${id}/image`, stranger)).status, 404);
+});
+
 test("only the uploader can store the text recognized in their receipt", async () => {
   const { app } = await setupFriends(); const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
   const upload = await request(app, "/v1/evidence?kind=receipt", alex, { method: "POST", headers: { "content-type": "image/jpeg" }, body: bytes });

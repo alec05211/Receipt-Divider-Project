@@ -16,6 +16,10 @@ struct ReceiptCaptureView: View {
     @State private var purchaseDate = Date()
     @State private var dateNote: String?
     @State private var recognizedText: String?
+    /// The receipt's evidence once an earlier expense from it was saved; later expenses from it reuse this instead of uploading again.
+    @State private var receiptEvidenceID: UUID?
+    /// Items an earlier expense from this receipt already includes; shown dimmed but still selectable.
+    @State private var claimedItemIDs: Set<UUID> = []
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -65,7 +69,7 @@ struct ReceiptCaptureView: View {
 
     /// The scanner is unavailable in Simulator and on devices without a camera.
     private var canScan: Bool { VNDocumentCameraViewController.isSupported }
-    private var title: String { switch step { case .capture: "Add transaction"; case .reading: "Reading receipt"; case .select: "Select items"; case .people: "Split with"; case .split: "Split expense" } }
+    private var title: String { switch step { case .capture: "Add expense"; case .reading: "Reading receipt"; case .select: "Select items"; case .people: "Split with"; case .split: "Split expense" } }
     private var captureScreen: some View {
         ContentUnavailableView {
             Label("Scan a receipt", systemImage: "camera.viewfinder")
@@ -82,6 +86,7 @@ struct ReceiptCaptureView: View {
         List {
             Section { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date) } header: { Text("Receipt details") } footer: { if let dateNote { Text(dateNote) } }
             if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
+            if !claimedItemIDs.isEmpty { Section { Text("Dimmed items are already in an expense you saved from this receipt.").font(.footnote).foregroundStyle(.secondary) } }
             Section("Select items to share") {
                 ForEach($items) { $item in
                     Button { withAnimation(.snappy(duration: 0.15)) { item.isSelected.toggle() } } label: {
@@ -91,11 +96,13 @@ struct ReceiptCaptureView: View {
                             Text(item.cents.usd).monospacedDigit().foregroundStyle(.secondary)
                             SelectionCircle(isSelected: item.isSelected)
                         }
+                        .opacity(claimedItemIDs.contains(item.id) && !item.isSelected ? 0.4 : 1)
                         .contentShape(Rectangle())
                     }
                     .foregroundStyle(.primary)
                     .sensoryFeedback(.selection, trigger: item.isSelected)
                     .accessibilityAddTraits(item.isSelected ? .isSelected : [])
+                    .accessibilityValue(claimedItemIDs.contains(item.id) ? "In an earlier expense" : "")
                     .contextMenu {
                         Button("Edit", systemImage: "pencil") { editingItemID = item.id }
                         Button("Delete", systemImage: "trash", role: .destructive) { items.removeAll { $0.id == item.id } }
@@ -133,6 +140,7 @@ struct ReceiptCaptureView: View {
             }
         }
         .searchable(text: $personSearch, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search friends")
+        .submitLabel(.done)
         .overlay { if shownPeople.isEmpty { ContentUnavailableView.search(text: personSearch) } }
         .onAppear { if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] } }
         .safeAreaInset(edge: .bottom) { ContinueButton(title: "Confirm people", disabled: selectedPeople.isEmpty) { personSearch = ""; setEqualSplit(); step = .split } }
@@ -157,7 +165,7 @@ struct ReceiptCaptureView: View {
     }
     private var splitScreen: some View {
         List {
-            Section("Name") { TextField("What was this for?", text: $description) }
+            Section("Name") { TextField("What was this for?", text: $description).submitLabel(.done) }
             Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
             Section("Contributions") {
                 ForEach(orderedSelection, id: \.self) { person in
@@ -170,7 +178,12 @@ struct ReceiptCaptureView: View {
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
-        .safeAreaInset(edge: .bottom) { ContinueButton(title: isSaving ? "Saving…" : "Save transaction", disabled: !isValidSplit || isSaving) { save() } }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                ContinueButton(title: isSaving ? "Saving…" : "Save expense", disabled: !isValidSplit || isSaving) { save() }
+                Button("Save & create new") { save(createNew: true) }.controlSize(.large).padding(.bottom, 10).disabled(!isValidSplit || isSaving)
+            }
+        }
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
     private func load(_ photo: PhotosPickerItem?) {
@@ -205,27 +218,39 @@ struct ReceiptCaptureView: View {
         editOrder = []
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : people.first }
     }
-    private func save() {
+    /// With `createNew`, stays on this receipt afterwards so another expense can be split from it.
+    private func save(createNew: Bool = false) {
         guard let payer else { return }
         let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let expense = Expense(description: name.isEmpty ? "Shared groceries" : name, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText)
+        var expense = Expense(description: name.isEmpty ? "Shared groceries" : name, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText)
+        // A receipt already saved with an earlier expense is attached again rather than uploaded twice.
+        if let receiptEvidenceID { expense.evidenceIDs = [receiptEvidenceID]; expense.receiptImageData = nil }
         isSaving = true
         error = nil
         Task {
             do {
                 let token = try await authentication.accessToken()
-                try await store.add(expense, accessToken: token)
+                let evidenceIDs = try await store.add(expense, accessToken: token)
                 didSave.toggle()
-                reset()
-                finish()
+                if createNew { startNextExpense(receiptEvidenceID: evidenceIDs.first) } else { reset(); finish() }
             } catch {
                 self.error = error.localizedDescription
             }
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; purchaseDate = Date(); dateNote = nil; recognizedText = nil; error = nil; description = "Shared groceries" }
-    private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; purchaseDate = Date(); dateNote = nil; recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries" }
+    /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
+    /// saved as claimed, and clears the item, people and contribution choices.
+    private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
+        receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
+        claimedItemIDs.formUnion(items.filter(\.isSelected).map(\.id))
+        for index in items.indices { items[index].isSelected = false }
+        selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; error = nil; description = "Shared groceries"
+        step = .select
+    }
+    /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
+    private func back() { switch step { case .select: receiptEvidenceID = nil; claimedItemIDs = []; step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }
 
 enum ContributionBalancer {
@@ -255,7 +280,7 @@ enum ContributionBalancer {
     }
 }
 
-private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).background(.bar).disabled(disabled) } }
+private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(disabled) } }
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
@@ -287,7 +312,7 @@ private struct ItemEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Item name", text: $item.name)
+                TextField("Item name", text: $item.name).submitLabel(.done)
                 LabeledContent("Price") { CentsField(title: "0.00", cents: $item.cents) }
             }
             .navigationTitle("Edit item")

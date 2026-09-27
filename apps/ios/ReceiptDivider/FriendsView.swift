@@ -29,6 +29,7 @@ struct FriendsView: View {
         }
         .navigationTitle("Friends")
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search by name or username")
+        .submitLabel(.done)
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
         .refreshable { await reload() }
@@ -69,7 +70,7 @@ struct FriendsView: View {
                 ForEach(accepted) { friend in
                     personRow(friend) { EmptyView() }
                         .contextMenu {
-                            Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { remove(friend) }
+                            Button("Remove friend", systemImage: "person.badge.minus", role: .destructive) { remove(friend) }
                         }
                 }
             }

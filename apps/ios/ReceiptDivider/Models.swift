@@ -33,7 +33,7 @@ extension Array where Element == ReceiptItem {
     }
 }
 /// `payer` and the keys of `shares` are user IDs. `receiptImageData` and `recognizedText` are only set before saving;
-/// saved receipts are fetched by `evidenceIDs`.
+/// saved receipts are fetched by `evidenceIDs`. Expenses split from the same receipt share its evidence ID.
 struct Expense: Identifiable, Hashable, Codable {
     var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?; var evidenceIDs: [UUID] = []; var recognizedText: String?
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
@@ -202,11 +202,14 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         try await refreshFriends(accessToken: accessToken)
     }
 
-    func add(_ expense: Expense, accessToken: String) async throws {
+    /// Uploads `receiptImageData` unless the expense already names its `evidenceIDs`, as a later expense from a receipt
+    /// saved earlier does, so every expense from one receipt shares that receipt's evidence. Returns the evidence IDs used.
+    @discardableResult
+    func add(_ expense: Expense, accessToken: String) async throws -> [UUID] {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         let allocations = expense.shares.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
-        var evidenceIDs: [UUID] = []
-        if let image = expense.receiptImageData {
+        var evidenceIDs = expense.evidenceIDs
+        if evidenceIDs.isEmpty, let image = expense.receiptImageData {
             if let pending = pendingEvidenceIDs[expense.id] { evidenceIDs = [pending] }
             else {
                 let evidence = try await api.uploadReceipt(image, token: accessToken)
@@ -234,6 +237,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         _ = try await api.createExpense(request, token: accessToken)
         pendingEvidenceIDs[expense.id] = nil
         try await refresh(accessToken: accessToken)
+        return evidenceIDs
     }
 
     func add(_ payment: Payment, accessToken: String) async throws {

@@ -123,9 +123,9 @@ struct AuthenticationView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if mode == .createAccount {
-                    TextField("First name", text: $firstName).textContentType(.givenName).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    TextField("Last name", text: $lastName).textContentType(.familyName).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("First name", text: $firstName).textContentType(.givenName).submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("Last name", text: $lastName).textContentType(.familyName).submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
                 }
                 Text("Email address").font(.headline)
                 TextField("you@example.com", text: $email)
@@ -134,7 +134,7 @@ struct AuthenticationView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($focusedField, equals: .email)
-                    .submitLabel(.next)
+                    .submitLabel(.done)
                     .onSubmit { focusedField = .password }
                     .padding(14)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -153,7 +153,7 @@ struct AuthenticationView: View {
                 SecureField(mode == .signIn ? "Password" : "At least \(AuthenticationStore.minimumPasswordLength) characters", text: $password)
                     .textContentType(mode == .signIn ? .password : .newPassword)
                     .focused($focusedField, equals: .password)
-                    .submitLabel(.go)
+                    .submitLabel(.done)
                     .onSubmit(submit)
                     .padding(14)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

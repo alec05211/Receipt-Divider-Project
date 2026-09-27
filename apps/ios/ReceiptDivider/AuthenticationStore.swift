@@ -179,10 +179,10 @@ struct AccountIdentity: Codable, Sendable, Equatable {
         }
         if let authError = error as? AuthError {
             switch authError.errorCode {
-            case .invalidCredentials: return "That email and password don't match. Try again or reset your password."
+            case .invalidCredentials: return "That email and password don’t match. Try again or reset your password."
             case .userAlreadyExists, .emailExists: return "An account already exists for that email. Choose Sign in instead."
             case .weakPassword: return "Choose a stronger password."
-            case .samePassword: return "Choose a password you haven't used before."
+            case .samePassword: return "Choose a password you haven’t used before."
             case .overRequestRateLimit, .overEmailSendRateLimit: return "Too many attempts. Wait a moment and try again."
             case .flowStateExpired, .otpExpired: return "That reset link has expired. Request a new one and try again."
             case .emailProviderDisabled: return "Email sign-in is turned off for this app. Use Sign in with Apple for now."

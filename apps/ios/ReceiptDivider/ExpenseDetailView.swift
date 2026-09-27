@@ -55,9 +55,9 @@ struct ExpenseDetailView: View {
                 } else if isLoadingReceipt {
                     ProgressView("Loading receipt").frame(maxWidth: .infinity).padding(.vertical)
                 } else if !expense.evidenceIDs.isEmpty {
-                    ContentUnavailableView("Couldn’t load the receipt", systemImage: "wifi.exclamationmark", description: Text("Pull down on Expenses to refresh, then try again."))
+                    ContentUnavailableView("Couldn’t load the receipt", systemImage: "wifi.exclamationmark", description: Text("Pull down on Summary to refresh, then try again."))
                 } else {
-                    ContentUnavailableView("No receipt image", systemImage: "doc.text.image", description: Text("This transaction was entered without a photo."))
+                    ContentUnavailableView("No receipt image", systemImage: "doc.text.image", description: Text("This expense was entered without a photo."))
                 }
                 ForEach(expense.items.filter(\.isSelected)) { item in
                     LabeledContent(item.name, value: item.cents.usd)
@@ -65,9 +65,9 @@ struct ExpenseDetailView: View {
                 if expense.offsetTotal != 0 { LabeledContent("Tax and discounts", value: expense.offsetTotal < 0 ? "−\((-expense.offsetTotal).usd)" : expense.offsetTotal.usd) }
             }
 
-            Section("Recent transactions with these people") {
+            Section("Recent expenses with these people") {
                 if relatedExpenses.isEmpty {
-                    Text("No other shared transactions yet.").foregroundStyle(.secondary)
+                    Text("No other shared expenses yet.").foregroundStyle(.secondary)
                 } else {
                     ForEach(relatedExpenses.prefix(8)) { related in
                         HStack(spacing: 10) {
@@ -84,7 +84,7 @@ struct ExpenseDetailView: View {
             }
         }
         .task(id: expense.evidenceIDs.first) { await loadReceipt() }
-        .navigationTitle("Transaction")
+        .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
