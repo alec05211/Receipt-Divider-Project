@@ -32,9 +32,10 @@ extension Array where Element == ReceiptItem {
         for share in byFraction.prefix(abs(remainder)) { self[share.index].offsetCents += remainder.signum() }
     }
 }
-/// `payer` and the keys of `shares` are user IDs.
+/// `payer` and the keys of `shares` are user IDs. `receiptImageData` is only set before saving; saved receipts are
+/// fetched by `evidenceIDs`.
 struct Expense: Identifiable, Hashable, Codable {
-    var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?
+    var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?; var evidenceIDs: [UUID] = []
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     /// Tax and discounts included in the selected items.
     var offsetTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.offsetCents } }
@@ -59,6 +60,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     private(set) var profile: APIProfile?
     /// Loaded profile pictures with the etag they were fetched for; a nil image records a user known to have none.
     private var avatars: [UUID: (etag: String?, image: UIImage?)] = [:]
+    /// Receipt images by evidence ID. They never change once uploaded, so they're kept for the session.
+    private var receiptImages: [UUID: UIImage] = [:]
     /// Bumped when the signed-in user's own picture changes, so views showing it reload.
     private(set) var avatarVersion = 0
     var syncError: String?
@@ -136,6 +139,14 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         }
     }
 
+    /// Fetches a saved receipt image; nil if it can't be loaded right now.
+    func receiptImage(_ evidenceID: UUID, accessToken: String) async -> UIImage? {
+        if let cached = receiptImages[evidenceID] { return cached }
+        guard let api, let data = try? await api.evidenceImage(id: evidenceID, token: accessToken), let image = UIImage(data: data) else { return nil }
+        receiptImages[evidenceID] = image
+        return image
+    }
+
     /// Uploads a square, 512-point JPEG of the chosen photo as the signed-in user's profile picture.
     func uploadAvatar(_ image: UIImage, userID: UUID, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
@@ -200,6 +211,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             else {
                 let evidence = try await api.uploadReceipt(image, token: accessToken)
                 pendingEvidenceIDs[expense.id] = evidence.id
+                receiptImages[evidence.id] = UIImage(data: image)
                 evidenceIDs = [evidence.id]
             }
         }
@@ -251,6 +263,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         hasLoadedRemoteData = false
         profile = nil
         avatars = [:]
+        receiptImages = [:]
         people = [:]
         balances = [:]
         friends = []
@@ -285,7 +298,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 shares: Dictionary(remote.allocations.map { ($0.userId, $0.amountCents) }, uniquingKeysWith: +),
                 receiptImageData: nil,
                 createdAt: Self.isoDate(remote.createdAt),
-                recordedTotalCents: remote.totalCents
+                recordedTotalCents: remote.totalCents,
+                evidenceIDs: remote.evidenceIds
             )
         }
         payments = snapshot.payments.map { remote in

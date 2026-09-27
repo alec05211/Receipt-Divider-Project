@@ -72,6 +72,14 @@ actor LedgerAPIClient {
         try await send(path: "/v1/transactions", token: token)
     }
 
+    /// Returns nil when the image doesn't exist or isn't visible to the caller.
+    func evidenceImage(id: UUID, token: String) async throws -> Data? {
+        let (data, status) = try await perform(path: "/v1/evidence/\(id.uuidString.lowercased())/image", method: "GET", token: token, contentType: nil, body: nil)
+        if status == 404 { return nil }
+        try check(data: data, status: status)
+        return data
+    }
+
     func uploadReceipt(_ data: Data, token: String) async throws -> APIEvidence {
         try await send(
             path: "/v1/evidence?kind=receipt",
