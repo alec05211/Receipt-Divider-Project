@@ -55,7 +55,7 @@ struct ExpenseDetailView: View {
                 } else if isLoadingReceipt {
                     ProgressView("Loading receipt").frame(maxWidth: .infinity).padding(.vertical)
                 } else if !expense.evidenceIDs.isEmpty {
-                    ContentUnavailableView("Couldn’t load the receipt", systemImage: "wifi.exclamationmark", description: Text("Pull down on Transactions to refresh, then try again."))
+                    ContentUnavailableView("Couldn’t load the receipt", systemImage: "wifi.exclamationmark", description: Text("Pull down on Expenses to refresh, then try again."))
                 } else {
                     ContentUnavailableView("No receipt image", systemImage: "doc.text.image", description: Text("This transaction was entered without a photo."))
                 }
