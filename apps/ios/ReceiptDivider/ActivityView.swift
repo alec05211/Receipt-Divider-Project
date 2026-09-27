@@ -11,7 +11,7 @@ struct ActivityView: View {
             List {
                 Section { BalanceCard(balance: store.netBalance, balances: store.openBalances) { settleUpPerson = $0 }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
                 Section("Expenses") {
-                    if expenses.isEmpty { ContentUnavailableView("No shared expenses", systemImage: "receipt", description: Text("Add a receipt to start your shared history.")) }
+                    if expenses.isEmpty { ContentUnavailableView("No shared expenses", systemImage: "receipt") }
                     else { ForEach(expenses) { expense in NavigationLink { ExpenseDetailView(expense: expense) } label: { ExpenseRow(expense: expense) } } }
                 }
             }
@@ -28,7 +28,7 @@ struct ActivityView: View {
         try? await store.refresh(accessToken: token)
     }
 }
-/// The overall balance, a one-line summary of who's involved, and a disclosure of each person's balance.
+/// The overall balance, a one-line summary of who's involved, and a disclosure of each person's balance ("All settled up" when there are none).
 private struct BalanceCard: View {
     let balance: Int
     let balances: [(person: LedgerPerson, cents: Int)]
@@ -38,14 +38,14 @@ private struct BalanceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(balance.usd).font(.title.bold()).foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
-            Text(balance == 0 ? "All settled up" : balance > 0 ? "You’re owed in total" : "You owe in total").font(.subheadline)
-            if !balances.isEmpty {
+            if balances.isEmpty { Text("All settled up").font(.subheadline) }
+            else {
                 Button { withAnimation(.snappy) { isExpanded.toggle() } } label: {
                     HStack(spacing: 6) {
                         Text(BalanceText.summary(balances)).multilineTextAlignment(.leading)
                         Image(systemName: "chevron.right").font(.caption.weight(.semibold)).rotationEffect(.degrees(isExpanded ? 90 : 0))
                     }
-                    .font(.subheadline).foregroundStyle(.secondary).contentShape(Rectangle())
+                    .font(.subheadline).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 2)

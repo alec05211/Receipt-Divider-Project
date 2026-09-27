@@ -24,7 +24,7 @@ struct SettleUpView: View {
     var body: some View {
         Form {
             if candidates.isEmpty {
-                ContentUnavailableView("No one to settle with", systemImage: "person.2", description: Text("Add friends from Profile → Friends first."))
+                ContentUnavailableView("No one to settle with", systemImage: "person.2")
             } else {
                 Section {
                     Picker("With", selection: $other) {
