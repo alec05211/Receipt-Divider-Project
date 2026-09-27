@@ -118,6 +118,10 @@ export class PostgresRepository implements LedgerRepository {
         WHERE ee.evidence_id=a.id AND ${visibleTo(this.sql, requesterId)}))`;
     if (!rows.length) return null; return { contentType: rows[0]!.content_type, bytes: toBytes(rows[0]!.image_data), etag: rows[0]!.image_etag };
   }
+  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean> {
+    const rows = await this.sql`UPDATE evidence_assets SET extraction_status='complete', extracted_data=${this.sql.json({ source: "device", text })} WHERE id=${evidenceId} AND uploaded_by=${uploaderId} RETURNING id`;
+    return rows.length > 0;
+  }
 
   async createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense> {
     validateExpense(input); const requestFingerprint = fingerprint(input);

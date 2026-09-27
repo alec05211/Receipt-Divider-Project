@@ -17,6 +17,8 @@ struct ReceiptScan {
     var purchaseDate: Date?
     /// The printed balance or total, used to flag misread prices.
     var printedTotalCents: Int?
+    /// Every line Vision read, saved with the receipt so a misread can be traced later.
+    var recognizedText = ""
 
     /// Nil when the items, tax and discounts add up to the printed total, or when no total was found.
     var mismatchWarning: String? {
@@ -55,6 +57,7 @@ enum ReceiptTextRecognizer {
         // The crop can cut off a date printed outside the item area, so either pass may supply it.
         var best = score(second) >= score(first) ? second : first
         best.purchaseDate = best.purchaseDate ?? first.purchaseDate ?? second.purchaseDate
+        best.recognizedText = "[Full photo]\n\(first.recognizedText)\n\n[Enhanced crop]\n\(second.recognizedText)"
         return best
     }
 
@@ -130,6 +133,7 @@ enum ReceiptTextRecognizer {
         }
         scan.items.spread(scan.taxCents - scan.discountCents)
         scan.purchaseDate = purchaseDate(in: fragments.map(\.text))
+        scan.recognizedText = fragments.map(\.text).joined(separator: "\n")
         return scan
     }
 

@@ -125,6 +125,16 @@ test("receipt evidence is visible to everyone on the expense and nobody else", a
   assert.equal((await request(app, "/v1/evidence?kind=receipt", alex, { method: "POST", headers: { "content-type": "image/png" }, body: bytes })).status, 415);
 });
 
+test("only the uploader can store the text recognized in their receipt", async () => {
+  const { app } = await setupFriends(); const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+  const upload = await request(app, "/v1/evidence?kind=receipt", alex, { method: "POST", headers: { "content-type": "image/jpeg" }, body: bytes });
+  const { id } = await upload.json() as { id: string };
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S\n09/27/26 5:41 PM" })).status, 204);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, jamie, "PUT", { text: "not mine" })).status, 404);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: 42 })).status, 400);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "x".repeat(100_001) })).status, 400);
+});
+
 test("idempotency and exact totals protect canonical expenses", async () => {
   const { app } = await setupFriends();
   const input = expense("40000000-0000-4000-8000-000000000001", alex, [[alex, 2000], [jamie, 2000]], { items: [{ name: "Dinner", amountCents: 4000 }] });

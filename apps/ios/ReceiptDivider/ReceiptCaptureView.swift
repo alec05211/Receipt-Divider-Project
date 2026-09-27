@@ -15,6 +15,7 @@ struct ReceiptCaptureView: View {
     @State private var items: [ReceiptItem] = []
     @State private var purchaseDate = Date()
     @State private var dateNote: String?
+    @State private var recognizedText: String?
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -156,8 +157,8 @@ struct ReceiptCaptureView: View {
     }
     private var splitScreen: some View {
         List {
-            Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
             Section("Name") { TextField("What was this for?", text: $description) }
+            Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
             Section("Contributions") {
                 ForEach(orderedSelection, id: \.self) { person in
                     VStack(spacing: 4) {
@@ -180,7 +181,7 @@ struct ReceiptCaptureView: View {
             image = await Task.detached { ReceiptImageProcessor.flatten(picture) }.value
         }
     }
-    private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No item prices were found. Add them manually." }; step = .select } }
+    private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; recognizedText = scan.recognizedText; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No item prices were found. Add them manually." }; step = .select } }
     /// Editing one contribution rebalances the others so they always add up to the total.
     private func shareBinding(for person: UUID) -> Binding<Int> {
         Binding(get: { shares[person] ?? 0 }, set: { cents in
@@ -189,13 +190,13 @@ struct ReceiptCaptureView: View {
             shares = ContributionBalancer.balance(shares, editing: person, to: cents, total: total, people: orderedSelection, editOrder: editOrder)
         })
     }
-    /// Splits the total evenly; extra cents go to the first people in `orderedSelection`. Defaults the payer to you.
     /// The share `setEqualSplit` gives `person`: an equal part, plus one of the leftover cents for the first people.
     private func equalShare(for person: UUID) -> Int {
         let people = orderedSelection
         guard let index = people.firstIndex(of: person) else { return 0 }
         return total / people.count + (index < total % people.count ? 1 : 0)
     }
+    /// Splits the total evenly; extra cents go to the first people in `orderedSelection`. Defaults the payer to you.
     private func setEqualSplit() {
         let people = orderedSelection
         guard !people.isEmpty else { return }
@@ -206,7 +207,8 @@ struct ReceiptCaptureView: View {
     }
     private func save() {
         guard let payer else { return }
-        let expense = Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72))
+        let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expense = Expense(description: name.isEmpty ? "Shared groceries" : name, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText)
         isSaving = true
         error = nil
         Task {
@@ -222,7 +224,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; purchaseDate = Date(); dateNote = nil; recognizedText = nil; error = nil; description = "Shared groceries" }
     private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }
 

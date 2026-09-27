@@ -93,6 +93,8 @@ export interface LedgerRepository {
   createEvidence(ownerId: UUID, kind: EvidenceKind, contentType: string, bytes: Uint8Array): Promise<EvidenceAsset>;
   /** Evidence is visible to its uploader and to everyone on an expense it's attached to. */
   getEvidence(requesterId: UUID, evidenceId: UUID): Promise<StoredImage | null>;
+  /** Stores the text the uploader's device recognized in their evidence image; returns false if it isn't theirs. */
+  putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean>;
   createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
   createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;

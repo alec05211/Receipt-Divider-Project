@@ -57,6 +57,7 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `POST/GET` | `/v1/saved-filters` | Create/list named filters over yourself and your friends (`userIds`). |
 | `POST` | `/v1/evidence?kind=receipt` | Store optional evidence image bytes. |
 | `GET` | `/v1/evidence/{evidenceId}/image` | Read evidence you uploaded or that is attached to an expense you're on. |
+| `PUT` | `/v1/evidence/{evidenceId}/text` | Store the text your device recognized in evidence you uploaded (`{ "text": … }`), kept in `extracted_data` for troubleshooting. |
 | `POST` | `/v1/expenses` | Atomically post a reviewed general expense between you and your friends. |
 | `POST` | `/v1/payments` | Record a repayment you sent or received (`fromUserId`, `toUserId`). |
 | `GET` | `/v1/transactions?filterId={id}` | Read every transaction you're on, the people in them, and your balance with each person, optionally filtered by a saved filter. |

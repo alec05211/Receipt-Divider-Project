@@ -32,10 +32,10 @@ extension Array where Element == ReceiptItem {
         for share in byFraction.prefix(abs(remainder)) { self[share.index].offsetCents += remainder.signum() }
     }
 }
-/// `payer` and the keys of `shares` are user IDs. `receiptImageData` is only set before saving; saved receipts are
-/// fetched by `evidenceIDs`.
+/// `payer` and the keys of `shares` are user IDs. `receiptImageData` and `recognizedText` are only set before saving;
+/// saved receipts are fetched by `evidenceIDs`.
 struct Expense: Identifiable, Hashable, Codable {
-    var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?; var evidenceIDs: [UUID] = []
+    var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?; var evidenceIDs: [UUID] = []; var recognizedText: String?
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     /// Tax and discounts included in the selected items.
     var offsetTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.offsetCents } }
@@ -213,6 +213,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 pendingEvidenceIDs[expense.id] = evidence.id
                 receiptImages[evidence.id] = UIImage(data: image)
                 evidenceIDs = [evidence.id]
+                // Only for troubleshooting a misread, so a failure here shouldn't block saving.
+                if let text = expense.recognizedText, !text.isEmpty { try? await api.putEvidenceText(text, evidenceID: evidence.id, token: accessToken) }
             }
         }
         let selectedItems = expense.items.filter(\.isSelected).map {

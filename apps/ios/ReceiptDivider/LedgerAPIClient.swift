@@ -90,6 +90,11 @@ actor LedgerAPIClient {
         )
     }
 
+    func putEvidenceText(_ text: String, evidenceID: UUID, token: String) async throws {
+        let (data, status) = try await perform(path: "/v1/evidence/\(evidenceID.uuidString.lowercased())/text", method: "PUT", token: token, contentType: "application/json", body: encoder.encode(["text": text]))
+        try check(data: data, status: status)
+    }
+
     func createExpense(_ request: CreateAPIExpense, token: String) async throws -> APIExpense {
         try await send(path: "/v1/expenses", method: "POST", token: token, body: encoder.encode(request))
     }
