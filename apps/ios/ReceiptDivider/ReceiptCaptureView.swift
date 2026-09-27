@@ -23,8 +23,8 @@ struct ReceiptCaptureView: View {
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
-    /// People whose contribution was typed in, least recent first; used to decide who absorbs the next edit.
-    @State private var editOrder: [UUID] = []
+    /// Tracks whose contribution the user has fixed, so edits only move everyone else.
+    @State private var balancer = ContributionBalancer()
     @State private var description = "Shared groceries"
     @State private var payer: UUID?
     @State private var error: String?
@@ -198,9 +198,7 @@ struct ReceiptCaptureView: View {
     /// Editing one contribution rebalances the others so they always add up to the total.
     private func shareBinding(for person: UUID) -> Binding<Int> {
         Binding(get: { shares[person] ?? 0 }, set: { cents in
-            editOrder.removeAll { $0 == person }
-            editOrder.append(person)
-            shares = ContributionBalancer.balance(shares, editing: person, to: cents, total: total, people: orderedSelection, editOrder: editOrder)
+            shares = balancer.set(person, to: cents, in: shares, total: total, people: orderedSelection)
         })
     }
     /// The share `setEqualSplit` gives `person`: an equal part, plus one of the leftover cents for the first people.
@@ -215,7 +213,7 @@ struct ReceiptCaptureView: View {
         guard !people.isEmpty else { return }
         let base = total / people.count, remainder = total % people.count
         shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) })
-        editOrder = []
+        balancer = ContributionBalancer()
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : people.first }
     }
     /// With `createNew`, stays on this receipt afterwards so another expense can be split from it.
@@ -239,44 +237,63 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; purchaseDate = Date(); dateNote = nil; recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); dateNote = nil; recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared groceries" }
     /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
     /// saved as claimed, and clears the item, people and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
         receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
         claimedItemIDs.formUnion(items.filter(\.isSelected).map(\.id))
         for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; error = nil; description = "Shared groceries"
+        selectedPeople = []; payer = nil; shares = [:]; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared groceries"
         step = .select
     }
     /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
     private func back() { switch step { case .select: receiptEvidenceID = nil; claimedItemIDs = []; step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }
 
-enum ContributionBalancer {
-    /// Sets `person`'s contribution (capped to 0…`total`) and adjusts the others so everyone adds up to `total`.
-    /// The difference goes to whoever was edited least recently: people never edited come first, in `people` order,
-    /// then those in `editOrder` from oldest. When someone would drop below zero, the rest carries to the next person.
-    /// With only one person, their contribution is always the whole total.
-    static func balance(_ shares: [UUID: Int], editing person: UUID, to cents: Int, total: Int, people: [UUID], editOrder: [UUID]) -> [UUID: Int] {
-        let others = people.filter { $0 != person }
+/// Keeps contributions adding up to the total. Touching a contribution fixes it; the change is split equally among
+/// everyone not fixed. One person always stays free: touching the last free one frees whoever was touched longest ago.
+struct ContributionBalancer {
+    /// People whose contribution is fixed, least recently touched first.
+    private(set) var fixed: [UUID] = []
+    /// Everyone's shares from when the person being edited was first touched. Each edit spreads from these rather than
+    /// the last update, so rounding cents don't pile onto one person over the course of a drag.
+    private var start: (person: UUID, shares: [UUID: Int])?
+
+    /// Sets `person`'s contribution and returns the rebalanced shares. The value is capped so the free people never drop
+    /// below zero. With only one person, their contribution is always the whole total.
+    mutating func set(_ person: UUID, to cents: Int, in shares: [UUID: Int], total: Int, people: [UUID]) -> [UUID: Int] {
         var result = shares.filter { people.contains($0.key) }
-        guard !others.isEmpty else { result[person] = total; return result }
-        let value = min(max(cents, 0), total)
+        guard people.count > 1, people.contains(person) else { result[person] = total; return result }
+        if start?.person != person { start = (person, result) }
+        fixed.removeAll { $0 == person || !people.contains($0) }
+        fixed.append(person)
+        if fixed.count == people.count { fixed.removeFirst() }
+        let base = start?.shares ?? result
+        let otherFixed = fixed.dropLast().reduce(0) { $0 + (base[$1] ?? 0) }
+        let value = min(max(cents, 0), total - otherFixed)
+        let free = people.filter { !fixed.contains($0) }
+        let change = total - otherFixed - value - free.reduce(0) { $0 + (base[$1] ?? 0) }
         result[person] = value
-        let recency = Dictionary(editOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: max)
-        let absorbers = others.enumerated().sorted { a, b in
-            let (ra, rb) = (recency[a.element] ?? -1, recency[b.element] ?? -1)
-            return ra != rb ? ra < rb : a.offset < b.offset
-        }.map(\.element)
-        var difference = total - value - others.reduce(0) { $0 + (result[$1] ?? 0) }
-        for other in absorbers where difference != 0 {
-            let current = result[other] ?? 0
-            let adjusted = max(0, current + difference)
-            result[other] = adjusted
-            difference -= adjusted - current
-        }
+        for (other, cents) in zip(free, Self.spread(change, over: free.map { base[$0] ?? 0 })) { result[other] = cents }
         return result
+    }
+
+    /// Adds `amount` to `values` in equal parts, leftover cents going to the first. Anyone reaching zero stops shrinking
+    /// and the rest is shared among the others.
+    static func spread(_ amount: Int, over values: [Int]) -> [Int] {
+        var values = values, remaining = amount
+        while remaining != 0 {
+            let open = values.indices.filter { remaining > 0 || values[$0] > 0 }
+            guard !open.isEmpty else { break }
+            let part = remaining / open.count
+            for index in open where remaining != 0 {
+                let applied = max(part != 0 ? part : remaining.signum(), -values[index])
+                values[index] += applied
+                remaining -= applied
+            }
+        }
+        return values
     }
 }
 
