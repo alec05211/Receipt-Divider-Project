@@ -12,7 +12,6 @@ enum AppAuthenticationState: Equatable {
 }
 struct AccountIdentity: Codable, Sendable, Equatable {
     let firstName: String; let lastName: String; let username: String
-    var displayName: String { "\(firstName) \(lastName)" }
 }
 
 @MainActor
@@ -123,11 +122,6 @@ struct AccountIdentity: Codable, Sendable, Equatable {
     func accessToken() async throws -> String {
         guard let client else { throw AuthenticationStoreError.configurationMissing }
         return try await client.auth.session.accessToken
-    }
-
-    var defaultDisplayName: String {
-        guard let prefix = email?.split(separator: "@").first, !prefix.isEmpty else { return "Receipt Divider User" }
-        return String(prefix).replacingOccurrences(of: ".", with: " ").capitalized
     }
 
     func show(error: Error) {

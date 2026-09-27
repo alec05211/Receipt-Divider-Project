@@ -32,10 +32,8 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
     await next();
   });
 
-  app.put("/v1/profile", async (context) => {
-    const body = await jsonBody(context);
-    return context.json(await repository.upsertProfile(userId(context), stringField(body, "displayName")));
-  });
+  app.put("/v1/profile", async (context) => context.json(await repository.ensureProfile(userId(context))));
+  app.get("/v1/profile", async (context) => context.json(await repository.getProfile(userId(context))));
   app.put("/v1/profile/identity", async (context) => {
     const body = await jsonBody(context);
     return context.json(await repository.updateIdentity(userId(context), stringField(body, "firstName"), stringField(body, "lastName"), stringField(body, "username")));

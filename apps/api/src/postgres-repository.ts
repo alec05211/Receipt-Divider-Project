@@ -12,7 +12,7 @@ export class PostgresRepository implements LedgerRepository {
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
     const first = validName(firstName, "firstName"), last = validName(lastName, "lastName"), handle = validUsername(username);
     try {
-      const rows = await this.sql`UPDATE user_profiles SET first_name=${first}, last_name=${last}, username=${handle}, display_name=${`${first} ${last}`}, updated_at=now() WHERE id=${userId} RETURNING id, first_name, last_name, username, display_name`;
+      const rows = await this.sql`UPDATE user_profiles SET first_name=${first}, last_name=${last}, username=${handle}, updated_at=now() WHERE id=${userId} RETURNING id, first_name, last_name, username, display_name`;
       if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
       const row = rows[0]!; return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name };
     } catch (error) { if (isUniqueError(error)) throw new ApiError(409, "username is already taken", "username_taken"); throw error; }
@@ -25,6 +25,8 @@ export class PostgresRepository implements LedgerRepository {
 
   async requestFriend(userId: UUID, username: string): Promise<FriendConnection> {
     const handle = validUsername(username);
+    const [me] = await this.sql`SELECT username FROM user_profiles WHERE id=${userId}`;
+    if (!me?.username) throw new ApiError(409, "add your name and username before inviting friends", "profile_incomplete");
     const targets = await this.sql`SELECT id, display_name, username FROM user_profiles WHERE lower(username)=lower(${handle})`;
     if (!targets.length) throw new ApiError(404, "username not found", "not_found");
     const target = targets[0]!;
@@ -48,13 +50,17 @@ export class PostgresRepository implements LedgerRepository {
     });
   }
 
-  async upsertProfile(userId: UUID, displayName: string): Promise<Profile> {
-    const trimmed = validName(displayName, "displayName");
+  async ensureProfile(userId: UUID): Promise<Profile> {
     return this.sql.begin(async (tx) => {
-      const [row] = await tx`INSERT INTO user_profiles (id, display_name) VALUES (${userId}, ${trimmed}) ON CONFLICT (id) DO UPDATE SET display_name=CASE WHEN user_profiles.first_name IS NULL THEN EXCLUDED.display_name ELSE user_profiles.display_name END, updated_at=now() RETURNING id, display_name`;
+      const [row] = await tx`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id RETURNING id, first_name, last_name, username, display_name`;
       await tx`INSERT INTO ledgers (owner_id, currency) VALUES (${userId}, 'USD') ON CONFLICT (owner_id) DO NOTHING`;
-      return { id: row!.id, displayName: row!.display_name };
+      return mapProfile(row!);
     });
+  }
+  async getProfile(userId: UUID): Promise<Profile> {
+    const rows = await this.sql`SELECT id, first_name, last_name, username, display_name FROM user_profiles WHERE id=${userId}`;
+    if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
+    return mapProfile(rows[0]!);
   }
 
   async putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string> {
@@ -159,6 +165,7 @@ export class PostgresRepository implements LedgerRepository {
   }
 }
 
+function mapProfile(row: any): Profile { return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name }; }
 function mapPerson(row: any): Person { const person: Person = { id: row.id, displayName: row.display_name, createdAt: toIso(row.created_at) }; if (row.linked_user_id) person.linkedUserId = row.linked_user_id; return person; }
 function mapItem(row: any): ExpenseItemInput { return { name: row.name, amountCents: Number(row.amount_cents), offsetCents: Number(row.offset_cents) }; }
 function mapAllocation(row: any): AllocationInput { return { personId: row.person_id, amountCents: Number(row.amount_cents) }; }

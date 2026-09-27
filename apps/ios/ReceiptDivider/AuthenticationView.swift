@@ -62,7 +62,6 @@ private struct ConnectedLedgerView: View {
         do {
             await store.synchronize(
                 userID: userID,
-                displayName: authentication.pendingIdentity?.displayName ?? authentication.defaultDisplayName,
                 identity: authentication.pendingIdentity,
                 accessToken: try await authentication.accessToken()
             )

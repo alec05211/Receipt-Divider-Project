@@ -30,12 +30,12 @@ actor LedgerAPIClient {
         self.session = session
     }
 
-    func upsertProfile(displayName: String, token: String) async throws {
-        let body = try encoder.encode(ProfileRequest(displayName: displayName))
-        _ = try await send(path: "/v1/profile", method: "PUT", token: token, body: body) as APIProfile
+    /// Creates the caller's profile and ledger on first use, and returns the current profile.
+    func ensureProfile(token: String) async throws -> APIProfile {
+        try await send(path: "/v1/profile", method: "PUT", token: token)
     }
-    func updateIdentity(_ identity: AccountIdentity, token: String) async throws {
-        _ = try await send(path: "/v1/profile/identity", method: "PUT", token: token, body: encoder.encode(identity)) as APIIdentity
+    func updateIdentity(_ identity: AccountIdentity, token: String) async throws -> APIProfile {
+        try await send(path: "/v1/profile/identity", method: "PUT", token: token, body: encoder.encode(identity))
     }
 
     func people(token: String) async throws -> [APIPerson] {
@@ -109,8 +109,8 @@ actor LedgerAPIClient {
     }
 }
 
-struct APIProfile: Decodable, Sendable { let id: UUID; let displayName: String }
-struct APIIdentity: Decodable, Sendable { let id: UUID; let firstName: String; let lastName: String; let username: String; let displayName: String }
+/// The name fields are nil until the user sets them; `displayName` is always "First Last".
+struct APIProfile: Decodable, Sendable { let id: UUID; let firstName: String?; let lastName: String?; let username: String?; let displayName: String? }
 struct APIPerson: Decodable, Sendable { let id: UUID; let displayName: String; let createdAt: String }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }
 struct APIExpenseItem: Codable, Sendable { let name: String; let amountCents: Int; let offsetCents: Int? }
@@ -171,7 +171,6 @@ struct APIFriend: Decodable, Identifiable, Sendable {
     var id: UUID { requestId }
 }
 
-private struct ProfileRequest: Encodable { let displayName: String }
 private struct PersonRequest: Encodable { let displayName: String }
 private struct FriendRequest: Encodable { let username: String }
 private struct APIErrorEnvelope: Decodable { let error: APIErrorBody }

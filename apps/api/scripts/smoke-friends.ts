@@ -13,10 +13,11 @@ const json = (path: string, user: string, method = "GET", body?: unknown) => app
   ? { method, headers: { "x-user-id": user } }
   : { method, headers: { "x-user-id": user, "content-type": "application/json" }, body: JSON.stringify(body) });
 try {
-  const profiles: Array<[string, string]> = [[left, "Friend Left"], [right, "Friend Right"]];
-  for (const [id, name] of profiles) assert.equal((await json("/v1/profile", id, "PUT", { displayName: name })).status, 200);
+  for (const id of [left, right]) assert.equal((await json("/v1/profile", id, "PUT")).status, 200);
   assert.equal((await json("/v1/profile/identity", left, "PUT", { firstName: "Friend", lastName: "Left", username: `left_${suffix}` })).status, 200);
   assert.equal((await json("/v1/profile/identity", right, "PUT", { firstName: "Friend", lastName: "Right", username: `right_${suffix}` })).status, 200);
+  const profile = await (await json("/v1/profile", left)).json() as { displayName: string };
+  assert.equal(profile.displayName, "Friend Left");
   const requestResponse = await json("/v1/friend-requests", left, "POST", { username: `right_${suffix}` }); assert.equal(requestResponse.status, 201);
   const request = await requestResponse.json() as { requestId: string };
   assert.equal((await json(`/v1/friend-requests/${request.requestId}/accept`, right, "POST", {})).status, 200);

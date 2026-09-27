@@ -1,6 +1,7 @@
 export type UUID = string;
 
-export interface Profile { id: UUID; displayName: string; }
+/** A profile exists as soon as the user signs in; the name fields stay null until they set them. */
+export interface Profile { id: UUID; firstName: string | null; lastName: string | null; username: string | null; displayName: string | null; }
 export interface ProfileIdentity { id: UUID; firstName: string; lastName: string; username: string; displayName: string; }
 export interface FriendConnection { requestId: UUID; userId: UUID; displayName: string; username: string; status: "pending" | "accepted"; direction: "incoming" | "outgoing" | "friend"; }
 
@@ -70,7 +71,8 @@ export interface StoredImage { contentType: string; bytes: Uint8Array; etag: str
 
 export interface LedgerRepository {
   checkHealth(): Promise<void>;
-  upsertProfile(userId: UUID, displayName: string): Promise<Profile>;
+  ensureProfile(userId: UUID): Promise<Profile>;
+  getProfile(userId: UUID): Promise<Profile>;
   updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
   listFriends(userId: UUID): Promise<FriendConnection[]>;
   requestFriend(userId: UUID, username: string): Promise<FriendConnection>;

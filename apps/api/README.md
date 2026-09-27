@@ -29,7 +29,7 @@ This mode is non-persistent. Send a UUID in `x-user-id`, create the profile with
 
 ## Supabase PostgreSQL
 
-1. Create a Supabase project and apply `db/migrations/001_initial.sql` in its SQL editor or migration runner.
+1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql`, `002_profiles_and_friends.sql`, `003_derived_display_name.sql`) in its SQL editor or migration runner.
 2. For the local Node test harness, copy Supabase’s **Session pooler** URI into `DATABASE_URL`, set `SUPABASE_URL`, and leave `ALLOW_INSECURE_DEV_AUTH` false. Copy `.env.example` to the Git-ignored `.env.local` and run `npm run dev:local`.
 3. Run this API as a trusted backend. Public tables have RLS enabled and direct `anon`/`authenticated` grants revoked; mobile clients use only the API.
 
@@ -43,11 +43,12 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | --- | --- | --- |
 | `GET` | `/health` | Confirm that the API process is running. |
 | `GET` | `/ready` | Confirm that the API can reach its configured datastore. |
-| `PUT` | `/v1/profile` | Create/update the account profile and ledger. |
+| `PUT` | `/v1/profile` | Create the account profile and ledger if missing; returns the profile. |
+| `GET` | `/v1/profile` | Read the caller's name, username, and display name. |
 | `PUT` | `/v1/profile/avatar` | Store the account avatar. |
 | `GET` | `/v1/users/{userId}/avatar` | Read self or a linked local person’s avatar. |
 | `POST/GET` | `/v1/people` | Create/list local people. |
-| `PUT` | `/v1/profile/identity` | Set the real first/last name and unique username. |
+| `PUT` | `/v1/profile/identity` | Set the real first/last name and unique username. The display name is always derived as "First Last". |
 | `GET` | `/v1/friends` | List accepted, incoming, and outgoing friend relationships. |
 | `POST` | `/v1/friend-requests` | Invite an account by exact username. |
 | `POST` | `/v1/friend-requests/{id}/accept` | Accept an incoming request and link both participant records. |

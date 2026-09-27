@@ -25,20 +25,24 @@ export class MemoryRepository implements LedgerRepository {
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
     if (!this.profiles.has(userId)) throw new ApiError(404, "profile not found", "not_found");
     const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: username.trim().toLowerCase(), displayName: `${firstName.trim()} ${lastName.trim()}` };
-    this.identities.set(userId, identity); this.profiles.set(userId, { id: userId, displayName: identity.displayName }); return identity;
+    this.identities.set(userId, identity); this.profiles.set(userId, identity); return identity;
   }
   async listFriends(userId: UUID): Promise<FriendConnection[]> { return this.friendships.get(userId) ?? []; }
   async requestFriend(): Promise<FriendConnection> { throw new ApiError(404, "username not found", "not_found"); }
   async acceptFriend(): Promise<FriendConnection> { throw new ApiError(404, "friend request not found", "not_found"); }
 
-  async upsertProfile(userId: UUID, displayName: string): Promise<Profile> {
-    const trimmed = validName(displayName, "displayName");
-    const profile = { id: userId, displayName: trimmed };
+  async ensureProfile(userId: UUID): Promise<Profile> {
+    const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null };
     this.profiles.set(userId, profile);
     if (!this.ledgers.has(userId)) {
       this.ledgers.set(userId, { currency: "USD", version: 0 });
       this.people.set(userId, []); this.filters.set(userId, []); this.expenses.set(userId, []); this.payments.set(userId, []);
     }
+    return profile;
+  }
+  async getProfile(userId: UUID): Promise<Profile> {
+    const profile = this.profiles.get(userId);
+    if (!profile) throw new ApiError(404, "profile not found", "not_found");
     return profile;
   }
 

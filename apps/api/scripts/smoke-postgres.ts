@@ -27,7 +27,7 @@ async function requireStatus(response: Response, expected: number): Promise<void
 }
 
 try {
-  const profile = await jsonRequest("/v1/profile", "PUT", { displayName: "Integration Test" });
+  const profile = await jsonRequest("/v1/profile", "PUT", {});
   await requireStatus(profile, 200);
 
   const selfResponse = await jsonRequest("/v1/people", "POST", { displayName: "Test Owner" });

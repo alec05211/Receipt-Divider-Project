@@ -13,8 +13,8 @@ async function jsonRequest(app: ReturnType<typeof createApp>, path: string, user
 
 async function setup() {
   const app = createApp(new MemoryRepository(), async (context) => context.req.header("x-user-id") ?? null);
-  assert.equal((await jsonRequest(app, "/v1/profile", alex, "PUT", { displayName: "Alex" })).status, 200);
-  assert.equal((await jsonRequest(app, "/v1/profile", stranger, "PUT", { displayName: "Stranger" })).status, 200);
+  assert.equal((await request(app, "/v1/profile", alex, { method: "PUT" })).status, 200);
+  assert.equal((await request(app, "/v1/profile", stranger, { method: "PUT" })).status, 200);
   async function person(displayName: string) { const response = await jsonRequest(app, "/v1/people", alex, "POST", { displayName }); assert.equal(response.status, 201); return (await response.json() as { id: string }).id; }
   return { app, alexPerson: await person("Alex"), jamiePerson: await person("Jamie"), morganPerson: await person("Morgan") };
 }
@@ -67,11 +67,20 @@ test("idempotency and exact totals protect canonical expenses", async () => {
   assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", { ...expense, clientRequestId: "40000000-0000-4000-8000-000000000002", totalCents: 3999 })).status, 422);
 });
 
+test("display name is derived from first and last name", async () => {
+  const { app } = await setup();
+  let profile = await (await request(app, "/v1/profile", alex)).json() as { displayName: string | null; username: string | null };
+  assert.equal(profile.displayName, null); assert.equal(profile.username, null);
+  assert.equal((await jsonRequest(app, "/v1/profile/identity", alex, "PUT", { firstName: " Alex ", lastName: "Rivera", username: "Alex_R" })).status, 200);
+  profile = await (await request(app, "/v1/profile", alex)).json() as { displayName: string | null; username: string | null };
+  assert.equal(profile.displayName, "Alex Rivera"); assert.equal(profile.username, "alex_r");
+});
+
 test("Supabase JWT authentication accepts only signed authenticated-user tokens", async () => {
   const projectUrl = "https://receipt-divider.supabase.co", issuer = `${projectUrl}/auth/v1`, { publicKey, privateKey } = await generateKeyPair("ES256");
   const publicJwk = await exportJWK(publicKey); publicJwk.kid = "test-key"; publicJwk.alg = "ES256";
   const app = createApp(new MemoryRepository(), createSupabaseAuthenticator(projectUrl, createLocalJWKSet({ keys: [publicJwk] })));
   async function token(role: string, subject = alex) { return new SignJWT({ role }).setProtectedHeader({ alg: "ES256", kid: "test-key" }).setIssuer(issuer).setAudience("authenticated").setSubject(subject).setIssuedAt().setExpirationTime("5m").sign(privateKey); }
-  const valid = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("authenticated")}`, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Alex" }) }); assert.equal(valid.status, 200);
-  const wrongRole = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("anon")}`, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Alex" }) }); assert.equal(wrongRole.status, 401);
+  const valid = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("authenticated")}`} }); assert.equal(valid.status, 200);
+  const wrongRole = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("anon")}`} }); assert.equal(wrongRole.status, 401);
 });
