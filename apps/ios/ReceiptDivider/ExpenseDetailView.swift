@@ -5,7 +5,10 @@ struct ExpenseDetailView: View {
     @Environment(ExpenseStore.self) private var store
     let expense: Expense
 
-    private var participants: [Person] { expense.shares.keys.sorted { $0.rawValue < $1.rawValue } }
+    /// You first, then everyone else by name.
+    private var participants: [UUID] {
+        expense.participants.sorted { a, b in a == store.activeUserID ? b != store.activeUserID : b != store.activeUserID && store.name(for: a) < store.name(for: b) }
+    }
     private var relatedExpenses: [Expense] {
         store.expenses.filter { candidate in
             candidate.id != expense.id && !Set(candidate.shares.keys).isDisjoint(with: Set(participants))
@@ -34,7 +37,7 @@ struct ExpenseDetailView: View {
             }
 
             Section("Who owes what") {
-                ForEach(participants) { person in
+                ForEach(participants, id: \.self) { person in
                     HStack {
                         PersonBadge(person: person)
                         Spacer()
@@ -61,7 +64,7 @@ struct ExpenseDetailView: View {
                 } else {
                     ForEach(relatedExpenses.prefix(8)) { related in
                         HStack(spacing: 10) {
-                            AvatarStack(people: related.shares.keys.sorted { $0.rawValue < $1.rawValue })
+                            AvatarStack(people: related.participants)
                             VStack(alignment: .leading) {
                                 Text(related.description).font(.headline)
                                 Text(related.transactionDate, style: .date).font(.caption).foregroundStyle(.secondary)
@@ -79,11 +82,13 @@ struct ExpenseDetailView: View {
 }
 
 private struct PersonBadge: View {
-    let person: Person
+    @Environment(ExpenseStore.self) private var store
+    let person: UUID
     var body: some View {
+        let details = store.person(for: person)
         HStack(spacing: 6) {
-            Text(person.initials).font(.caption2.weight(.bold)).foregroundStyle(.white).frame(width: 24, height: 24).background(.gray, in: Circle())
-            Text(person.rawValue)
+            AvatarView(userID: person, name: details.name, etag: details.avatarEtag, size: 24)
+            Text(store.name(for: person))
         }
     }
 }

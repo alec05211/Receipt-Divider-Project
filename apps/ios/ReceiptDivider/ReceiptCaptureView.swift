@@ -15,10 +15,11 @@ struct ReceiptCaptureView: View {
     @State private var items: [ReceiptItem] = []
     @State private var purchaseDate = Date()
     @State private var dateNote: String?
-    @State private var selectedPeople: Set<Person> = [.alex, .jamie]
-    @State private var shares: [Person: Int] = [:]
+    /// User IDs of everyone splitting the expense; starts with the signed-in user.
+    @State private var selectedPeople: Set<UUID> = []
+    @State private var shares: [UUID: Int] = [:]
     @State private var description = "Shared groceries"
-    @State private var payer: Person = .alex
+    @State private var payer: UUID?
     @State private var error: String?
     @State private var editingItemID: UUID?
     @State private var didSave = false
@@ -28,7 +29,14 @@ struct ReceiptCaptureView: View {
     /// Includes each selected item's share of tax and discounts, which the item list doesn't show.
     private var total: Int { max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     private var allocationTotal: Int { selectedPeople.reduce(0) { $0 + (shares[$1] ?? 0) } }
-    private var isValidSplit: Bool { !selectedPeople.isEmpty && allocationTotal == total }
+    private var isValidSplit: Bool { !selectedPeople.isEmpty && allocationTotal == total && payer.map(selectedPeople.contains) == true }
+    /// The signed-in user first, then everyone else by name.
+    private var orderedSelection: [UUID] {
+        selectedPeople.sorted { a, b in
+            if (a == store.activeUserID) != (b == store.activeUserID) { return a == store.activeUserID }
+            return store.name(for: a).localizedCaseInsensitiveCompare(store.name(for: b)) == .orderedAscending
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -103,41 +111,51 @@ struct ReceiptCaptureView: View {
         List {
             Section {
                 ForEach(shownPeople) { person in
-                    let isSelected = selectedPeople.contains(person)
-                    Button { withAnimation(.snappy(duration: 0.15)) { if isSelected { selectedPeople.remove(person) } else { selectedPeople.insert(person) } } } label: {
-                        HStack { Text(person.initials).font(.caption.weight(.bold)).foregroundStyle(.white).frame(width: 34, height: 34).background(.gray, in: Circle()); Text(person.rawValue); Spacer(); SelectionCircle(isSelected: isSelected) }
-                            .contentShape(Rectangle())
+                    let isSelected = selectedPeople.contains(person.id)
+                    Button { withAnimation(.snappy(duration: 0.15)) { if isSelected { selectedPeople.remove(person.id) } else { selectedPeople.insert(person.id) } } } label: {
+                        HStack(spacing: 12) {
+                            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
+                            Text(store.name(for: person.id))
+                            Spacer()
+                            SelectionCircle(isSelected: isSelected)
+                        }
+                        .contentShape(Rectangle())
                     }
                     .foregroundStyle(.primary)
                     .sensoryFeedback(.selection, trigger: isSelected)
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
+            } footer: {
+                if store.splitCandidates.count <= 1 { Text("Add friends from Profile → Friends to split expenses with them.") }
             }
-            Section { Text("Each transaction has its own participant list. Saved groups can be added later as optional shortcuts.").font(.footnote).foregroundStyle(.secondary) }
         }
         .searchable(text: $personSearch, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search friends")
         .overlay { if shownPeople.isEmpty { ContentUnavailableView.search(text: personSearch) } }
+        .onAppear { if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] } }
         .safeAreaInset(edge: .bottom) { ContinueButton(title: "Confirm people", disabled: selectedPeople.isEmpty) { personSearch = ""; setEqualSplit(); step = .split } }
     }
-    /// Friends ordered by their latest shared transaction; friends never shared with keep their list order.
-    private var friendsByRecency: [Person] {
-        let latest = store.expenses.reduce(into: [Person: Date]()) { dates, expense in
-            for person in expense.shares.keys { dates[person] = max(dates[person] ?? .distantPast, expense.transactionDate) }
+    /// You first, then friends ordered by their latest shared transaction; friends never shared with are alphabetical.
+    private var friendsByRecency: [LedgerPerson] {
+        let latest = store.expenses.reduce(into: [UUID: Date]()) { dates, expense in
+            for person in expense.participants { dates[person] = max(dates[person] ?? .distantPast, expense.transactionDate) }
         }
-        return Person.allCases.enumerated().sorted { a, b in
-            let (dateA, dateB) = (latest[a.element] ?? .distantPast, latest[b.element] ?? .distantPast)
+        return store.splitCandidates.enumerated().sorted { a, b in
+            if (a.element.id == store.activeUserID) != (b.element.id == store.activeUserID) { return a.element.id == store.activeUserID }
+            let (dateA, dateB) = (latest[a.element.id] ?? .distantPast, latest[b.element.id] ?? .distantPast)
             return dateA != dateB ? dateA > dateB : a.offset < b.offset
         }.map(\.element)
     }
-    /// The most recent friends for quick tapping, plus anyone already selected from a search. Searching covers every friend.
-    private var shownPeople: [Person] {
-        guard personSearch.isEmpty else { return friendsByRecency.filter { $0.rawValue.localizedCaseInsensitiveContains(personSearch) } }
-        return friendsByRecency.enumerated().filter { $0.offset < 5 || selectedPeople.contains($0.element) }.map(\.element)
+    /// You and your most recent friends for quick tapping, plus anyone already selected from a search. Searching covers every friend.
+    private var shownPeople: [LedgerPerson] {
+        guard personSearch.isEmpty else {
+            return friendsByRecency.filter { [$0.name, $0.username ?? ""].contains { $0.localizedCaseInsensitiveContains(personSearch) } }
+        }
+        return friendsByRecency.enumerated().filter { $0.offset < 6 || selectedPeople.contains($0.element.id) }.map(\.element)
     }
     private var splitScreen: some View {
         List {
-            Section { Picker("Paid by", selection: $payer) { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { Text($0.rawValue).tag($0) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
-            Section("Contributions") { ForEach(Array(selectedPeople).sorted { $0.rawValue < $1.rawValue }) { person in LabeledContent(person.rawValue) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) } } }
+            Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
+            Section("Contributions") { ForEach(orderedSelection, id: \.self) { person in LabeledContent(store.name(for: person)) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) } } }
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
@@ -153,10 +171,18 @@ struct ReceiptCaptureView: View {
         }
     }
     private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No item prices were found. Add them manually." }; step = .select } }
-    private func shareBinding(for person: Person) -> Binding<Int> { Binding(get: { shares[person] ?? 0 }, set: { shares[person] = $0 }) }
-    private func setEqualSplit() { let people = selectedPeople.sorted { $0.rawValue < $1.rawValue }; guard !people.isEmpty else { return }; let base = total / people.count; let remainder = total % people.count; shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) }) }
+    private func shareBinding(for person: UUID) -> Binding<Int> { Binding(get: { shares[person] ?? 0 }, set: { shares[person] = $0 }) }
+    /// Splits the total evenly; extra cents go to the first people in `orderedSelection`. Defaults the payer to you.
+    private func setEqualSplit() {
+        let people = orderedSelection
+        guard !people.isEmpty else { return }
+        let base = total / people.count, remainder = total % people.count
+        shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) })
+        if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : people.first }
+    }
     private func save() {
-        let expense = Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, shares: shares, receiptImageData: image?.jpegData(compressionQuality: 0.72))
+        guard let payer else { return }
+        let expense = Expense(description: description, transactionDate: purchaseDate, payer: payer, items: items, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72))
         isSaving = true
         error = nil
         Task {
@@ -172,7 +198,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = [.alex, .jamie]; shares = [:]; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
     private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
 }
 

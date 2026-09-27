@@ -38,19 +38,6 @@ actor LedgerAPIClient {
         try await send(path: "/v1/profile/identity", method: "PUT", token: token, body: encoder.encode(identity))
     }
 
-    func people(token: String) async throws -> [APIPerson] {
-        try await send(path: "/v1/people", token: token)
-    }
-
-    func createPerson(displayName: String, token: String) async throws -> APIPerson {
-        try await send(
-            path: "/v1/people",
-            method: "POST",
-            token: token,
-            body: encoder.encode(PersonRequest(displayName: displayName))
-        )
-    }
-
     func searchUsers(query: String, token: String) async throws -> [APIUserResult] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
         return try await send(path: "/v1/users/search?q=\(encoded)", token: token)
@@ -64,8 +51,9 @@ actor LedgerAPIClient {
         return data
     }
 
-    func uploadAvatar(_ jpeg: Data, token: String) async throws {
-        _ = try await send(path: "/v1/profile/avatar", method: "PUT", token: token, contentType: "image/jpeg", body: jpeg) as APIAvatarUpload
+    /// Returns the new photo's etag.
+    func uploadAvatar(_ jpeg: Data, token: String) async throws -> String {
+        try await (send(path: "/v1/profile/avatar", method: "PUT", token: token, contentType: "image/jpeg", body: jpeg) as APIAvatarUpload).etag
     }
 
     func friends(token: String) async throws -> [APIFriend] { try await send(path: "/v1/friends", token: token) }
@@ -74,6 +62,10 @@ actor LedgerAPIClient {
     }
     func acceptFriend(requestID: UUID, token: String) async throws -> APIFriend {
         try await send(path: "/v1/friend-requests/\(requestID.uuidString)/accept", method: "POST", token: token, body: Data("{}".utf8))
+    }
+    func removeFriend(userID: UUID, token: String) async throws {
+        let (data, status) = try await perform(path: "/v1/friends/\(userID.uuidString.lowercased())", method: "DELETE", token: token, contentType: nil, body: nil)
+        try check(data: data, status: status)
     }
 
     func snapshot(token: String) async throws -> APILedgerSnapshot {
@@ -136,16 +128,17 @@ actor LedgerAPIClient {
 
 /// The name fields are nil until the user sets them; `displayName` is always "First Last".
 struct APIProfile: Decodable, Sendable { let id: UUID; let firstName: String?; let lastName: String?; let username: String?; let displayName: String? }
-struct APIPerson: Decodable, Sendable { let id: UUID; let displayName: String; let createdAt: String }
+/// Someone in the caller's ledger: themselves, a friend, or anyone they share a transaction with.
+struct APILedgerPerson: Decodable, Sendable { let userId: UUID; let displayName: String?; let username: String?; let avatarEtag: String? }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }
 struct APIExpenseItem: Codable, Sendable { let name: String; let amountCents: Int; let offsetCents: Int? }
-struct APIAllocation: Codable, Sendable { let personId: UUID; let amountCents: Int }
+struct APIAllocation: Codable, Sendable { let userId: UUID; let amountCents: Int }
 
 struct CreateAPIExpense: Encodable, Sendable {
     let clientRequestId: UUID
     let description: String
     let transactionDate: String
-    let payerPersonId: UUID
+    let payerId: UUID
     let currency: String
     let totalCents: Int
     let evidenceIds: [UUID]
@@ -157,7 +150,7 @@ struct APIExpense: Decodable, Sendable {
     let id: UUID
     let description: String
     let transactionDate: String
-    let payerPersonId: UUID
+    let payerId: UUID
     let totalCents: Int
     let items: [APIExpenseItem]
     let allocations: [APIAllocation]
@@ -167,44 +160,44 @@ struct APIExpense: Decodable, Sendable {
 
 struct CreateAPIPayment: Encodable, Sendable {
     let clientRequestId: UUID
-    let fromPersonId: UUID
-    let toPersonId: UUID
+    let fromUserId: UUID
+    let toUserId: UUID
     let amountCents: Int
     let transactionDate: String
 }
 
 struct APIPayment: Decodable, Sendable {
     let id: UUID
-    let fromPersonId: UUID
-    let toPersonId: UUID
+    let fromUserId: UUID
+    let toUserId: UUID
     let amountCents: Int
     let transactionDate: String
     let createdAt: String
 }
 
+/// `balances` maps each other person's user ID to what they owe the caller (negative: what the caller owes them).
 struct APILedgerSnapshot: Decodable, Sendable {
-    let version: Int
     let currency: String
-    let people: [APIPerson]
+    let people: [APILedgerPerson]
     let expenses: [APIExpense]
     let payments: [APIPayment]
     let balances: [String: Int]
+    let netBalance: Int
 }
 /// A user found by search; `relationship` is "none", "outgoing", "incoming", or "friend".
 struct APIUserResult: Decodable, Identifiable, Sendable {
-    let userId: UUID; let displayName: String; let username: String; let hasAvatar: Bool
+    let userId: UUID; let displayName: String; let username: String; let avatarEtag: String?
     var relationship: String; let requestId: UUID?
     var id: UUID { userId }
 }
 private struct APIAvatarUpload: Decodable { let etag: String }
 
 struct APIFriend: Decodable, Identifiable, Sendable {
-    let requestId: UUID; let userId: UUID; let displayName: String; let username: String
+    let requestId: UUID; let userId: UUID; let displayName: String; let username: String; let avatarEtag: String?
     let status: String; let direction: String
     var id: UUID { requestId }
 }
 
-private struct PersonRequest: Encodable { let displayName: String }
 private struct FriendRequest: Encodable { let username: String }
 private struct APIErrorEnvelope: Decodable { let error: APIErrorBody }
 private struct APIErrorBody: Decodable { let code: String; let message: String }

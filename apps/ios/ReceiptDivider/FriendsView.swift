@@ -8,6 +8,8 @@ struct FriendsView: View {
     @State private var hasSearched = false
     @State private var errorMessage: String?
     @State private var busyIDs: Set<UUID> = []
+    /// Bumped after a friend is removed, to play the confirming haptic.
+    @State private var removals = 0
 
     /// How often the open Friends screen checks for new requests and acceptances.
     private static let pollInterval: Duration = .seconds(5)
@@ -37,6 +39,7 @@ struct FriendsView: View {
             }
         }
         .task(id: trimmedQuery) { await search() }
+        .sensoryFeedback(.success, trigger: removals)
     }
 
     @ViewBuilder private var searchResults: some View {
@@ -45,7 +48,7 @@ struct FriendsView: View {
         } else {
             Section("People") {
                 ForEach(results) { user in
-                    personRow(userID: user.userId, name: user.displayName, username: user.username, hasAvatar: user.hasAvatar) { resultAction(user) }
+                    personRow(userID: user.userId, name: user.displayName, username: user.username, avatarEtag: user.avatarEtag) { resultAction(user) }
                 }
             }
         }
@@ -55,7 +58,7 @@ struct FriendsView: View {
         if !incoming.isEmpty {
             Section("Requests") {
                 ForEach(incoming) { friend in
-                    personRow(userID: friend.userId, name: friend.displayName, username: friend.username) { acceptButton(friend.requestId) }
+                    personRow(friend) { acceptButton(friend.requestId) }
                 }
             }
         }
@@ -63,21 +66,30 @@ struct FriendsView: View {
             if accepted.isEmpty {
                 ContentUnavailableView("No friends yet", systemImage: "person.2", description: Text("Search for someone by name or username to invite them."))
             } else {
-                ForEach(accepted) { friend in personRow(userID: friend.userId, name: friend.displayName, username: friend.username) { EmptyView() } }
+                ForEach(accepted) { friend in
+                    personRow(friend) { EmptyView() }
+                        .contextMenu {
+                            Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { remove(friend) }
+                        }
+                }
             }
         }
         if !outgoing.isEmpty {
             Section("Sent") {
                 ForEach(outgoing) { friend in
-                    personRow(userID: friend.userId, name: friend.displayName, username: friend.username) { pendingLabel }
+                    personRow(friend) { pendingLabel }
                 }
             }
         }
     }
 
-    private func personRow(userID: UUID, name: String, username: String, hasAvatar: Bool = true, @ViewBuilder trailing: () -> some View) -> some View {
+    private func personRow(_ friend: APIFriend, @ViewBuilder trailing: () -> some View) -> some View {
+        personRow(userID: friend.userId, name: friend.displayName, username: friend.username, avatarEtag: friend.avatarEtag, trailing: trailing)
+    }
+
+    private func personRow(userID: UUID, name: String, username: String, avatarEtag: String?, @ViewBuilder trailing: () -> some View) -> some View {
         HStack(spacing: 12) {
-            AvatarView(userID: userID, name: name, hasAvatar: hasAvatar)
+            AvatarView(userID: userID, name: name, etag: avatarEtag)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.headline)
                 Text("@\(username)").font(.caption).foregroundStyle(.secondary)
@@ -147,6 +159,18 @@ struct FriendsView: View {
                 errorMessage = error.localizedDescription
             }
             busyIDs.remove(requestID)
+        }
+    }
+
+    private func remove(_ friend: APIFriend) {
+        errorMessage = nil
+        Task {
+            do {
+                try await store.removeFriend(friend.userId, accessToken: try await authentication.accessToken())
+                removals += 1
+            } catch {
+                errorMessage = "Couldn’t remove \(friend.displayName). \(error.localizedDescription)"
+            }
         }
     }
 

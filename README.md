@@ -8,14 +8,14 @@ The native iPhone app is the product reference client. It uses SwiftUI system co
 
 The main navigation is:
 
-- **Transactions:** chronological activity list with participant avatars.
+- **Transactions:** your overall balance, what you owe or are owed by each person, and a chronological activity list with participant photos.
 - **Add expense:** camera-first receipt flow.
-- **Profile:** personal balance, repayment, and people management.
+- **Profile:** personal balance, repayment, and friends.
 - **Settings:** the `gearshape` button in Transactions.
 
 Saved groups are personal named collections of people used only as transaction filters. Each transaction has its own participant list and never enters a group pool. A “Roommates” filter, for example, shows transactions involving any person in that saved collection; creating it sends no invitations and changes no balances or access rights.
 
-Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username for exact-match discovery; email remains private. The Profile screen opens a Friends list with accepted, incoming, and sent requests. Accepting a friend links that account into each person’s participant list for future expenses.
+Everyone in a transaction is an app user: you split expenses with yourself and your friends, and each expense appears for everyone on it and counts toward both sides' balances. Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username; email remains private. The Profile screen opens a Friends list where you can search by name or username, accept requests, and press and hold a friend to remove them. Removing a friend keeps your shared history.
 
 ## Main receipt flow
 

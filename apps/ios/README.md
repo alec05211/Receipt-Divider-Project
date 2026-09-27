@@ -2,11 +2,13 @@
 
 This native iPhone reference client is written in SwiftUI and targets iOS 17 or later.
 
+For automatic builds and wireless iPhone installation after pushes to `main`, see [Wireless deployment](WIRELESS_DEPLOYMENT.md).
+
 Use `TabView`, `NavigationStack`, toolbars, sheets, and standard buttons. Do not recreate Liquid Glass with custom materials or blur layers: current iOS automatically gives standard components its system treatment.
 
 On a Mac, install [XcodeGen](https://github.com/yonaskolb/XcodeGen), copy `Signing.local.xcconfig.example` to `Signing.local.xcconfig` and set your Apple Developer team ID (the copy is gitignored), run `xcodegen generate` in this folder, and open `ReceiptDivider.xcodeproj` in the newest Xcode. Xcode resolves the Supabase Swift package within the 2.x release line. Test on a current iPhone to validate authentication, Sign in with Apple, and the system Liquid Glass behavior.
 
-The app opens through a custom SwiftUI authentication gate. Email and password is the primary sign-in/create-account method, with iOS Password AutoFill, emailed password reset, and native Sign in with Apple. New accounts also collect real first name, real last name, and a unique username. Supabase restores and refreshes a saved device session automatically; Settings provides sign out. Once authenticated, the app provisions the account profile and prototype people, loads the canonical ledger from the deployed Edge Function, and posts expenses, optional receipt evidence, repayments, and friend requests with the current access token. An account-scoped device cache supports display continuity, but Supabase is canonical. Camera/photo intake and Vision receipt extraction remain on-device.
+The app opens through a custom SwiftUI authentication gate. Email and password is the primary sign-in/create-account method, with iOS Password AutoFill, emailed password reset, and native Sign in with Apple. New accounts also collect real first name, real last name, and a unique username. Supabase restores and refreshes a saved device session automatically; Settings provides sign out. Once authenticated, the app provisions the account profile, loads the canonical ledger from the deployed Edge Function, and posts expenses, optional receipt evidence, repayments, and friend requests with the current access token. An account-scoped device cache supports display continuity, but Supabase is canonical. Camera/photo intake and Vision receipt extraction remain on-device.
 
 ## Supabase setup
 
@@ -20,11 +22,10 @@ The app opens through a custom SwiftUI authentication gate. Email and password i
 ## Live ledger integration
 
 - `LedgerAPIClient.swift` owns authenticated HTTP requests to the Edge Function configured by `API_BASE_URL`.
-- Authenticated launch upserts the profile, creates any missing prototype people (`Alex`, `Jamie`, `Morgan`, and `Taylor`), and replaces the displayed ledger with the server snapshot.
-- Pull to refresh in Summary reloads the server snapshot.
+- Authenticated launch upserts the profile and replaces the displayed ledger with the server snapshot. Summary reloads it whenever it appears and on pull to refresh, so expenses friends add that include you show up.
+- Everyone in the ledger is an app account identified by user ID (`LedgerPerson`). The split flow offers you plus your accepted friends; Summary shows your overall balance and your balance with each person.
 - Saving an expense uploads its optional JPEG evidence first and then posts one idempotent expense command. Recording a payment follows the same server-first pattern.
-- The fixed `Person` enum is a temporary UI bridge. Replace it with server-driven people before shipping people management or arbitrary contacts.
 - New account entry collects real first name, real last name, a unique username, and private authentication email. Profile presents a system Liquid Glass Friends control on current iOS, with a bordered fallback on older supported releases.
-- Friends supports exact-username invitations, incoming acceptance, pending requests, accepted lists, and server refresh.
+- Friends supports searching by name or username, invitations, incoming acceptance, pending requests, accepted lists with profile photos, and press-and-hold to remove a friend. The open screen refreshes every 5 seconds.
 
-The central API exists but is not yet connected to the iPhone ledger screens. Group invitations, profile onboarding, API synchronization, account linking, and account deletion remain to be implemented.
+Editing or voiding transactions, saved-group filters in the UI, and account deletion remain to be implemented.

@@ -5,20 +5,18 @@ export interface Profile { id: UUID; firstName: string | null; lastName: string 
 export interface ProfileIdentity { id: UUID; firstName: string; lastName: string; username: string; displayName: string; }
 /** Where the searcher stands with a search result: no request, a request either way, or already friends. */
 export type Relationship = "none" | "outgoing" | "incoming" | "friend";
-export interface UserSearchResult { userId: UUID; displayName: string; username: string; hasAvatar: boolean; relationship: Relationship; requestId?: UUID; }
-export interface FriendConnection { requestId: UUID; userId: UUID; displayName: string; username: string; status: "pending" | "accepted"; direction: "incoming" | "outgoing" | "friend"; }
+/** `avatarEtag` changes whenever the person uploads a new photo, so clients know when to refetch it; null means no photo. */
+export interface UserSearchResult { userId: UUID; displayName: string; username: string; hasAvatar: boolean; avatarEtag: string | null; relationship: Relationship; requestId?: UUID; }
+export interface FriendConnection { requestId: UUID; userId: UUID; displayName: string; username: string; avatarEtag: string | null; status: "pending" | "accepted"; direction: "incoming" | "outgoing" | "friend"; }
 
-export interface Person {
-  id: UUID;
-  displayName: string;
-  linkedUserId?: UUID;
-  createdAt: string;
-}
+/** Someone who appears in the caller's ledger: the caller, a friend, or anyone they share a transaction with. */
+export interface LedgerPerson { userId: UUID; displayName: string | null; username: string | null; avatarEtag: string | null; }
 
+/** A personal shortcut for filtering transactions to those involving any of these users. */
 export interface SavedFilter {
   id: UUID;
   name: string;
-  personIds: UUID[];
+  userIds: UUID[];
   createdAt: string;
 }
 
@@ -26,13 +24,14 @@ export type EvidenceKind = "receipt" | "restaurant_check" | "ticket_confirmation
 export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: string; etag: string; createdAt: string; }
 
 export interface ExpenseItemInput { name: string; amountCents: number; offsetCents?: number; }
-export interface AllocationInput { personId: UUID; amountCents: number; }
+export interface AllocationInput { userId: UUID; amountCents: number; }
 
+/** The payer and everyone allocated a share must be the creator or one of the creator's friends. */
 export interface CreateExpenseInput {
   clientRequestId: UUID;
   description: string;
   transactionDate: string;
-  payerPersonId: UUID;
+  payerId: UUID;
   currency: string;
   totalCents: number;
   evidenceIds?: UUID[];
@@ -42,32 +41,36 @@ export interface CreateExpenseInput {
 
 export interface Expense extends Omit<CreateExpenseInput, "items" | "evidenceIds"> {
   id: UUID;
-  ownerId: UUID;
   creatorId: UUID;
   items: ExpenseItemInput[];
   evidenceIds: UUID[];
   createdAt: string;
 }
 
+/** One side of the payment must be the person recording it. */
 export interface CreatePaymentInput {
   clientRequestId: UUID;
-  fromPersonId: UUID;
-  toPersonId: UUID;
+  fromUserId: UUID;
+  toUserId: UUID;
   amountCents: number;
   transactionDate: string;
 }
 
-export interface Payment extends CreatePaymentInput { id: UUID; ownerId: UUID; recorderId: UUID; createdAt: string; }
+export interface Payment extends CreatePaymentInput { id: UUID; recorderId: UUID; createdAt: string; }
 
+/**
+ * Everything visible to one user. `balances` is from the caller's side: a positive amount means that person owes
+ * the caller, a negative one that the caller owes them. `netBalance` is their sum.
+ */
 export interface LedgerSnapshot {
-  version: number;
   currency: string;
   appliedFilterId?: UUID;
-  people: Person[];
+  people: LedgerPerson[];
   savedFilters: SavedFilter[];
   expenses: Expense[];
   payments: Payment[];
   balances: Record<UUID, number>;
+  netBalance: number;
 }
 
 export interface StoredImage { contentType: string; bytes: Uint8Array; etag: string; }
@@ -81,17 +84,18 @@ export interface LedgerRepository {
   listFriends(userId: UUID): Promise<FriendConnection[]>;
   requestFriend(userId: UUID, username: string): Promise<FriendConnection>;
   acceptFriend(userId: UUID, requestId: UUID): Promise<FriendConnection>;
+  /** Ends the friendship (or withdraws a pending request) with another user; shared transactions are kept. */
+  removeFriend(userId: UUID, friendId: UUID): Promise<void>;
   putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string>;
   getAvatar(requesterId: UUID, userId: UUID): Promise<StoredImage | null>;
-  createPerson(ownerId: UUID, displayName: string, linkedUserId?: UUID): Promise<Person>;
-  listPeople(ownerId: UUID): Promise<Person[]>;
-  createSavedFilter(ownerId: UUID, name: string, personIds: UUID[]): Promise<SavedFilter>;
+  createSavedFilter(ownerId: UUID, name: string, userIds: UUID[]): Promise<SavedFilter>;
   listSavedFilters(ownerId: UUID): Promise<SavedFilter[]>;
   createEvidence(ownerId: UUID, kind: EvidenceKind, contentType: string, bytes: Uint8Array): Promise<EvidenceAsset>;
-  getEvidence(ownerId: UUID, evidenceId: UUID): Promise<StoredImage | null>;
-  createExpense(ownerId: UUID, input: CreateExpenseInput): Promise<Expense>;
-  createPayment(ownerId: UUID, input: CreatePaymentInput): Promise<Payment>;
-  getSnapshot(ownerId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
+  /** Evidence is visible to its uploader and to everyone on an expense it's attached to. */
+  getEvidence(requesterId: UUID, evidenceId: UUID): Promise<StoredImage | null>;
+  createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
+  createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
+  getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
   close?(): Promise<void>;
 }
 

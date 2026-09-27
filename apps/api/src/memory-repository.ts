@@ -1,159 +1,193 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, fingerprint, imageEtag, searchTerm, validateExpense, validatePayment } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
+import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpense, validatePayment } from "./domain.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; }
-interface Ledger { currency: string; version: number; }
+interface FriendRequest { id: UUID; requesterId: UUID; addresseeId: UUID; status: "pending" | "accepted"; }
 
 /** Test/local adapter. It deliberately has no persistence and is never selected when DATABASE_URL is set. */
 export class MemoryRepository implements LedgerRepository {
   private profiles = new Map<UUID, Profile>();
-  private ledgers = new Map<UUID, Ledger>();
+  private currencies = new Map<UUID, string>();
   private avatars = new Map<UUID, ImageRecord>();
-  private people = new Map<UUID, Person[]>();
   private filters = new Map<UUID, SavedFilter[]>();
   private evidence = new Map<UUID, ImageRecord>();
-  private expenses = new Map<UUID, Expense[]>();
-  private payments = new Map<UUID, Payment[]>();
+  private expenses: Expense[] = [];
+  private payments: Payment[] = [];
   private requests = new Map<string, { fingerprint: string; value: Expense | Payment }>();
-  private identities = new Map<UUID, ProfileIdentity>();
-  private friendships = new Map<UUID, FriendConnection[]>();
+  private friendRequests: FriendRequest[] = [];
 
   async checkHealth(): Promise<void> {}
 
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
-    if (!this.profiles.has(userId)) throw new ApiError(404, "profile not found", "not_found");
-    const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: username.trim().toLowerCase(), displayName: `${firstName.trim()} ${lastName.trim()}` };
-    this.identities.set(userId, identity); this.profiles.set(userId, identity); return identity;
+    this.requireProfile(userId);
+    const handle = username.trim().toLowerCase();
+    if ([...this.profiles.values()].some((profile) => profile.id !== userId && profile.username === handle)) throw new ApiError(409, "username is already taken", "username_taken");
+    const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: handle, displayName: `${firstName.trim()} ${lastName.trim()}` };
+    this.profiles.set(userId, identity); return identity;
   }
   async searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]> {
     const term = searchTerm(query).toLowerCase();
-    return [...this.identities.values()]
-      .filter((identity) => identity.id !== userId && [identity.username, identity.firstName, identity.lastName, identity.displayName].some((field) => field.toLowerCase().startsWith(term)))
+    return [...this.profiles.values()]
+      .filter((profile): profile is ProfileIdentity => profile.id !== userId && profile.username !== null)
+      .filter((profile) => [profile.username, profile.firstName, profile.lastName, profile.displayName].some((field) => field.toLowerCase().startsWith(term)))
       .sort((left, right) => left.displayName.localeCompare(right.displayName))
       .slice(0, 20)
-      .map((identity) => ({ userId: identity.id, displayName: identity.displayName, username: identity.username, hasAvatar: this.avatars.has(identity.id), relationship: "none" }));
+      .map((profile) => {
+        const request = this.requestBetween(userId, profile.id);
+        const relationship: Relationship = !request ? "none" : request.status === "accepted" ? "friend" : request.requesterId === userId ? "outgoing" : "incoming";
+        const result: UserSearchResult = { userId: profile.id, displayName: profile.displayName, username: profile.username, hasAvatar: this.avatars.has(profile.id), avatarEtag: this.avatarEtag(profile.id), relationship };
+        if (request) result.requestId = request.id;
+        return result;
+      });
   }
-  async listFriends(userId: UUID): Promise<FriendConnection[]> { return this.friendships.get(userId) ?? []; }
-  async requestFriend(): Promise<FriendConnection> { throw new ApiError(404, "username not found", "not_found"); }
-  async acceptFriend(): Promise<FriendConnection> { throw new ApiError(404, "friend request not found", "not_found"); }
+  async listFriends(userId: UUID): Promise<FriendConnection[]> {
+    return this.friendRequests.filter((request) => request.requesterId === userId || request.addresseeId === userId).map((request) => {
+      const otherId = request.requesterId === userId ? request.addresseeId : request.requesterId;
+      return this.connection(request, otherId, request.status === "accepted" ? "friend" : request.requesterId === userId ? "outgoing" : "incoming");
+    });
+  }
+  async requestFriend(userId: UUID, username: string): Promise<FriendConnection> {
+    if (!this.requireProfile(userId).username) throw new ApiError(409, "add your name and username before inviting friends", "profile_incomplete");
+    const target = [...this.profiles.values()].find((profile) => profile.username === username.trim().toLowerCase());
+    if (!target) throw new ApiError(404, "username not found", "not_found");
+    if (target.id === userId) throw new ApiError(400, "you cannot invite yourself", "invalid_input");
+    if (this.requestBetween(userId, target.id)) throw new ApiError(409, "a friendship or request already exists", "friend_exists");
+    const request: FriendRequest = { id: randomUUID(), requesterId: userId, addresseeId: target.id, status: "pending" };
+    this.friendRequests.push(request);
+    return this.connection(request, target.id, "outgoing");
+  }
+  async acceptFriend(userId: UUID, requestId: UUID): Promise<FriendConnection> {
+    const request = this.friendRequests.find((item) => item.id === requestId && item.addresseeId === userId && item.status === "pending");
+    if (!request) throw new ApiError(404, "pending friend request not found", "not_found");
+    request.status = "accepted";
+    return this.connection(request, request.requesterId, "friend");
+  }
+  async removeFriend(userId: UUID, friendId: UUID): Promise<void> {
+    const request = this.requestBetween(userId, friendId);
+    if (!request) throw new ApiError(404, "friend not found", "not_found");
+    this.friendRequests = this.friendRequests.filter((item) => item !== request);
+  }
 
   async ensureProfile(userId: UUID): Promise<Profile> {
     const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null };
     this.profiles.set(userId, profile);
-    if (!this.ledgers.has(userId)) {
-      this.ledgers.set(userId, { currency: "USD", version: 0 });
-      this.people.set(userId, []); this.filters.set(userId, []); this.expenses.set(userId, []); this.payments.set(userId, []);
-    }
+    if (!this.currencies.has(userId)) { this.currencies.set(userId, "USD"); this.filters.set(userId, []); }
     return profile;
   }
-  async getProfile(userId: UUID): Promise<Profile> {
-    const profile = this.profiles.get(userId);
-    if (!profile) throw new ApiError(404, "profile not found", "not_found");
-    return profile;
-  }
+  async getProfile(userId: UUID): Promise<Profile> { return this.requireProfile(userId); }
 
   async putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string> {
-    this.requireOwner(userId);
+    this.requireProfile(userId);
     const etag = imageEtag(bytes);
     this.avatars.set(userId, { ownerId: userId, contentType, bytes: Uint8Array.from(bytes), etag });
     return etag;
   }
-
   async getAvatar(requesterId: UUID, userId: UUID): Promise<StoredImage | null> {
-    this.requireOwner(requesterId);
-    const linked = (this.people.get(requesterId) ?? []).some((person) => person.linkedUserId === userId);
-    if (requesterId !== userId && !linked && !this.identities.has(userId)) throw new ApiError(403, "avatar is not visible to this user", "forbidden");
+    this.requireProfile(requesterId);
+    if (requesterId !== userId && !this.profiles.get(userId)?.username) return null;
     return this.avatars.get(userId) ?? null;
   }
 
-  async createPerson(ownerId: UUID, displayName: string, linkedUserId?: UUID): Promise<Person> {
-    this.requireOwner(ownerId);
-    if (linkedUserId && !this.profiles.has(linkedUserId)) throw new ApiError(404, "linked profile not found", "not_found");
-    const person: Person = { id: randomUUID(), displayName: validName(displayName, "displayName"), createdAt: new Date().toISOString() };
-    if (linkedUserId) person.linkedUserId = linkedUserId;
-    this.people.get(ownerId)!.push(person);
-    return structuredClone(person);
-  }
-
-  async listPeople(ownerId: UUID): Promise<Person[]> { this.requireOwner(ownerId); return structuredClone(this.people.get(ownerId)!); }
-
-  async createSavedFilter(ownerId: UUID, name: string, personIds: UUID[]): Promise<SavedFilter> {
-    this.requireOwner(ownerId);
-    const unique = new Set(personIds);
-    if (!personIds.length || unique.size !== personIds.length || personIds.length > 100) throw new ApiError(400, "personIds must contain 1–100 unique people", "invalid_input");
-    personIds.forEach((id) => this.requirePerson(ownerId, id));
-    const filter = { id: randomUUID(), name: validName(name, "filter name"), personIds: [...personIds], createdAt: new Date().toISOString() };
+  async createSavedFilter(ownerId: UUID, name: string, userIds: UUID[]): Promise<SavedFilter> {
+    this.requireProfile(ownerId);
+    if (!userIds.length || new Set(userIds).size !== userIds.length || userIds.length > 100) throw new ApiError(400, "userIds must contain 1–100 unique people", "invalid_input");
+    this.requireFriends(ownerId, userIds);
+    const filter = { id: randomUUID(), name: validName(name, "filter name"), userIds: [...userIds], createdAt: new Date().toISOString() };
     this.filters.get(ownerId)!.push(filter);
     return structuredClone(filter);
   }
+  async listSavedFilters(ownerId: UUID): Promise<SavedFilter[]> { this.requireProfile(ownerId); return structuredClone(this.filters.get(ownerId) ?? []); }
 
-  async listSavedFilters(ownerId: UUID): Promise<SavedFilter[]> { this.requireOwner(ownerId); return structuredClone(this.filters.get(ownerId)!); }
-
-  async createEvidence(ownerId: UUID, kind: EvidenceKind, contentType: string, bytes: Uint8Array): Promise<EvidenceAsset> {
-    this.requireOwner(ownerId);
+  async createEvidence(uploaderId: UUID, kind: EvidenceKind, contentType: string, bytes: Uint8Array): Promise<EvidenceAsset> {
+    this.requireProfile(uploaderId);
     const id = randomUUID(), etag = imageEtag(bytes), createdAt = new Date().toISOString();
-    this.evidence.set(id, { ownerId, kind, contentType, bytes: Uint8Array.from(bytes), etag, createdAt });
+    this.evidence.set(id, { ownerId: uploaderId, kind, contentType, bytes: Uint8Array.from(bytes), etag, createdAt });
     return { id, kind, contentType, etag, createdAt };
   }
-
-  async getEvidence(ownerId: UUID, evidenceId: UUID): Promise<StoredImage | null> {
-    this.requireOwner(ownerId);
+  async getEvidence(requesterId: UUID, evidenceId: UUID): Promise<StoredImage | null> {
     const image = this.evidence.get(evidenceId);
-    return image?.ownerId === ownerId ? image : null;
+    if (!image) return null;
+    const visible = image.ownerId === requesterId || this.visibleExpenses(requesterId).some((expense) => expense.evidenceIds.includes(evidenceId));
+    return visible ? image : null;
   }
 
-  async createExpense(ownerId: UUID, input: CreateExpenseInput): Promise<Expense> {
-    const ledger = this.requireOwner(ownerId); validateExpense(input);
-    if (ledger.currency !== input.currency) throw new ApiError(422, "expense currency must match the ledger currency", "currency_mismatch");
-    this.requirePerson(ownerId, input.payerPersonId);
-    input.allocations.forEach((allocation) => this.requirePerson(ownerId, allocation.personId));
+  async createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense> {
+    this.requireProfile(creatorId); validateExpense(input);
+    if (this.currencies.get(creatorId) !== input.currency) throw new ApiError(422, "expense currency must match the ledger currency", "currency_mismatch");
+    this.requireFriends(creatorId, [input.payerId, ...input.allocations.map((allocation) => allocation.userId)]);
     for (const evidenceId of input.evidenceIds ?? []) {
-      const asset = this.evidence.get(evidenceId);
-      if (!asset || asset.ownerId !== ownerId) throw new ApiError(400, "evidence does not belong to this ledger", "invalid_evidence");
+      if (this.evidence.get(evidenceId)?.ownerId !== creatorId) throw new ApiError(400, "evidence was not uploaded by you", "invalid_evidence");
     }
-    const key = `expense:${ownerId}:${input.clientRequestId}`, requestFingerprint = fingerprint(input), existing = this.requests.get(key);
+    const key = `expense:${creatorId}:${input.clientRequestId}`, requestFingerprint = fingerprint(input), existing = this.requests.get(key);
     if (existing) {
       if (existing.fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict");
       return structuredClone(existing.value as Expense);
     }
-    const expense: Expense = { ...structuredClone(input), items: structuredClone(input.items ?? []), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), ownerId, creatorId: ownerId, createdAt: new Date().toISOString() };
-    this.expenses.get(ownerId)!.push(expense); ledger.version += 1; this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
+    const expense: Expense = { ...structuredClone(input), items: structuredClone(input.items ?? []), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
+    this.expenses.push(expense); this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
     return structuredClone(expense);
   }
 
-  async createPayment(ownerId: UUID, input: CreatePaymentInput): Promise<Payment> {
-    const ledger = this.requireOwner(ownerId); validatePayment(input);
-    this.requirePerson(ownerId, input.fromPersonId); this.requirePerson(ownerId, input.toPersonId);
-    const key = `payment:${ownerId}:${input.clientRequestId}`, requestFingerprint = fingerprint(input), existing = this.requests.get(key);
+  async createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment> {
+    this.requireProfile(recorderId); validatePayment(recorderId, input);
+    const otherId = input.fromUserId === recorderId ? input.toUserId : input.fromUserId;
+    const shared = this.expenses.some((expense) => expense.allocations.some((a) => (expense.payerId === recorderId && a.userId === otherId) || (expense.payerId === otherId && a.userId === recorderId)));
+    if (!shared && this.requestBetween(recorderId, otherId)?.status !== "accepted") throw new ApiError(422, "you can only record payments with friends or people you've shared expenses with", "invalid_person");
+    const key = `payment:${recorderId}:${input.clientRequestId}`, requestFingerprint = fingerprint(input), existing = this.requests.get(key);
     if (existing) {
       if (existing.fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict");
       return structuredClone(existing.value as Payment);
     }
-    const payment: Payment = { ...structuredClone(input), id: randomUUID(), ownerId, recorderId: ownerId, createdAt: new Date().toISOString() };
-    this.payments.get(ownerId)!.push(payment); ledger.version += 1; this.requests.set(key, { fingerprint: requestFingerprint, value: payment });
+    const payment: Payment = { ...structuredClone(input), id: randomUUID(), recorderId, createdAt: new Date().toISOString() };
+    this.payments.push(payment); this.requests.set(key, { fingerprint: requestFingerprint, value: payment });
     return structuredClone(payment);
   }
 
-  async getSnapshot(ownerId: UUID, filterId?: UUID): Promise<LedgerSnapshot> {
-    const ledger = this.requireOwner(ownerId), people = await this.listPeople(ownerId), savedFilters = await this.listSavedFilters(ownerId);
-    let expenses = structuredClone(this.expenses.get(ownerId)!); let payments = structuredClone(this.payments.get(ownerId)!);
-    const balances = calculateBalances(people.map((person) => person.id), expenses, payments);
+  async getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot> {
+    this.requireProfile(userId);
+    const savedFilters = await this.listSavedFilters(userId);
+    let expenses = structuredClone(this.visibleExpenses(userId));
+    let payments = structuredClone(this.payments.filter((payment) => payment.fromUserId === userId || payment.toUserId === userId));
+    const balances = calculateBalances(userId, expenses, payments);
+    const peopleIds = new Set<UUID>([userId, ...this.friendIds(userId)]);
+    for (const expense of expenses) { peopleIds.add(expense.creatorId); peopleIds.add(expense.payerId); expense.allocations.forEach((a) => peopleIds.add(a.userId)); }
+    for (const payment of payments) { peopleIds.add(payment.fromUserId); peopleIds.add(payment.toUserId); }
+    const people: LedgerPerson[] = [...peopleIds].map((id) => {
+      const profile = this.requireProfile(id);
+      return { userId: id, displayName: profile.displayName, username: profile.username, avatarEtag: this.avatarEtag(id) };
+    });
     if (filterId) {
       const filter = savedFilters.find((item) => item.id === filterId);
       if (!filter) throw new ApiError(404, "saved filter not found", "not_found");
-      const selected = new Set(filter.personIds);
-      expenses = expenses.filter((expense) => selected.has(expense.payerPersonId) || expense.allocations.some((a) => selected.has(a.personId)));
-      payments = payments.filter((payment) => selected.has(payment.fromPersonId) || selected.has(payment.toPersonId));
+      ({ expenses, payments } = filterTransactions(filter.userIds, expenses, payments));
     }
-    const snapshot: LedgerSnapshot = { version: ledger.version, currency: ledger.currency, people, savedFilters, expenses, payments, balances };
+    const snapshot: LedgerSnapshot = { currency: this.currencies.get(userId)!, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
     if (filterId) snapshot.appliedFilterId = filterId;
     return snapshot;
   }
 
-  private requireOwner(ownerId: UUID): Ledger { const ledger = this.ledgers.get(ownerId); if (!ledger) throw new ApiError(404, "profile not found", "not_found"); return ledger; }
-  private requirePerson(ownerId: UUID, personId: UUID): Person { const person = this.people.get(ownerId)?.find((item) => item.id === personId); if (!person) throw new ApiError(422, "person does not belong to this ledger", "invalid_person"); return person; }
+  private visibleExpenses(userId: UUID): Expense[] {
+    return this.expenses.filter((expense) => expense.creatorId === userId || expense.payerId === userId || expense.allocations.some((a) => a.userId === userId));
+  }
+  private requestBetween(left: UUID, right: UUID): FriendRequest | undefined {
+    return this.friendRequests.find((request) => (request.requesterId === left && request.addresseeId === right) || (request.requesterId === right && request.addresseeId === left));
+  }
+  private friendIds(userId: UUID): UUID[] {
+    return this.friendRequests.filter((request) => request.status === "accepted" && (request.requesterId === userId || request.addresseeId === userId))
+      .map((request) => request.requesterId === userId ? request.addresseeId : request.requesterId);
+  }
+  private requireFriends(userId: UUID, ids: UUID[]): void {
+    const friends = new Set(this.friendIds(userId));
+    if (ids.some((id) => id !== userId && !friends.has(id))) throw new ApiError(422, "you can only split with yourself and your friends", "invalid_person");
+  }
+  private connection(request: FriendRequest, otherId: UUID, direction: FriendConnection["direction"]): FriendConnection {
+    const other = this.requireProfile(otherId);
+    return { requestId: request.id, userId: otherId, displayName: other.displayName ?? "", username: other.username ?? "", avatarEtag: this.avatarEtag(otherId), status: request.status, direction };
+  }
+  private avatarEtag(userId: UUID): string | null { return this.avatars.get(userId)?.etag ?? null; }
+  private requireProfile(userId: UUID): Profile { const profile = this.profiles.get(userId); if (!profile) throw new ApiError(404, "profile not found", "not_found"); return profile; }
 }
 
 function validName(value: string, field: string): string { const trimmed = value.trim(); if (!trimmed || trimmed.length > 100) throw new ApiError(400, `${field} must contain 1–100 characters`, "invalid_input"); return trimmed; }

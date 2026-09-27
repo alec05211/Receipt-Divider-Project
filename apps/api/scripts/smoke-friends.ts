@@ -23,9 +23,11 @@ try {
   assert.equal((await json(`/v1/friend-requests/${request.requestId}/accept`, right, "POST", {})).status, 200);
   const friends = await (await json("/v1/friends", left)).json() as Array<{ status: string }>;
   assert.equal(friends[0]?.status, "accepted");
-  const people = await (await json("/v1/people", left)).json() as Array<{ linkedUserId?: string }>;
-  assert.ok(people.some((person) => person.linkedUserId === right));
-  console.log("Friends smoke test passed: identity, username invite, acceptance, and linked people.");
+  const snapshot = await (await json("/v1/transactions", left)).json() as { people: Array<{ userId: string }> };
+  assert.ok(snapshot.people.some((person) => person.userId === right));
+  assert.equal((await json(`/v1/friends/${right}`, left, "DELETE")).status, 204);
+  assert.equal((await (await json("/v1/friends", right)).json() as unknown[]).length, 0);
+  console.log("Friends smoke test passed: identity, username invite, acceptance, ledger people, and removal.");
 } finally {
   await cleanup`DELETE FROM user_profiles WHERE id IN (${left}, ${right})`;
   await Promise.all([repository.close(), cleanup.end()]);

@@ -29,7 +29,7 @@ export function requireCurrency(value: unknown): string {
 
 export function validateExpense(input: CreateExpenseInput): void {
   requireUuid(input.clientRequestId, "clientRequestId");
-  requireUuid(input.payerPersonId, "payerPersonId");
+  requireUuid(input.payerId, "payerId");
   requireCurrency(input.currency);
   requireCents(input.totalCents, "totalCents", false);
   if (!input.description?.trim() || input.description.length > 200) {
@@ -58,10 +58,10 @@ export function validateExpense(input: CreateExpenseInput): void {
   const memberIds = new Set<string>();
   let allocationTotal = 0;
   for (const allocation of input.allocations) {
-    requireUuid(allocation.personId, "allocation personId");
+    requireUuid(allocation.userId, "allocation userId");
     requireCents(allocation.amountCents, "allocation amountCents", false, true);
-    if (memberIds.has(allocation.personId)) throw new ApiError(400, "each person may be allocated once", "invalid_input");
-    memberIds.add(allocation.personId);
+    if (memberIds.has(allocation.userId)) throw new ApiError(400, "each person may be allocated once", "invalid_input");
+    memberIds.add(allocation.userId);
     allocationTotal += allocation.amountCents;
   }
   if (allocationTotal !== input.totalCents) {
@@ -77,28 +77,44 @@ export function validateExpense(input: CreateExpenseInput): void {
   }
 }
 
-export function validatePayment(input: CreatePaymentInput): void {
+export function validatePayment(recorderId: UUID, input: CreatePaymentInput): void {
   requireUuid(input.clientRequestId, "clientRequestId");
-  requireUuid(input.fromPersonId, "fromPersonId");
-  requireUuid(input.toPersonId, "toPersonId");
-  if (input.fromPersonId === input.toPersonId) throw new ApiError(400, "payment sender and recipient must differ", "invalid_input");
+  requireUuid(input.fromUserId, "fromUserId");
+  requireUuid(input.toUserId, "toUserId");
+  if (input.fromUserId !== recorderId && input.toUserId !== recorderId) throw new ApiError(422, "you can only record payments you sent or received", "invalid_person");
+  if (input.fromUserId === input.toUserId) throw new ApiError(400, "payment sender and recipient must differ", "invalid_input");
   requireCents(input.amountCents, "amountCents", false);
   requireDate(input.transactionDate);
 }
 
-export function calculateBalances(personIds: UUID[], expenses: Expense[], payments: Payment[]): Record<UUID, number> {
-  const balances = Object.fromEntries(personIds.map((id) => [id, 0]));
+/**
+ * What each other person owes `userId` (negative: what `userId` owes them). Everyone on an expense owes their share
+ * to its payer, and a repayment reduces what the sender owes the recipient.
+ */
+export function calculateBalances(userId: UUID, expenses: Expense[], payments: Payment[]): Record<UUID, number> {
+  const balances: Record<UUID, number> = {};
+  const add = (otherId: UUID, cents: number) => { balances[otherId] = (balances[otherId] ?? 0) + cents; };
   for (const expense of expenses) {
-    balances[expense.payerPersonId] = (balances[expense.payerPersonId] ?? 0) + expense.totalCents;
     for (const allocation of expense.allocations) {
-      balances[allocation.personId] = (balances[allocation.personId] ?? 0) - allocation.amountCents;
+      if (allocation.userId === expense.payerId) continue;
+      if (expense.payerId === userId) add(allocation.userId, allocation.amountCents);
+      else if (allocation.userId === userId) add(expense.payerId, -allocation.amountCents);
     }
   }
   for (const payment of payments) {
-    balances[payment.fromPersonId] = (balances[payment.fromPersonId] ?? 0) + payment.amountCents;
-    balances[payment.toPersonId] = (balances[payment.toPersonId] ?? 0) - payment.amountCents;
+    if (payment.fromUserId === userId) add(payment.toUserId, payment.amountCents);
+    else if (payment.toUserId === userId) add(payment.fromUserId, -payment.amountCents);
   }
   return balances;
+}
+
+/** Keeps the transactions involving any of `userIds`; used by saved filters, which never change balances. */
+export function filterTransactions(userIds: UUID[], expenses: Expense[], payments: Payment[]): { expenses: Expense[]; payments: Payment[] } {
+  const selected = new Set(userIds);
+  return {
+    expenses: expenses.filter((expense) => selected.has(expense.payerId) || expense.allocations.some((allocation) => selected.has(allocation.userId))),
+    payments: payments.filter((payment) => selected.has(payment.fromUserId) || selected.has(payment.toUserId)),
+  };
 }
 
 export function fingerprint(value: unknown): string {

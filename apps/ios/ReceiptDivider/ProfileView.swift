@@ -12,7 +12,7 @@ struct ProfileView: View {
                     NavigationLink { EditProfileView() } label: { profileHeader }
                 }
                 Section { friendsButton.listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
-                Section("Your balance") { LabeledContent("Current balance", value: store.alexBalance.usd); NavigationLink { SettleUpView() } label: { Label("Record a payment", systemImage: "arrow.left.arrow.right") } }
+                Section("Your balance") { LabeledContent("Overall", value: store.netBalance == 0 ? "Settled up" : store.netBalance > 0 ? "You’re owed \(store.netBalance.usd)" : "You owe \((-store.netBalance).usd)"); NavigationLink { SettleUpView() } label: { Label("Record a payment", systemImage: "arrow.left.arrow.right") } }
             }
             .navigationTitle("Profile")
             .task {

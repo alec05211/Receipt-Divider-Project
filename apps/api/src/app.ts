@@ -45,13 +45,6 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   app.get("/v1/users/:userId/avatar", async (context) => imageResponse(context,
     await repository.getAvatar(userId(context), requireUuid(context.req.param("userId"), "userId"))));
 
-  app.post("/v1/people", async (context) => {
-    const body = await jsonBody(context);
-    const linkedUserId = body.linkedUserId === undefined ? undefined : requireUuid(body.linkedUserId, "linkedUserId");
-    return context.json(await repository.createPerson(userId(context), stringField(body, "displayName"), linkedUserId), 201);
-  });
-  app.get("/v1/people", async (context) => context.json(await repository.listPeople(userId(context))));
-
   app.get("/v1/users/search", async (context) => context.json(await repository.searchUsers(userId(context), context.req.query("q") ?? "")));
   app.get("/v1/friends", async (context) => context.json(await repository.listFriends(userId(context))));
   app.post("/v1/friend-requests", async (context) => {
@@ -60,12 +53,16 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   });
   app.post("/v1/friend-requests/:requestId/accept", async (context) => context.json(
     await repository.acceptFriend(userId(context), requireUuid(context.req.param("requestId"), "requestId"))));
+  app.delete("/v1/friends/:userId", async (context) => {
+    await repository.removeFriend(userId(context), requireUuid(context.req.param("userId"), "userId"));
+    return context.body(null, 204);
+  });
 
   app.post("/v1/saved-filters", async (context) => {
     const body = await jsonBody(context);
-    if (!Array.isArray(body.personIds)) throw new ApiError(400, "personIds must be an array", "invalid_input");
-    const personIds = body.personIds.map((id) => requireUuid(id, "personId"));
-    return context.json(await repository.createSavedFilter(userId(context), stringField(body, "name"), personIds), 201);
+    if (!Array.isArray(body.userIds)) throw new ApiError(400, "userIds must be an array", "invalid_input");
+    const userIds = body.userIds.map((id) => requireUuid(id, "userId"));
+    return context.json(await repository.createSavedFilter(userId(context), stringField(body, "name"), userIds), 201);
   });
   app.get("/v1/saved-filters", async (context) => context.json(await repository.listSavedFilters(userId(context))));
 
