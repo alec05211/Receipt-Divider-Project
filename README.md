@@ -8,14 +8,13 @@ The native iPhone app is the product reference client. It uses SwiftUI system co
 
 The main navigation is:
 
-- **Transactions:** your overall balance, what you owe or are owed by each person, and a chronological activity list with participant photos.
+- **Summary:** your overall balance, a one-line summary of who owes you or whom you owe that expands into per-person balances, and a chronological expense list with participant photos.
 - **Add expense:** camera-first receipt flow.
-- **Profile:** personal balance, repayment, and friends.
-- **Settings:** the `gearshape` button in Transactions.
+- **Settings:** your profile and account, Friends, Payments, and app settings.
 
 Saved groups are personal named collections of people used only as transaction filters. Each transaction has its own participant list and never enters a group pool. A “Roommates” filter, for example, shows transactions involving any person in that saved collection; creating it sends no invitations and changes no balances or access rights.
 
-Everyone in a transaction is an app user: you split expenses with yourself and your friends, and each expense appears for everyone on it and counts toward both sides' balances. Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username; email remains private. The Profile screen opens a Friends list where you can search by name or username, accept requests, and press and hold a friend to remove them. Removing a friend keeps your shared history.
+Everyone in a transaction is an app user: you split expenses with yourself and your friends, and each expense appears for everyone on it and counts toward both sides' balances. Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username; email remains private. Settings opens a Friends list where you can search by name or username, accept requests, and press and hold a friend to remove them. Removing a friend keeps your shared history.
 
 ## Main receipt flow
 
@@ -24,7 +23,7 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 3. Review a multi-select list of receipt rows and confirm the items to share.
 4. Tag the friends involved, with recent people first.
 5. Confirm an equal split or enter exact contributions.
-6. Save and return to Transactions.
+6. Save and return to Summary, or tap the + beside Save to split another expense from the same receipt.
 
 Opening a transaction shows the cost breakdown first, then the receipt image and selected items as evidence, followed by recent transactions involving the same people.
 
