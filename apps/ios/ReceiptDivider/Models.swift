@@ -329,11 +329,13 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
 
     private func storageKey(for userID: UUID) -> String { "\(storageKeyPrefix)-\(userID.uuidString.lowercased())" }
 
+    /// Transaction dates are calendar days, so they're read and written in the user's time zone. Using UTC here
+    /// turned a saved "2026-09-27" into 5 PM on the 26th in US time zones, and pushed evening dates to the next day.
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
