@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { calculateBalances, fingerprint, imageEtag, validateExpense, validatePayment } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, SavedFilter, StoredImage, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; }
@@ -17,8 +17,19 @@ export class MemoryRepository implements LedgerRepository {
   private expenses = new Map<UUID, Expense[]>();
   private payments = new Map<UUID, Payment[]>();
   private requests = new Map<string, { fingerprint: string; value: Expense | Payment }>();
+  private identities = new Map<UUID, ProfileIdentity>();
+  private friendships = new Map<UUID, FriendConnection[]>();
 
   async checkHealth(): Promise<void> {}
+
+  async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
+    if (!this.profiles.has(userId)) throw new ApiError(404, "profile not found", "not_found");
+    const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: username.trim().toLowerCase(), displayName: `${firstName.trim()} ${lastName.trim()}` };
+    this.identities.set(userId, identity); this.profiles.set(userId, { id: userId, displayName: identity.displayName }); return identity;
+  }
+  async listFriends(userId: UUID): Promise<FriendConnection[]> { return this.friendships.get(userId) ?? []; }
+  async requestFriend(): Promise<FriendConnection> { throw new ApiError(404, "username not found", "not_found"); }
+  async acceptFriend(): Promise<FriendConnection> { throw new ApiError(404, "friend request not found", "not_found"); }
 
   async upsertProfile(userId: UUID, displayName: string): Promise<Profile> {
     const trimmed = validName(displayName, "displayName");

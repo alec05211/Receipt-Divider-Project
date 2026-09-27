@@ -70,6 +70,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
     private(set) var activeUserID: UUID?
     private(set) var hasLoadedRemoteData = false
     private(set) var isSyncing = false
+    private(set) var friends: [APIFriend] = []
     var syncError: String?
     var expenses: [Expense] = [] { didSet { persist() } }
     var payments: [Payment] = [] { didSet { persist() } }
@@ -84,7 +85,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
         return expenses + payments
     }
 
-    func synchronize(userID: UUID, displayName: String, accessToken: String) async {
+    func synchronize(userID: UUID, displayName: String, identity: AccountIdentity? = nil, accessToken: String) async {
         guard let api else {
             syncError = "The live ledger API is not configured."
             return
@@ -94,6 +95,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
         syncError = nil
         do {
             try await api.upsertProfile(displayName: displayName, token: accessToken)
+            if let identity { try await api.updateIdentity(identity, token: accessToken) }
             var remotePeople = try await api.people(token: accessToken)
             for person in Person.allCases where !remotePeople.contains(where: { $0.displayName.caseInsensitiveCompare(person.rawValue) == .orderedSame }) {
                 remotePeople.append(try await api.createPerson(displayName: person.rawValue, token: accessToken))
@@ -102,6 +104,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
                 remotePeople.first(where: { $0.displayName.caseInsensitiveCompare(person.rawValue) == .orderedSame }).map { (person, $0.id) }
             })
             try await refresh(accessToken: accessToken)
+            friends = try await api.friends(token: accessToken)
             hasLoadedRemoteData = true
         } catch {
             syncError = error.localizedDescription
@@ -113,6 +116,10 @@ enum Person: String, CaseIterable, Identifiable, Codable {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         apply(try await api.snapshot(token: accessToken))
     }
+    var friendCount: Int { friends.filter { $0.status == "accepted" }.count }
+    func refreshFriends(accessToken: String) async throws { guard let api else { throw LedgerAPIClientError.configurationMissing }; friends = try await api.friends(token: accessToken) }
+    func requestFriend(username: String, accessToken: String) async throws { guard let api else { throw LedgerAPIClientError.configurationMissing }; _ = try await api.requestFriend(username: username, token: accessToken); try await refreshFriends(accessToken: accessToken) }
+    func acceptFriend(_ requestID: UUID, accessToken: String) async throws { guard let api else { throw LedgerAPIClientError.configurationMissing }; _ = try await api.acceptFriend(requestID: requestID, token: accessToken); try await refreshFriends(accessToken: accessToken); try await refresh(accessToken: accessToken) }
 
     func add(_ expense: Expense, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
@@ -169,6 +176,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
         expenses = []
         payments = []
         serverBalances = [:]
+        friends = []
         if let activeUserID { UserDefaults.standard.removeObject(forKey: storageKey(for: activeUserID)) }
     }
 

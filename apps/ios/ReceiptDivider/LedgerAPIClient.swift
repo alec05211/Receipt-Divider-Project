@@ -34,6 +34,9 @@ actor LedgerAPIClient {
         let body = try encoder.encode(ProfileRequest(displayName: displayName))
         _ = try await send(path: "/v1/profile", method: "PUT", token: token, body: body) as APIProfile
     }
+    func updateIdentity(_ identity: AccountIdentity, token: String) async throws {
+        _ = try await send(path: "/v1/profile/identity", method: "PUT", token: token, body: encoder.encode(identity)) as APIIdentity
+    }
 
     func people(token: String) async throws -> [APIPerson] {
         try await send(path: "/v1/people", token: token)
@@ -46,6 +49,14 @@ actor LedgerAPIClient {
             token: token,
             body: encoder.encode(PersonRequest(displayName: displayName))
         )
+    }
+
+    func friends(token: String) async throws -> [APIFriend] { try await send(path: "/v1/friends", token: token) }
+    func requestFriend(username: String, token: String) async throws -> APIFriend {
+        try await send(path: "/v1/friend-requests", method: "POST", token: token, body: encoder.encode(FriendRequest(username: username)))
+    }
+    func acceptFriend(requestID: UUID, token: String) async throws -> APIFriend {
+        try await send(path: "/v1/friend-requests/\(requestID.uuidString)/accept", method: "POST", token: token, body: Data("{}".utf8))
     }
 
     func snapshot(token: String) async throws -> APILedgerSnapshot {
@@ -99,6 +110,7 @@ actor LedgerAPIClient {
 }
 
 struct APIProfile: Decodable, Sendable { let id: UUID; let displayName: String }
+struct APIIdentity: Decodable, Sendable { let id: UUID; let firstName: String; let lastName: String; let username: String; let displayName: String }
 struct APIPerson: Decodable, Sendable { let id: UUID; let displayName: String; let createdAt: String }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }
 struct APIExpenseItem: Codable, Sendable { let name: String; let amountCents: Int; let offsetCents: Int? }
@@ -153,8 +165,14 @@ struct APILedgerSnapshot: Decodable, Sendable {
     let payments: [APIPayment]
     let balances: [String: Int]
 }
+struct APIFriend: Decodable, Identifiable, Sendable {
+    let requestId: UUID; let userId: UUID; let displayName: String; let username: String
+    let status: String; let direction: String
+    var id: UUID { requestId }
+}
 
 private struct ProfileRequest: Encodable { let displayName: String }
 private struct PersonRequest: Encodable { let displayName: String }
+private struct FriendRequest: Encodable { let username: String }
 private struct APIErrorEnvelope: Decodable { let error: APIErrorBody }
 private struct APIErrorBody: Decodable { let code: String; let message: String }

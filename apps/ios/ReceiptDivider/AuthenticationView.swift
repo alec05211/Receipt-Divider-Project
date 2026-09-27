@@ -59,9 +59,11 @@ private struct ConnectedLedgerView: View {
         do {
             await store.synchronize(
                 userID: userID,
-                displayName: authentication.defaultDisplayName,
+                displayName: authentication.pendingIdentity?.displayName ?? authentication.defaultDisplayName,
+                identity: authentication.pendingIdentity,
                 accessToken: try await authentication.accessToken()
             )
+            if store.hasLoadedRemoteData { authentication.identityApplied() }
         } catch {
             store.syncError = error.localizedDescription
         }
@@ -82,6 +84,9 @@ struct AuthenticationView: View {
     @State private var mode: AuthenticationMode = .signIn
     @State private var step: AuthenticationStep = .email
     @State private var email = ""
+    @State private var firstName = ""
+    @State private var lastName = ""
+    @State private var username = ""
     @State private var code = ""
     @State private var appleNonce = ""
     @FocusState private var focusedField: Field?
@@ -133,6 +138,11 @@ struct AuthenticationView: View {
             .pickerStyle(.segmented)
 
             VStack(alignment: .leading, spacing: 8) {
+                if mode == .createAccount {
+                    TextField("First name", text: $firstName).textContentType(.givenName).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("Last name", text: $lastName).textContentType(.familyName).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                }
                 Text("Email address").font(.headline)
                 TextField("you@example.com", text: $email)
                     .textContentType(.emailAddress)
@@ -243,7 +253,12 @@ struct AuthenticationView: View {
 
     private func sendCode() {
         Task {
-            if await authentication.sendEmailCode(to: email, createAccount: mode == .createAccount) {
+            let identity = mode == .createAccount ? AccountIdentity(firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines), lastName: lastName.trimmingCharacters(in: .whitespacesAndNewlines), username: username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) : nil
+            if mode == .createAccount && (identity!.firstName.isEmpty || identity!.lastName.isEmpty || identity!.username.range(of: "^[a-z0-9_]{3,24}$", options: .regularExpression) == nil) {
+                authentication.errorMessage = "Enter your real first and last name and a 3–24 character username."
+                return
+            }
+            if await authentication.sendEmailCode(to: email, createAccount: mode == .createAccount, identity: identity) {
                 withAnimation { step = .code }
             }
         }

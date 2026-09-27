@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { calculateBalances, fingerprint, imageEtag, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseItemInput, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, SavedFilter, StoredImage, UUID } from "./types.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseItemInput, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
@@ -9,10 +9,49 @@ export class PostgresRepository implements LedgerRepository {
   async close(): Promise<void> { await this.sql.end(); }
   async checkHealth(): Promise<void> { await this.sql`SELECT 1`; }
 
+  async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
+    const first = validName(firstName, "firstName"), last = validName(lastName, "lastName"), handle = validUsername(username);
+    try {
+      const rows = await this.sql`UPDATE user_profiles SET first_name=${first}, last_name=${last}, username=${handle}, display_name=${`${first} ${last}`}, updated_at=now() WHERE id=${userId} RETURNING id, first_name, last_name, username, display_name`;
+      if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
+      const row = rows[0]!; return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name };
+    } catch (error) { if (isUniqueError(error)) throw new ApiError(409, "username is already taken", "username_taken"); throw error; }
+  }
+
+  async listFriends(userId: UUID): Promise<FriendConnection[]> {
+    const rows = await this.sql`SELECT f.id request_id, f.status, CASE WHEN f.requester_id=${userId} THEN f.addressee_id ELSE f.requester_id END user_id, CASE WHEN f.requester_id=${userId} THEN 'outgoing' ELSE 'incoming' END direction, p.display_name, p.username FROM friend_requests f JOIN user_profiles p ON p.id=CASE WHEN f.requester_id=${userId} THEN f.addressee_id ELSE f.requester_id END WHERE f.requester_id=${userId} OR f.addressee_id=${userId} ORDER BY f.status, p.display_name`;
+    return rows.map((row) => mapFriend(row, row.status === "accepted" ? "friend" : row.direction));
+  }
+
+  async requestFriend(userId: UUID, username: string): Promise<FriendConnection> {
+    const handle = validUsername(username);
+    const targets = await this.sql`SELECT id, display_name, username FROM user_profiles WHERE lower(username)=lower(${handle})`;
+    if (!targets.length) throw new ApiError(404, "username not found", "not_found");
+    const target = targets[0]!;
+    if (target.id === userId) throw new ApiError(400, "you cannot invite yourself", "invalid_input");
+    try {
+      const [row] = await this.sql`INSERT INTO friend_requests (requester_id, addressee_id) VALUES (${userId}, ${target.id}) RETURNING id, status`;
+      return { requestId: row!.id, userId: target.id, displayName: target.display_name, username: target.username, status: "pending", direction: "outgoing" };
+    } catch (error) { if (isUniqueError(error)) throw new ApiError(409, "a friendship or request already exists", "friend_exists"); throw error; }
+  }
+
+  async acceptFriend(userId: UUID, requestId: UUID): Promise<FriendConnection> {
+    return this.sql.begin(async (tx) => {
+      const rows = await tx`UPDATE friend_requests SET status='accepted', responded_at=now() WHERE id=${requestId} AND addressee_id=${userId} AND status='pending' RETURNING *`;
+      if (!rows.length) throw new ApiError(404, "pending friend request not found", "not_found");
+      const request = rows[0]!, friendId = request.requester_id;
+      const profiles = await tx`SELECT id, display_name, username FROM user_profiles WHERE id IN (${userId}, ${friendId})`;
+      const me = profiles.find((row) => row.id === userId)!, friend = profiles.find((row) => row.id === friendId)!;
+      await tx`INSERT INTO people (owner_id, display_name, linked_user_id) VALUES (${userId}, ${friend.display_name}, ${friendId}) ON CONFLICT (owner_id, linked_user_id) WHERE linked_user_id IS NOT NULL DO UPDATE SET display_name=EXCLUDED.display_name, updated_at=now()`;
+      await tx`INSERT INTO people (owner_id, display_name, linked_user_id) VALUES (${friendId}, ${me.display_name}, ${userId}) ON CONFLICT (owner_id, linked_user_id) WHERE linked_user_id IS NOT NULL DO UPDATE SET display_name=EXCLUDED.display_name, updated_at=now()`;
+      return { requestId, userId: friendId, displayName: friend.display_name, username: friend.username, status: "accepted", direction: "friend" };
+    });
+  }
+
   async upsertProfile(userId: UUID, displayName: string): Promise<Profile> {
     const trimmed = validName(displayName, "displayName");
     return this.sql.begin(async (tx) => {
-      const [row] = await tx`INSERT INTO user_profiles (id, display_name) VALUES (${userId}, ${trimmed}) ON CONFLICT (id) DO UPDATE SET display_name=EXCLUDED.display_name, updated_at=now() RETURNING id, display_name`;
+      const [row] = await tx`INSERT INTO user_profiles (id, display_name) VALUES (${userId}, ${trimmed}) ON CONFLICT (id) DO UPDATE SET display_name=CASE WHEN user_profiles.first_name IS NULL THEN EXCLUDED.display_name ELSE user_profiles.display_name END, updated_at=now() RETURNING id, display_name`;
       await tx`INSERT INTO ledgers (owner_id, currency) VALUES (${userId}, 'USD') ON CONFLICT (owner_id) DO NOTHING`;
       return { id: row!.id, displayName: row!.display_name };
     });
@@ -125,7 +164,10 @@ function mapItem(row: any): ExpenseItemInput { return { name: row.name, amountCe
 function mapAllocation(row: any): AllocationInput { return { personId: row.person_id, amountCents: Number(row.amount_cents) }; }
 function mapExpense(row: any, items: ExpenseItemInput[], allocations: AllocationInput[], evidenceIds: UUID[]): Expense { return { id: row.id, ownerId: row.owner_id, creatorId: row.creator_id, clientRequestId: row.client_request_id, description: row.description, transactionDate: String(row.transaction_date), payerPersonId: row.payer_person_id, currency: row.currency, totalCents: Number(row.total_cents), items, allocations, evidenceIds, createdAt: toIso(row.created_at) }; }
 function mapPayment(row: any): Payment { return { id: row.id, ownerId: row.owner_id, recorderId: row.recorder_id, clientRequestId: row.client_request_id, fromPersonId: row.from_person_id, toPersonId: row.to_person_id, amountCents: Number(row.amount_cents), transactionDate: String(row.transaction_date), createdAt: toIso(row.created_at) }; }
+function mapFriend(row: any, direction: FriendConnection["direction"]): FriendConnection { return { requestId: row.request_id, userId: row.user_id, displayName: row.display_name, username: row.username, status: row.status, direction }; }
 function toBytes(value: unknown): Uint8Array { if (value instanceof Uint8Array) return value; throw new Error("PostgreSQL returned an unexpected bytea value"); }
 function toIso(value: unknown): string { return value instanceof Date ? value.toISOString() : String(value); }
 function isForeignKeyError(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23503"; }
+function isUniqueError(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23505"; }
 function validName(value: string, field: string): string { const trimmed = value.trim(); if (!trimmed || trimmed.length > 100) throw new ApiError(400, `${field} must contain 1–100 characters`, "invalid_input"); return trimmed; }
+function validUsername(value: string): string { const username = value.trim().toLowerCase(); if (!/^[a-z0-9_]{3,24}$/.test(username)) throw new ApiError(400, "username must be 3–24 lowercase letters, numbers, or underscores", "invalid_input"); return username; }

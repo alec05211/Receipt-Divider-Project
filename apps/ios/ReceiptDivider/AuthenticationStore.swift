@@ -9,6 +9,10 @@ enum AppAuthenticationState: Equatable {
     case authenticated
     case configurationMissing
 }
+struct AccountIdentity: Codable, Sendable, Equatable {
+    let firstName: String; let lastName: String; let username: String
+    var displayName: String { "\(firstName) \(lastName)" }
+}
 
 @MainActor
 @Observable final class AuthenticationStore {
@@ -17,6 +21,7 @@ enum AppAuthenticationState: Equatable {
     private(set) var userID: UUID?
     private(set) var isWorking = false
     var errorMessage: String?
+    private(set) var pendingIdentity: AccountIdentity?
 
     private let client: SupabaseClient?
     private var isObserving = false
@@ -38,7 +43,7 @@ enum AppAuthenticationState: Equatable {
     }
 
     @discardableResult
-    func sendEmailCode(to address: String, createAccount: Bool) async -> Bool {
+    func sendEmailCode(to address: String, createAccount: Bool, identity: AccountIdentity? = nil) async -> Bool {
         guard let client else { return false }
         let normalizedEmail = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard Self.looksLikeEmail(normalizedEmail) else {
@@ -46,6 +51,7 @@ enum AppAuthenticationState: Equatable {
             return false
         }
 
+        pendingIdentity = createAccount ? identity : nil
         return await perform {
             try await client.auth.signInWithOTP(
                 email: normalizedEmail,
@@ -118,6 +124,7 @@ enum AppAuthenticationState: Equatable {
     }
 
     func clearError() { errorMessage = nil }
+    func identityApplied() { pendingIdentity = nil }
 
     @discardableResult
     private func perform(_ operation: () async throws -> Void) async -> Bool {

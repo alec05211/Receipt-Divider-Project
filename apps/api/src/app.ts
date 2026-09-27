@@ -36,6 +36,10 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
     const body = await jsonBody(context);
     return context.json(await repository.upsertProfile(userId(context), stringField(body, "displayName")));
   });
+  app.put("/v1/profile/identity", async (context) => {
+    const body = await jsonBody(context);
+    return context.json(await repository.updateIdentity(userId(context), stringField(body, "firstName"), stringField(body, "lastName"), stringField(body, "username")));
+  });
   app.put("/v1/profile/avatar", async (context) => {
     const image = await imageBody(context, avatarLimit);
     return context.json({ etag: await repository.putAvatar(userId(context), image.contentType, image.bytes) });
@@ -49,6 +53,14 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
     return context.json(await repository.createPerson(userId(context), stringField(body, "displayName"), linkedUserId), 201);
   });
   app.get("/v1/people", async (context) => context.json(await repository.listPeople(userId(context))));
+
+  app.get("/v1/friends", async (context) => context.json(await repository.listFriends(userId(context))));
+  app.post("/v1/friend-requests", async (context) => {
+    const body = await jsonBody(context);
+    return context.json(await repository.requestFriend(userId(context), stringField(body, "username")), 201);
+  });
+  app.post("/v1/friend-requests/:requestId/accept", async (context) => context.json(
+    await repository.acceptFriend(userId(context), requireUuid(context.req.param("requestId"), "requestId"))));
 
   app.post("/v1/saved-filters", async (context) => {
     const body = await jsonBody(context);

@@ -8,7 +8,9 @@
     "start": "tsx src/node.ts",
     "start:local": "node --env-file=.env.local --import tsx src/node.ts",
     "deploy:edge": "supabase functions deploy ledger-api --project-ref lurdfvsnscylvwvvepos --use-api --no-verify-jwt --workdir ../..",
+    "migrate:friends": "node --env-file=.env.local --import tsx scripts/apply-migration.ts db/migrations/002_profiles_and_friends.sql",
     "smoke:postgres": "node --env-file=.env.local --import tsx scripts/smoke-postgres.ts",
+    "smoke:friends": "node --env-file=.env.local --import tsx scripts/smoke-friends.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/api.test.ts"
   },

@@ -15,6 +15,8 @@ The main navigation is:
 
 Saved groups are personal named collections of people used only as transaction filters. Each transaction has its own participant list and never enters a group pool. A “Roommates” filter, for example, shows transactions involving any person in that saved collection; creating it sends no invitations and changes no balances or access rights.
 
+Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username for exact-match discovery; email remains private. The Profile screen opens a Friends list with accepted, incoming, and sent requests. Accepting a friend links that account into each person’s participant list for future expenses.
+
 ## Main receipt flow
 
 1. Tap **Add expense** and capture a receipt with the camera.

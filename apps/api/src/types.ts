@@ -1,6 +1,8 @@
 export type UUID = string;
 
 export interface Profile { id: UUID; displayName: string; }
+export interface ProfileIdentity { id: UUID; firstName: string; lastName: string; username: string; displayName: string; }
+export interface FriendConnection { requestId: UUID; userId: UUID; displayName: string; username: string; status: "pending" | "accepted"; direction: "incoming" | "outgoing" | "friend"; }
 
 export interface Person {
   id: UUID;
@@ -69,6 +71,10 @@ export interface StoredImage { contentType: string; bytes: Uint8Array; etag: str
 export interface LedgerRepository {
   checkHealth(): Promise<void>;
   upsertProfile(userId: UUID, displayName: string): Promise<Profile>;
+  updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
+  listFriends(userId: UUID): Promise<FriendConnection[]>;
+  requestFriend(userId: UUID, username: string): Promise<FriendConnection>;
+  acceptFriend(userId: UUID, requestId: UUID): Promise<FriendConnection>;
   putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string>;
   getAvatar(requesterId: UUID, userId: UUID): Promise<StoredImage | null>;
   createPerson(ownerId: UUID, displayName: string, linkedUserId?: UUID): Promise<Person>;

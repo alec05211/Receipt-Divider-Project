@@ -24,5 +24,7 @@ The app opens through a custom SwiftUI authentication gate. Email one-time codes
 - Pull to refresh in Summary reloads the server snapshot.
 - Saving an expense uploads its optional JPEG evidence first and then posts one idempotent expense command. Recording a payment follows the same server-first pattern.
 - The fixed `Person` enum is a temporary UI bridge. Replace it with server-driven people before shipping people management or arbitrary contacts.
+- New account entry collects real first name, real last name, a unique username, and private authentication email. Profile presents a system Liquid Glass Friends control on current iOS, with a bordered fallback on older supported releases.
+- Friends supports exact-username invitations, incoming acceptance, pending requests, accepted lists, and server refresh.
 
 The central API exists but is not yet connected to the iPhone ledger screens. Group invitations, profile onboarding, API synchronization, account linking, and account deletion remain to be implemented.

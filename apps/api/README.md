@@ -6,6 +6,7 @@ This is the stateless transaction-ledger backend. It uses Hono, Supabase Auth ac
 
 - One private ledger per authenticated account, initially in USD.
 - Local `people` records; a person can optionally link to a future app account but does not need one.
+- Real-name profiles, unique lowercase usernames, exact-username friend requests, and accepted account relationships. Accepting a request creates linked participant records in both ledgers.
 - Saved people filters (called groups in the UI) that have no membership, invitation, permission, or balance semantics.
 - General expenses with an explicit total, payer, date, and exact allocations. Item rows are optional.
 - Optional evidence assets for receipts, restaurant checks, ticket confirmations, and other image paper trails.
@@ -46,6 +47,10 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `PUT` | `/v1/profile/avatar` | Store the account avatar. |
 | `GET` | `/v1/users/{userId}/avatar` | Read self or a linked local person’s avatar. |
 | `POST/GET` | `/v1/people` | Create/list local people. |
+| `PUT` | `/v1/profile/identity` | Set the real first/last name and unique username. |
+| `GET` | `/v1/friends` | List accepted, incoming, and outgoing friend relationships. |
+| `POST` | `/v1/friend-requests` | Invite an account by exact username. |
+| `POST` | `/v1/friend-requests/{id}/accept` | Accept an incoming request and link both participant records. |
 | `POST/GET` | `/v1/saved-filters` | Create/list named people filters. |
 | `POST` | `/v1/evidence?kind=receipt` | Store optional evidence image bytes. |
 | `GET` | `/v1/evidence/{evidenceId}/image` | Read caller-owned evidence bytes. |
