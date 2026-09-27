@@ -79,7 +79,7 @@ struct ReceiptCaptureView: View {
     }
     private var itemSelectionScreen: some View {
         List {
-            Section { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date); TextField("Description", text: $description) } header: { Text("Receipt details") } footer: { if let dateNote { Text(dateNote) } }
+            Section { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date) } header: { Text("Receipt details") } footer: { if let dateNote { Text(dateNote) } }
             if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
             Section("Select items to share") {
                 ForEach($items) { $item in
@@ -157,7 +157,15 @@ struct ReceiptCaptureView: View {
     private var splitScreen: some View {
         List {
             Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
-            Section("Contributions") { ForEach(orderedSelection, id: \.self) { person in LabeledContent(store.name(for: person)) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) } } }
+            Section("Name") { TextField("What was this for?", text: $description) }
+            Section("Contributions") {
+                ForEach(orderedSelection, id: \.self) { person in
+                    VStack(spacing: 4) {
+                        LabeledContent(store.name(for: person)) { CentsField(title: "0.00", cents: shareBinding(for: person)).frame(width: 100) }
+                        if selectedPeople.count > 1 { ContributionSlider(name: store.name(for: person), cents: shareBinding(for: person), total: total, detent: equalShare(for: person)) }
+                    }
+                }
+            }
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
@@ -182,6 +190,12 @@ struct ReceiptCaptureView: View {
         })
     }
     /// Splits the total evenly; extra cents go to the first people in `orderedSelection`. Defaults the payer to you.
+    /// The share `setEqualSplit` gives `person`: an equal part, plus one of the leftover cents for the first people.
+    private func equalShare(for person: UUID) -> Int {
+        let people = orderedSelection
+        guard let index = people.firstIndex(of: person) else { return 0 }
+        return total / people.count + (index < total % people.count ? 1 : 0)
+    }
     private func setEqualSplit() {
         let people = orderedSelection
         guard !people.isEmpty else { return }
