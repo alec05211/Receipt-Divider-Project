@@ -160,6 +160,22 @@ test("idempotency and exact totals protect canonical expenses", async () => {
   assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", { ...input, clientRequestId: "40000000-0000-4000-8000-000000000002", totalCents: 3999 })).status, 422);
 });
 
+test("an expense may carry one of the known categories", async () => {
+  const { app } = await setupFriends();
+  const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("41000000-0000-4000-8000-000000000001", alex, [[alex, 1000], [jamie, 1000]], { category: "concert" }));
+  assert.equal(created.status, 201);
+  assert.equal((await created.json() as { category: string | null }).category, "concert");
+  const plain = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("41000000-0000-4000-8000-000000000002", alex, [[alex, 1000]]));
+  assert.equal((await plain.json() as { category: string | null }).category, null);
+  const explicitNull = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("41000000-0000-4000-8000-000000000003", alex, [[alex, 1000]], { category: null }));
+  assert.equal(explicitNull.status, 201);
+  for (const category of ["Concert", "travel", 3]) {
+    assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", expense("41000000-0000-4000-8000-000000000004", alex, [[alex, 1000]], { category }))).status, 400);
+  }
+  const shared = (await snapshot(app, jamie)).expenses as Array<{ description: string; category?: string | null }>;
+  assert.deepEqual(shared.map((item) => item.category), ["concert"]);
+});
+
 test("anyone on an expense can rename it, and each rename is recorded as a revision", async () => {
   const repository = new MemoryRepository();
   const app = createApp(repository, async (context) => context.req.header("x-user-id") ?? null);

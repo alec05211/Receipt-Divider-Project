@@ -132,7 +132,7 @@ export class MemoryRepository implements LedgerRepository {
       if (existing.fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict");
       return structuredClone(existing.value as Expense);
     }
-    const expense: Expense = { ...structuredClone(input), items: structuredClone(input.items ?? []), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
+    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: structuredClone(input.items ?? []), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
     this.expenses.push(expense); this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
     return structuredClone(expense);
   }

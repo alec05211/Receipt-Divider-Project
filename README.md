@@ -22,7 +22,7 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 2. The app reads likely item names and prices from the image.
 3. Review a multi-select list of receipt rows and confirm the items to share.
 4. Tag the friends involved, with recent people first.
-5. Confirm an equal split or enter exact contributions.
+5. Name the expense, optionally pick a category, and confirm an equal split or enter exact contributions.
 6. Save and return to Summary, or tap the + beside Save to split another expense from the same receipt.
 
 Opening an expense shows its editable name with the total and who paid on one line, then the split, the receipt image and selected items, followed by recent expenses involving the same people.
