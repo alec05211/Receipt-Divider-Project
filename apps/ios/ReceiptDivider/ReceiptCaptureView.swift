@@ -18,6 +18,8 @@ struct ReceiptCaptureView: View {
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
+    /// People whose contribution was typed in, least recent first; used to decide who absorbs the next edit.
+    @State private var editOrder: [UUID] = []
     @State private var description = "Shared groceries"
     @State private var payer: UUID?
     @State private var error: String?
@@ -171,13 +173,21 @@ struct ReceiptCaptureView: View {
         }
     }
     private func startReading() { guard let image else { return }; step = .reading; Task { @MainActor in let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan(); items = scan.items; if let date = scan.purchaseDate { purchaseDate = date; dateNote = "Purchase date read from the receipt." } else { dateNote = "No date was found on the receipt, so today is used. Change it if the purchase was earlier." }; error = scan.mismatchWarning; if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No item prices were found. Add them manually." }; step = .select } }
-    private func shareBinding(for person: UUID) -> Binding<Int> { Binding(get: { shares[person] ?? 0 }, set: { shares[person] = $0 }) }
+    /// Editing one contribution rebalances the others so they always add up to the total.
+    private func shareBinding(for person: UUID) -> Binding<Int> {
+        Binding(get: { shares[person] ?? 0 }, set: { cents in
+            editOrder.removeAll { $0 == person }
+            editOrder.append(person)
+            shares = ContributionBalancer.balance(shares, editing: person, to: cents, total: total, people: orderedSelection, editOrder: editOrder)
+        })
+    }
     /// Splits the total evenly; extra cents go to the first people in `orderedSelection`. Defaults the payer to you.
     private func setEqualSplit() {
         let people = orderedSelection
         guard !people.isEmpty else { return }
         let base = total / people.count, remainder = total % people.count
         shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) })
+        editOrder = []
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : people.first }
     }
     private func save() {
@@ -198,8 +208,35 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; editOrder = []; personSearch = ""; purchaseDate = Date(); dateNote = nil; error = nil; description = "Shared groceries" }
     private func back() { switch step { case .select: step = .capture; case .people: personSearch = ""; step = .select; case .split: step = .people; default: break } }
+}
+
+enum ContributionBalancer {
+    /// Sets `person`'s contribution (capped to 0…`total`) and adjusts the others so everyone adds up to `total`.
+    /// The difference goes to whoever was edited least recently: people never edited come first, in `people` order,
+    /// then those in `editOrder` from oldest. When someone would drop below zero, the rest carries to the next person.
+    /// With only one person, their contribution is always the whole total.
+    static func balance(_ shares: [UUID: Int], editing person: UUID, to cents: Int, total: Int, people: [UUID], editOrder: [UUID]) -> [UUID: Int] {
+        let others = people.filter { $0 != person }
+        var result = shares.filter { people.contains($0.key) }
+        guard !others.isEmpty else { result[person] = total; return result }
+        let value = min(max(cents, 0), total)
+        result[person] = value
+        let recency = Dictionary(editOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: max)
+        let absorbers = others.enumerated().sorted { a, b in
+            let (ra, rb) = (recency[a.element] ?? -1, recency[b.element] ?? -1)
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+        var difference = total - value - others.reduce(0) { $0 + (result[$1] ?? 0) }
+        for other in absorbers where difference != 0 {
+            let current = result[other] ?? 0
+            let adjusted = max(0, current + difference)
+            result[other] = adjusted
+            difference -= adjusted - current
+        }
+        return result
+    }
 }
 
 private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).background(.bar).disabled(disabled) } }
