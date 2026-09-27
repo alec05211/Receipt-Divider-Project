@@ -26,7 +26,7 @@ struct SettingsView: View {
                 Section("App") { LabeledContent("Currency", value: "USD"); LabeledContent("Ledger", value: "Supabase"); LabeledContent("Receipt storage", value: "Supabase database") }
                 Section {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
-                } header: { Text("Contribution sliders") } footer: { Text("Sliders tick at every whole dollar or whole percent of the total as you drag.") }
+                } header: { Text("Contribution sliders") } footer: { Text("Sliders show each contribution in both dollars and percent of the total, with this unit on top and the other beneath it. They snap firmly to the equal share, lightly to every whole unit of this one, and faintly to the other.") }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
             }
             .navigationTitle("Settings")
