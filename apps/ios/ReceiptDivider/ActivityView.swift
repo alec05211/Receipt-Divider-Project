@@ -11,23 +11,7 @@ struct ActivityView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section { BalanceCard(balance: store.netBalance).listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
-                let groups = BalanceText.grouped(store.openBalances)
-                if !groups.isEmpty {
-                    Section("Balances") {
-                        ForEach(groups) { group in
-                            if group.people.count == 1, let person = group.people.first {
-                                Button { settleUpPerson = person.id } label: { BalanceRow(group: group) }.foregroundStyle(.primary)
-                            } else {
-                                // Several people share this row, so ask which one the payment is with.
-                                Menu {
-                                    Section("Record a payment with") { ForEach(group.people) { person in Button(person.name) { settleUpPerson = person.id } } }
-                                } label: { BalanceRow(group: group) }
-                                .foregroundStyle(.primary)
-                            }
-                        }
-                    }
-                }
+                Section { BalanceCard(balance: store.netBalance, balances: store.openBalances) { settleUpPerson = $0 }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
                 Section("Expenses") {
                     if expenses.isEmpty { ContentUnavailableView("No shared expenses", systemImage: "receipt", description: Text("Add a receipt to start your shared history.")) }
                     else { ForEach(expenses) { expense in NavigationLink { ExpenseDetailView(expense: expense) } label: { ExpenseRow(expense: expense) } } }
@@ -48,12 +32,38 @@ struct ActivityView: View {
         try? await store.refresh(accessToken: token)
     }
 }
+/// The overall balance, a one-line summary of who's involved, and a disclosure of each person's balance.
 private struct BalanceCard: View {
     let balance: Int
+    let balances: [(person: LedgerPerson, cents: Int)]
+    /// Called with the person whose balance row was tapped.
+    let settleUp: (UUID) -> Void
+    @State private var isExpanded = false
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(balance.usd).font(.title.bold()).foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
             Text(balance == 0 ? "All settled up" : balance > 0 ? "You’re owed in total" : "You owe in total").font(.subheadline)
+            if !balances.isEmpty {
+                Button { withAnimation(.snappy) { isExpanded.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Text(BalanceText.summary(balances)).multilineTextAlignment(.leading)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    .font(.subheadline).foregroundStyle(.secondary).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+                if isExpanded {
+                    VStack(spacing: 0) {
+                        ForEach(Array(balances.enumerated()), id: \.element.person.id) { index, entry in
+                            if index > 0 { Divider().padding(.leading, 42) }
+                            Button { settleUp(entry.person.id) } label: { BalanceRow(person: entry.person, cents: entry.cents) }.buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 8)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
         }
         .foregroundStyle(.primary)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -62,17 +72,18 @@ private struct BalanceCard: View {
         .padding(.vertical, 4)
     }
 }
-/// One person's balance with their photo, or several people's shared balance with overlapping photos.
+/// One person's balance with their photo; tapping it opens Settle up with them.
 private struct BalanceRow: View {
-    let group: BalanceGroup
+    let person: LedgerPerson
+    let cents: Int
     var body: some View {
         HStack(spacing: 12) {
-            if group.people.count == 1, let person = group.people.first { AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 30) }
-            else { AvatarStack(people: group.people.map(\.id), size: 30) }
-            Text(group.text).multilineTextAlignment(.leading)
+            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 30)
+            Text(BalanceText.describe(cents, name: person.name)).multilineTextAlignment(.leading)
             Spacer()
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
     }
 }
