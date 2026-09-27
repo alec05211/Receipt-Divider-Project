@@ -2,9 +2,14 @@
 set -euo pipefail
 
 IOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Values pasted into GitHub variables can carry stray whitespace or newlines.
+trim() { local value="$1"; value="${value#"${value%%[![:space:]]*}"}"; printf '%s' "${value%"${value##*[![:space:]]}"}"; }
+IPHONE_ID="$(trim "${IPHONE_ID:-}")"
 : "${IPHONE_ID:?Set IPHONE_ID to the paired iPhone identifier from xcrun devicectl list devices}"
+IOS_SIGNING_CONFIG="$(trim "${IOS_SIGNING_CONFIG:-}")"
 SIGNING_CONFIG="${IOS_SIGNING_CONFIG:-$IOS_DIR/Signing.local.xcconfig}"
 DERIVED_DATA="${IOS_DERIVED_DATA:-$IOS_DIR/build/wireless}"
+LAUNCH_APP="$(trim "${LAUNCH_APP:-}")"
 LAUNCH_APP="${LAUNCH_APP:-false}"
 
 if [[ "$LAUNCH_APP" != true && "$LAUNCH_APP" != false ]]; then
