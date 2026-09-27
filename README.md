@@ -4,7 +4,7 @@ Receipt Divider is a mobile-first general expense-sharing app. Receipt capture i
 
 ## Current direction
 
-The native iPhone app is the product reference client. It uses SwiftUI system components so current iOS can provide its native navigation, Liquid Glass treatment, and haptic feedback. A custom Supabase authentication gate makes email one-time codes the primary sign-in/create-account flow, provides native Sign in with Apple, and restores prior device sessions. The existing web prototype remains a workflow reference only.
+The native iPhone app is the product reference client. It uses SwiftUI system components so current iOS can provide its native navigation, Liquid Glass treatment, and haptic feedback. A custom Supabase authentication gate makes email and password the primary sign-in/create-account flow, provides native Sign in with Apple, and restores prior device sessions. The existing web prototype remains a workflow reference only.
 
 The main navigation is:
 
@@ -54,11 +54,12 @@ Open `http://127.0.0.1:4173` in a browser.
 ## Build the native iPhone app on a Mac
 
 1. Install the newest Xcode and XcodeGen.
-2. Verify the configured Supabase project URL and publishable key in `apps/ios/project.yml` as described in `apps/ios/README.md`.
-3. Open Terminal in `apps/ios` and run `xcodegen generate`.
-4. Open `ReceiptDivider.xcodeproj` in Xcode.
-5. Select an iPhone running a current iOS release and run the app.
-6. Allow Camera and Photo Library access when prompted.
+2. Configure the Supabase project URL and publishable key in `apps/ios/project.yml` as described in `apps/ios/README.md`.
+3. Copy `apps/ios/Signing.local.xcconfig.example` to `apps/ios/Signing.local.xcconfig` and set your Apple Developer team ID. This file is gitignored. On a free Personal Team, also uncomment `CODE_SIGN_ENTITLEMENTS =` there, since Sign in with Apple needs a paid membership.
+4. Open Terminal in `apps/ios` and run `xcodegen generate`.
+5. Open `ReceiptDivider.xcodeproj` in Xcode.
+6. Select an iPhone running a current iOS release and run the app.
+7. Allow Camera and Photo Library access when prompted.
 
 The native app now restores a Supabase session, provisions its account ledger, downloads canonical transactions and balances from the deployed Edge Function, and posts new expenses, optional receipt evidence, and repayments back to Supabase. It retains an account-scoped device cache for display continuity. Capture and text recognition remain on-device, and users still review editable receipt items and exact-cent splits before upload.
 

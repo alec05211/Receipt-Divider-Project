@@ -1,0 +1,7 @@
+// Copy to Signing.local.xcconfig and set your Apple Developer team ID
+// (Xcode > Settings > Accounts, or developer.apple.com > Membership).
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+
+// Free Personal Teams can't use the Sign in with Apple capability. Uncomment to
+// build without it; email sign-in still works, but the Apple button won't.
+// CODE_SIGN_ENTITLEMENTS =

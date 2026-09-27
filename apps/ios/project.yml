@@ -17,17 +17,28 @@ targets:
       - path: ReceiptDivider
     dependencies:
       - package: Supabase
+    info:
+      path: ReceiptDivider/Info.plist
+      properties:
+        SUPABASE_URL: $(SUPABASE_URL)
+        SUPABASE_PUBLISHABLE_KEY: $(SUPABASE_PUBLISHABLE_KEY)
+        API_BASE_URL: $(API_BASE_URL)
+        CFBundleURLTypes:
+          - CFBundleURLName: com.receiptdivider.app.auth
+            CFBundleURLSchemes: [receiptdivider]
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.receiptdivider.app
         PRODUCT_NAME: Receipt Divider
         GENERATE_INFOPLIST_FILE: YES
-        CODE_SIGN_ENTITLEMENTS: ReceiptDivider/ReceiptDivider.entitlements
         INFOPLIST_KEY_CFBundleDisplayName: Receipt Divider
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Choose a receipt photo to review and split with your group.
         INFOPLIST_KEY_NSCameraUsageDescription: Take a photo of a receipt to review and split with your group.
-        INFOPLIST_KEY_SUPABASE_URL: https://lurdfvsnscylvwvvepos.supabase.co
-        INFOPLIST_KEY_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ooNI0Eex792fD6MGp6XX_g_QofO07OY
-        INFOPLIST_KEY_API_BASE_URL: https://lurdfvsnscylvwvvepos.supabase.co/functions/v1/ledger-api
+        SUPABASE_URL: https://lurdfvsnscylvwvvepos.supabase.co
+        SUPABASE_PUBLISHABLE_KEY: sb_publishable_ooNI0Eex792fD6MGp6XX_g_QofO07OY
+        API_BASE_URL: https://lurdfvsnscylvwvvepos.supabase.co/functions/v1/ledger-api

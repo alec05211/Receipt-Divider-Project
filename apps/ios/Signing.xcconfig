@@ -1,0 +1,6 @@
+// Shared signing settings. Per-developer values live in Signing.local.xcconfig,
+// which is gitignored; copy Signing.local.xcconfig.example to create it.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_ENTITLEMENTS = ReceiptDivider/ReceiptDivider.entitlements
+
+#include? "Signing.local.xcconfig"
