@@ -1,6 +1,6 @@
 import postgres from "postgres";
-import { calculateBalances, fingerprint, imageEtag, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseItemInput, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UUID } from "./types.ts";
+import { calculateBalances, fingerprint, imageEtag, searchTerm, validateExpense, validatePayment } from "./domain.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseItemInput, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
@@ -16,6 +16,23 @@ export class PostgresRepository implements LedgerRepository {
       if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
       const row = rows[0]!; return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name };
     } catch (error) { if (isUniqueError(error)) throw new ApiError(409, "username is already taken", "username_taken"); throw error; }
+  }
+
+  async searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]> {
+    const prefix = `${searchTerm(query).replace(/[\\%_]/g, "\\$&")}%`;
+    const rows = await this.sql`
+      SELECT p.id, p.display_name, p.username, p.avatar_etag IS NOT NULL has_avatar, f.id request_id, f.status, f.requester_id
+      FROM user_profiles p
+      LEFT JOIN friend_requests f ON f.pair_low=least(p.id, ${userId}::uuid) AND f.pair_high=greatest(p.id, ${userId}::uuid)
+      WHERE p.id<>${userId} AND p.username IS NOT NULL
+        AND (p.username ILIKE ${prefix} OR p.first_name ILIKE ${prefix} OR p.last_name ILIKE ${prefix} OR p.display_name ILIKE ${prefix})
+      ORDER BY p.display_name, p.username LIMIT 20`;
+    return rows.map((row) => {
+      const relationship = !row.request_id ? "none" : row.status === "accepted" ? "friend" : row.requester_id === userId ? "outgoing" : "incoming";
+      const result: UserSearchResult = { userId: row.id, displayName: row.display_name, username: row.username, hasAvatar: row.has_avatar, relationship };
+      if (row.request_id) result.requestId = row.request_id;
+      return result;
+    });
   }
 
   async listFriends(userId: UUID): Promise<FriendConnection[]> {
@@ -68,7 +85,7 @@ export class PostgresRepository implements LedgerRepository {
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found"); return etag;
   }
   async getAvatar(requesterId: UUID, userId: UUID): Promise<StoredImage | null> {
-    const rows = await this.sql`SELECT avatar_content_type, avatar_data, avatar_etag FROM user_profiles p WHERE p.id=${userId} AND p.avatar_data IS NOT NULL AND (p.id=${requesterId} OR EXISTS (SELECT 1 FROM people WHERE owner_id=${requesterId} AND linked_user_id=p.id))`;
+    const rows = await this.sql`SELECT avatar_content_type, avatar_data, avatar_etag FROM user_profiles p WHERE p.id=${userId} AND p.avatar_data IS NOT NULL AND (p.id=${requesterId} OR p.username IS NOT NULL OR EXISTS (SELECT 1 FROM people WHERE owner_id=${requesterId} AND linked_user_id=p.id))`;
     if (!rows.length) return null; const row = rows[0]!; return { contentType: row.avatar_content_type, bytes: toBytes(row.avatar_data), etag: row.avatar_etag };
   }
 

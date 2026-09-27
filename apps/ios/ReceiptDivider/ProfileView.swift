@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 struct ProfileView: View {
@@ -14,13 +15,16 @@ struct ProfileView: View {
                 Section("Your balance") { LabeledContent("Current balance", value: store.alexBalance.usd); NavigationLink { SettleUpView() } label: { Label("Record a payment", systemImage: "arrow.left.arrow.right") } }
             }
             .navigationTitle("Profile")
+            .task {
+                if let token = try? await authentication.accessToken() { try? await store.refreshFriends(accessToken: token) }
+            }
         }
     }
 
     private var profileHeader: some View {
         let name = store.profile?.displayName
         return HStack(spacing: 14) {
-            Text(name.map { String($0.prefix(1)) } ?? "?").font(.title3.weight(.bold)).foregroundStyle(.white).frame(width: 52, height: 52).background(.gray, in: Circle())
+            AvatarView(userID: authentication.userID, name: name, size: 52).id(store.avatarVersion)
             VStack(alignment: .leading) {
                 Text(name ?? "Add your name").font(.headline)
                 if let username = store.profile?.username { Text("@\(username)").font(.subheadline).foregroundStyle(.secondary) }
@@ -61,6 +65,8 @@ struct EditProfileView: View {
     @State private var username = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var photoItem: PhotosPickerItem?
+    @State private var isUploadingPhoto = false
 
     private var identity: AccountIdentity {
         AccountIdentity(
@@ -77,6 +83,18 @@ struct EditProfileView: View {
     var body: some View {
         Form {
             Section {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 10) {
+                        AvatarView(userID: authentication.userID, name: store.profile?.displayName, size: 88).id(store.avatarVersion)
+                        PhotosPicker(isUploadingPhoto ? "Uploading…" : "Choose photo", selection: $photoItem, matching: .images)
+                            .disabled(isUploadingPhoto)
+                    }
+                    Spacer()
+                }
+            }
+            .listRowBackground(Color.clear)
+            Section {
                 TextField("First name", text: $firstName).textContentType(.givenName)
                 TextField("Last name", text: $lastName).textContentType(.familyName)
             } footer: { Text("Friends see your first and last name.") }
@@ -85,6 +103,7 @@ struct EditProfileView: View {
             } footer: { Text("3–24 lowercase letters, numbers, or underscores. Friends find you by username.") }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
         }
+        .onChange(of: photoItem) { _, item in if let item { uploadPhoto(item) } }
         .navigationTitle("Edit profile")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -96,6 +115,24 @@ struct EditProfileView: View {
             firstName = store.profile?.firstName ?? ""
             lastName = store.profile?.lastName ?? ""
             username = store.profile?.username ?? ""
+        }
+    }
+
+    private func uploadPhoto(_ item: PhotosPickerItem) {
+        guard let userID = authentication.userID else { return }
+        isUploadingPhoto = true
+        errorMessage = nil
+        Task {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
+                    throw LedgerAPIClientError.invalidResponse
+                }
+                try await store.uploadAvatar(image, userID: userID, accessToken: try await authentication.accessToken())
+            } catch {
+                errorMessage = "Couldn’t update your photo. \(error.localizedDescription)"
+            }
+            photoItem = nil
+            isUploadingPhoto = false
         }
     }
 

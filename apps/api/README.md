@@ -46,9 +46,10 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `PUT` | `/v1/profile` | Create the account profile and ledger if missing; returns the profile. |
 | `GET` | `/v1/profile` | Read the caller's name, username, and display name. |
 | `PUT` | `/v1/profile/avatar` | Store the account avatar. |
-| `GET` | `/v1/users/{userId}/avatar` | Read self or a linked local person’s avatar. |
+| `GET` | `/v1/users/{userId}/avatar` | Read your own avatar, a linked person’s, or that of any user who has set a username (and so appears in search). |
 | `POST/GET` | `/v1/people` | Create/list local people. |
 | `PUT` | `/v1/profile/identity` | Set the real first/last name and unique username. The display name is always derived as "First Last". |
+| `GET` | `/v1/users/search?q=` | Find users whose first name, last name, or username starts with `q` (2–60 characters, up to 20 results), with each one’s relationship to the caller. |
 | `GET` | `/v1/friends` | List accepted, incoming, and outgoing friend relationships. |
 | `POST` | `/v1/friend-requests` | Invite an account by exact username. |
 | `POST` | `/v1/friend-requests/{id}/accept` | Accept an incoming request and link both participant records. |

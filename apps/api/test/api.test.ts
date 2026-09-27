@@ -76,6 +76,18 @@ test("display name is derived from first and last name", async () => {
   assert.equal(profile.displayName, "Alex Rivera"); assert.equal(profile.username, "alex_r");
 });
 
+test("user search matches first name, last name, and username prefixes", async () => {
+  const { app } = await setup();
+  assert.equal((await jsonRequest(app, "/v1/profile/identity", alex, "PUT", { firstName: "Alex", lastName: "Rivera", username: "arivera" })).status, 200);
+  assert.equal((await jsonRequest(app, "/v1/profile/identity", stranger, "PUT", { firstName: "Sam", lastName: "Stone", username: "rocky" })).status, 200);
+  async function search(query: string) { return await (await request(app, `/v1/users/search?q=${encodeURIComponent(query)}`, alex)).json() as Array<{ username: string; relationship: string }>; }
+  assert.deepEqual((await search("sa")).map((user) => user.username), ["rocky"]);
+  assert.deepEqual((await search("STO")).map((user) => user.username), ["rocky"]);
+  assert.deepEqual((await search("rock")).map((user) => user.relationship), ["none"]);
+  assert.deepEqual(await search("ar"), []);
+  assert.equal((await request(app, "/v1/users/search?q=s", alex)).status, 400);
+});
+
 test("Supabase JWT authentication accepts only signed authenticated-user tokens", async () => {
   const projectUrl = "https://receipt-divider.supabase.co", issuer = `${projectUrl}/auth/v1`, { publicKey, privateKey } = await generateKeyPair("ES256");
   const publicJwk = await exportJWK(publicKey); publicJwk.kid = "test-key"; publicJwk.alg = "ES256";

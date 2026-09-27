@@ -52,6 +52,7 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   });
   app.get("/v1/people", async (context) => context.json(await repository.listPeople(userId(context))));
 
+  app.get("/v1/users/search", async (context) => context.json(await repository.searchUsers(userId(context), context.req.query("q") ?? "")));
   app.get("/v1/friends", async (context) => context.json(await repository.listFriends(userId(context))));
   app.post("/v1/friend-requests", async (context) => {
     const body = await jsonBody(context);

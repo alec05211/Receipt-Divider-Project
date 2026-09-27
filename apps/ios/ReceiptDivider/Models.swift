@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 struct ReceiptItem: Identifiable, Hashable, Codable {
     var id = UUID(); var name: String; var cents: Int
@@ -72,6 +73,10 @@ enum Person: String, CaseIterable, Identifiable, Codable {
     private(set) var isSyncing = false
     private(set) var friends: [APIFriend] = []
     private(set) var profile: APIProfile?
+    /// Loaded profile pictures; nil records a user known to have none, so it isn't fetched again.
+    private var avatars: [UUID: UIImage?] = [:]
+    /// Bumped when the signed-in user's own picture changes, so views showing it reload.
+    private(set) var avatarVersion = 0
     var syncError: String?
     var expenses: [Expense] = [] { didSet { persist() } }
     var payments: [Payment] = [] { didSet { persist() } }
@@ -117,6 +122,36 @@ enum Person: String, CaseIterable, Identifiable, Codable {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         apply(try await api.snapshot(token: accessToken))
     }
+    func searchUsers(_ query: String, accessToken: String) async throws -> [APIUserResult] {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        return try await api.searchUsers(query: query, token: accessToken)
+    }
+
+    func avatar(for userID: UUID, accessToken: String) async -> UIImage? {
+        if let cached = avatars[userID] { return cached }
+        guard let api, let data = try? await api.avatar(userID: userID, token: accessToken) else {
+            avatars[userID] = .some(nil)
+            return nil
+        }
+        let image = UIImage(data: data)
+        avatars[userID] = .some(image)
+        return image
+    }
+
+    /// Uploads a square, 512-point JPEG of the chosen photo as the signed-in user's profile picture.
+    func uploadAvatar(_ image: UIImage, userID: UUID, accessToken: String) async throws {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        let side = min(image.size.width, image.size.height)
+        let crop = CGRect(x: (image.size.width - side) / 2, y: (image.size.height - side) / 2, width: side, height: side)
+        let resized = UIGraphicsImageRenderer(size: CGSize(width: 512, height: 512)).image { _ in
+            image.draw(in: CGRect(x: -crop.minX * 512 / side, y: -crop.minY * 512 / side, width: image.size.width * 512 / side, height: image.size.height * 512 / side))
+        }
+        guard let jpeg = resized.jpegData(compressionQuality: 0.8) else { throw LedgerAPIClientError.invalidResponse }
+        try await api.uploadAvatar(jpeg, token: accessToken)
+        avatars[userID] = .some(resized)
+        avatarVersion += 1
+    }
+
     func updateProfile(_ identity: AccountIdentity, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         profile = try await api.updateIdentity(identity, token: accessToken)
@@ -124,7 +159,26 @@ enum Person: String, CaseIterable, Identifiable, Codable {
     var friendCount: Int { friends.filter { $0.status == "accepted" }.count }
     func refreshFriends(accessToken: String) async throws { guard let api else { throw LedgerAPIClientError.configurationMissing }; friends = try await api.friends(token: accessToken) }
     func requestFriend(username: String, accessToken: String) async throws { guard let api else { throw LedgerAPIClientError.configurationMissing }; _ = try await api.requestFriend(username: username, token: accessToken); try await refreshFriends(accessToken: accessToken) }
-    func acceptFriend(_ requestID: UUID, accessToken: String) async throws { guard let api else { throw LedgerAPIClientError.configurationMissing }; _ = try await api.acceptFriend(requestID: requestID, token: accessToken); try await refreshFriends(accessToken: accessToken); try await refresh(accessToken: accessToken) }
+    /// Shows the friend as accepted immediately, and restores the request if the server rejects it.
+    func acceptFriend(_ requestID: UUID, accessToken: String) async throws {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        guard let index = friends.firstIndex(where: { $0.requestId == requestID }) else {
+            _ = try await api.acceptFriend(requestID: requestID, token: accessToken)
+            try await refreshFriends(accessToken: accessToken)
+            try await refresh(accessToken: accessToken)
+            return
+        }
+        let pending = friends[index]
+        friends[index] = APIFriend(requestId: pending.requestId, userId: pending.userId, displayName: pending.displayName, username: pending.username, status: "accepted", direction: "friend")
+        do {
+            _ = try await api.acceptFriend(requestID: requestID, token: accessToken)
+        } catch {
+            if let index = friends.firstIndex(where: { $0.requestId == requestID }) { friends[index] = pending }
+            throw error
+        }
+        try await refreshFriends(accessToken: accessToken)
+        try await refresh(accessToken: accessToken)
+    }
 
     func add(_ expense: Expense, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
@@ -189,6 +243,7 @@ enum Person: String, CaseIterable, Identifiable, Codable {
         activeUserID = nil
         hasLoadedRemoteData = false
         profile = nil
+        avatars = [:]
         personIDs = [:]
         serverBalances = [:]
         expenses = []

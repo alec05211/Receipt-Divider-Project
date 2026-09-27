@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, fingerprint, imageEtag, validateExpense, validatePayment } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UUID } from "./types.ts";
+import { calculateBalances, fingerprint, imageEtag, searchTerm, validateExpense, validatePayment } from "./domain.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerRepository, LedgerSnapshot, Payment, Person, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; }
@@ -26,6 +26,14 @@ export class MemoryRepository implements LedgerRepository {
     if (!this.profiles.has(userId)) throw new ApiError(404, "profile not found", "not_found");
     const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: username.trim().toLowerCase(), displayName: `${firstName.trim()} ${lastName.trim()}` };
     this.identities.set(userId, identity); this.profiles.set(userId, identity); return identity;
+  }
+  async searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]> {
+    const term = searchTerm(query).toLowerCase();
+    return [...this.identities.values()]
+      .filter((identity) => identity.id !== userId && [identity.username, identity.firstName, identity.lastName, identity.displayName].some((field) => field.toLowerCase().startsWith(term)))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName))
+      .slice(0, 20)
+      .map((identity) => ({ userId: identity.id, displayName: identity.displayName, username: identity.username, hasAvatar: this.avatars.has(identity.id), relationship: "none" }));
   }
   async listFriends(userId: UUID): Promise<FriendConnection[]> { return this.friendships.get(userId) ?? []; }
   async requestFriend(): Promise<FriendConnection> { throw new ApiError(404, "username not found", "not_found"); }
@@ -56,7 +64,7 @@ export class MemoryRepository implements LedgerRepository {
   async getAvatar(requesterId: UUID, userId: UUID): Promise<StoredImage | null> {
     this.requireOwner(requesterId);
     const linked = (this.people.get(requesterId) ?? []).some((person) => person.linkedUserId === userId);
-    if (requesterId !== userId && !linked) throw new ApiError(403, "avatar is not visible to this user", "forbidden");
+    if (requesterId !== userId && !linked && !this.identities.has(userId)) throw new ApiError(403, "avatar is not visible to this user", "forbidden");
     return this.avatars.get(userId) ?? null;
   }
 

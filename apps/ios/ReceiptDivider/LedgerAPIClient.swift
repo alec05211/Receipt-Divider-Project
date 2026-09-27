@@ -51,6 +51,23 @@ actor LedgerAPIClient {
         )
     }
 
+    func searchUsers(query: String, token: String) async throws -> [APIUserResult] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        return try await send(path: "/v1/users/search?q=\(encoded)", token: token)
+    }
+
+    /// Returns nil when the user has no profile picture (or it isn't visible to the caller).
+    func avatar(userID: UUID, token: String) async throws -> Data? {
+        let (data, status) = try await perform(path: "/v1/users/\(userID.uuidString.lowercased())/avatar", method: "GET", token: token, contentType: nil, body: nil)
+        if status == 404 || status == 403 { return nil }
+        try check(data: data, status: status)
+        return data
+    }
+
+    func uploadAvatar(_ jpeg: Data, token: String) async throws {
+        _ = try await send(path: "/v1/profile/avatar", method: "PUT", token: token, contentType: "image/jpeg", body: jpeg) as APIAvatarUpload
+    }
+
     func friends(token: String) async throws -> [APIFriend] { try await send(path: "/v1/friends", token: token) }
     func requestFriend(username: String, token: String) async throws -> APIFriend {
         try await send(path: "/v1/friend-requests", method: "POST", token: token, body: encoder.encode(FriendRequest(username: username)))
@@ -88,24 +105,32 @@ actor LedgerAPIClient {
         contentType: String = "application/json",
         body: Data? = nil
     ) async throws -> Response {
+        let (data, status) = try await perform(path: path, method: method, token: token, contentType: body == nil ? nil : contentType, body: body)
+        try check(data: data, status: status)
+        do { return try decoder.decode(Response.self, from: data) }
+        catch { throw LedgerAPIClientError.invalidResponse }
+    }
+
+    private func perform(path: String, method: String, token: String, contentType: String?, body: Data?) async throws -> (Data, Int) {
         guard let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
             throw LedgerAPIClientError.configurationMissing
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if body != nil { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         request.httpBody = body
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw LedgerAPIClientError.invalidResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            let message = (try? decoder.decode(APIErrorEnvelope.self, from: data).error.message)
-                ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-            throw LedgerAPIClientError.requestFailed(status: http.statusCode, message: message)
-        }
-        do { return try decoder.decode(Response.self, from: data) }
-        catch { throw LedgerAPIClientError.invalidResponse }
+        return (data, http.statusCode)
+    }
+
+    private func check(data: Data, status: Int) throws {
+        guard !(200..<300).contains(status) else { return }
+        let message = (try? decoder.decode(APIErrorEnvelope.self, from: data).error.message)
+            ?? HTTPURLResponse.localizedString(forStatusCode: status)
+        throw LedgerAPIClientError.requestFailed(status: status, message: message)
     }
 }
 
@@ -165,6 +190,14 @@ struct APILedgerSnapshot: Decodable, Sendable {
     let payments: [APIPayment]
     let balances: [String: Int]
 }
+/// A user found by search; `relationship` is "none", "outgoing", "incoming", or "friend".
+struct APIUserResult: Decodable, Identifiable, Sendable {
+    let userId: UUID; let displayName: String; let username: String; let hasAvatar: Bool
+    var relationship: String; let requestId: UUID?
+    var id: UUID { userId }
+}
+private struct APIAvatarUpload: Decodable { let etag: String }
+
 struct APIFriend: Decodable, Identifiable, Sendable {
     let requestId: UUID; let userId: UUID; let displayName: String; let username: String
     let status: String; let direction: String

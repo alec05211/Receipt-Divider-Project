@@ -3,6 +3,9 @@ export type UUID = string;
 /** A profile exists as soon as the user signs in; the name fields stay null until they set them. */
 export interface Profile { id: UUID; firstName: string | null; lastName: string | null; username: string | null; displayName: string | null; }
 export interface ProfileIdentity { id: UUID; firstName: string; lastName: string; username: string; displayName: string; }
+/** Where the searcher stands with a search result: no request, a request either way, or already friends. */
+export type Relationship = "none" | "outgoing" | "incoming" | "friend";
+export interface UserSearchResult { userId: UUID; displayName: string; username: string; hasAvatar: boolean; relationship: Relationship; requestId?: UUID; }
 export interface FriendConnection { requestId: UUID; userId: UUID; displayName: string; username: string; status: "pending" | "accepted"; direction: "incoming" | "outgoing" | "friend"; }
 
 export interface Person {
@@ -74,6 +77,7 @@ export interface LedgerRepository {
   ensureProfile(userId: UUID): Promise<Profile>;
   getProfile(userId: UUID): Promise<Profile>;
   updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
+  searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]>;
   listFriends(userId: UUID): Promise<FriendConnection[]>;
   requestFriend(userId: UUID, username: string): Promise<FriendConnection>;
   acceptFriend(userId: UUID, requestId: UUID): Promise<FriendConnection>;

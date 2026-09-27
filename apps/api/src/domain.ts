@@ -13,6 +13,13 @@ export function requireUuid(value: unknown, field: string): UUID {
   return value;
 }
 
+/** Trims a user search query; 2–60 characters keeps results relevant and discourages listing everyone. */
+export function searchTerm(value: string): string {
+  const term = value.trim().replace(/\s+/g, " ");
+  if (term.length < 2 || term.length > 60) throw new ApiError(400, "search must contain 2–60 characters", "invalid_input");
+  return term;
+}
+
 export function requireCurrency(value: unknown): string {
   if (typeof value !== "string" || !currencyPattern.test(value)) {
     throw new ApiError(400, "currency must be a three-letter uppercase code", "invalid_input");
