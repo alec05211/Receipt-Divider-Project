@@ -9,7 +9,7 @@ struct PaymentsView: View {
     var body: some View {
         List {
             if payments.isEmpty {
-                ContentUnavailableView("No payments", systemImage: "arrow.left.arrow.right.circle", description: Text("Payments you record when settling up appear here."))
+                ContentUnavailableView("No payments", systemImage: "arrow.left.arrow.right.circle")
             } else {
                 ForEach(payments) { PaymentRow(payment: $0) }
             }

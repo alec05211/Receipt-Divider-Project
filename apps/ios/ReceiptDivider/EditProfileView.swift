@@ -42,10 +42,10 @@ struct EditProfileView: View {
             Section {
                 TextField("First name", text: $firstName).textContentType(.givenName).submitLabel(.done)
                 TextField("Last name", text: $lastName).textContentType(.familyName).submitLabel(.done)
-            } footer: { Text("Friends see your first and last name.") }
+            }
             Section {
                 TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.done)
-            } footer: { Text("3–24 lowercase letters, numbers, or underscores. Friends find you by username.") }
+            } footer: { Text("3–24 lowercase letters, numbers, or underscores.") }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
         }
         .onChange(of: photoItem) { _, item in if let item { uploadPhoto(item) } }

@@ -11,11 +11,18 @@ struct SettingsView: View {
             List {
                 Section {
                     NavigationLink { EditProfileView() } label: { profileHeader }
-                    if let email = authentication.email { LabeledContent("Signed in as", value: email) }
-                    Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right") {
-                        Task { await authentication.signOut() }
+                    HStack {
+                        if let email = authentication.email {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Signed in as").font(.caption).foregroundStyle(.secondary)
+                                Text(email).lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                        Spacer()
+                        Button("Sign out") { Task { await authentication.signOut() } }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            .disabled(authentication.isWorking)
                     }
-                    .disabled(authentication.isWorking)
                 }
                 Section {
                     NavigationLink { FriendsView() } label: {
@@ -23,10 +30,10 @@ struct SettingsView: View {
                     }
                     NavigationLink { PaymentsView() } label: { Label("Payments", systemImage: "arrow.left.arrow.right.circle") }
                 }
-                Section("App") { LabeledContent("Currency", value: "USD"); LabeledContent("Ledger", value: "Supabase"); LabeledContent("Receipt storage", value: "Supabase database") }
-                Section {
+                Section("App") { LabeledContent("Currency", value: "USD") }
+                Section("Contribution sliders") {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
-                } header: { Text("Contribution sliders") } footer: { Text("Sliders show each contribution in both dollars and percent of the total, with this unit on top and the other beneath it. They snap firmly to the equal share, lightly to every whole unit of this one, and faintly to the other.") }
+                }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
             }
             .navigationTitle("Settings")
