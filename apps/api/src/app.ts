@@ -84,6 +84,10 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
 
   app.post("/v1/expenses", async (context) => context.json(
     await repository.createExpense(userId(context), await jsonBody(context) as unknown as CreateExpenseInput), 201));
+  app.patch("/v1/expenses/:expenseId", async (context) => {
+    const description = stringField(await jsonBody(context), "description");
+    return context.json(await repository.updateExpenseDescription(userId(context), requireUuid(context.req.param("expenseId"), "expenseId"), description));
+  });
   app.post("/v1/payments", async (context) => context.json(
     await repository.createPayment(userId(context), await jsonBody(context) as unknown as CreatePaymentInput), 201));
   app.get("/v1/transactions", async (context) => {

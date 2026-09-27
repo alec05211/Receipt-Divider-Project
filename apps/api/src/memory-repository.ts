@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpense, validatePayment } from "./domain.ts";
+import { calculateBalances, filterTransactions, fingerprint, imageEtag, requireDescription, searchTerm, validateExpense, validatePayment } from "./domain.ts";
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -17,6 +17,8 @@ export class MemoryRepository implements LedgerRepository {
   private payments: Payment[] = [];
   private requests = new Map<string, { fingerprint: string; value: Expense | Payment }>();
   private friendRequests: FriendRequest[] = [];
+  /** Revisions, recorded like the database's audit events so tests can check them. */
+  readonly auditEvents: Array<{ actorId: UUID; eventType: string; entityId: UUID; details: Record<string, unknown> }> = [];
 
   async checkHealth(): Promise<void> {}
 
@@ -132,6 +134,17 @@ export class MemoryRepository implements LedgerRepository {
     }
     const expense: Expense = { ...structuredClone(input), items: structuredClone(input.items ?? []), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
     this.expenses.push(expense); this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
+    return structuredClone(expense);
+  }
+
+  async updateExpenseDescription(userId: UUID, expenseId: UUID, description: string): Promise<Expense> {
+    const name = requireDescription(description);
+    const expense = this.visibleExpenses(userId).find((candidate) => candidate.id === expenseId);
+    if (!expense) throw new ApiError(404, "expense not found", "not_found");
+    if (expense.description !== name) {
+      this.auditEvents.push({ actorId: userId, eventType: "expense.description_changed", entityId: expenseId, details: { from: expense.description, to: name } });
+      expense.description = name;
+    }
     return structuredClone(expense);
   }
 

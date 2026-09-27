@@ -240,6 +240,22 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         return evidenceIDs
     }
 
+    /// Shows the new name immediately, and restores the old one if the server rejects it. A blank or unchanged name does nothing.
+    func renameExpense(_ expenseID: UUID, to description: String, accessToken: String) async throws {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let index = expenses.firstIndex(where: { $0.id == expenseID }), expenses[index].description != name else { return }
+        let previous = expenses[index].description
+        expenses[index].description = name
+        do {
+            let saved = try await api.renameExpense(id: expenseID, description: name, token: accessToken)
+            if let index = expenses.firstIndex(where: { $0.id == expenseID }) { expenses[index].description = saved.description }
+        } catch {
+            if let index = expenses.firstIndex(where: { $0.id == expenseID }), expenses[index].description == name { expenses[index].description = previous }
+            throw error
+        }
+    }
+
     func add(_ payment: Payment, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         _ = try await api.createPayment(
