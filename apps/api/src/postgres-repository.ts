@@ -1,6 +1,6 @@
 import postgres from "postgres";
-import { calculateBalances, filterTransactions, fingerprint, imageEtag, requireDescription, searchTerm, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseItemInput, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
+import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, ExpenseItemInput, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
@@ -144,14 +144,21 @@ export class PostgresRepository implements LedgerRepository {
     });
   }
 
-  async updateExpenseDescription(userId: UUID, expenseId: UUID, description: string): Promise<Expense> {
-    const name = requireDescription(description);
+  async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
+    const { description, transactionDate } = validateExpenseChanges(changes);
     return this.sql.begin(async (tx) => {
       const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
       if (!row) throw new ApiError(404, "expense not found", "not_found");
-      if (row.description === name) return this.loadExpense(tx, row);
-      const [updated] = await tx`UPDATE expenses SET description=${name} WHERE id=${expenseId} RETURNING *`;
-      await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, 'expense.description_changed', ${expenseId}, ${tx.json({ from: row.description, to: name })})`;
+      if (row.payer_id !== userId) throw new ApiError(403, "only the payer can edit this expense", "forbidden");
+      const revisions: Array<{ eventType: string; from: string; to: string }> = [];
+      if (description !== undefined && row.description !== description) revisions.push({ eventType: "expense.description_changed", from: row.description, to: description });
+      const currentDate = toDay(row.transaction_date);
+      if (transactionDate !== undefined && currentDate !== transactionDate) revisions.push({ eventType: "expense.date_changed", from: currentDate, to: transactionDate });
+      if (!revisions.length) return this.loadExpense(tx, row);
+      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, transaction_date=${transactionDate ?? currentDate} WHERE id=${expenseId} RETURNING *`;
+      for (const { eventType, from, to } of revisions) {
+        await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, ${eventType}, ${expenseId}, ${tx.json({ from, to })})`;
+      }
       return this.loadExpense(tx, updated!);
     });
   }

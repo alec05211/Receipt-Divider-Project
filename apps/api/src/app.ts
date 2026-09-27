@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { hasImageSignature, requireUuid } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, LedgerRepository, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseChanges, LedgerRepository, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const avatarLimit = 5 * 1024 * 1024;
@@ -85,8 +85,11 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   app.post("/v1/expenses", async (context) => context.json(
     await repository.createExpense(userId(context), await jsonBody(context) as unknown as CreateExpenseInput), 201));
   app.patch("/v1/expenses/:expenseId", async (context) => {
-    const description = stringField(await jsonBody(context), "description");
-    return context.json(await repository.updateExpenseDescription(userId(context), requireUuid(context.req.param("expenseId"), "expenseId"), description));
+    const body = await jsonBody(context);
+    const changes: ExpenseChanges = {};
+    if (body.description !== undefined) changes.description = stringField(body, "description");
+    if (body.transactionDate !== undefined) changes.transactionDate = stringField(body, "transactionDate");
+    return context.json(await repository.updateExpense(userId(context), requireUuid(context.req.param("expenseId"), "expenseId"), changes));
   });
   app.post("/v1/payments", async (context) => context.json(
     await repository.createPayment(userId(context), await jsonBody(context) as unknown as CreatePaymentInput), 201));

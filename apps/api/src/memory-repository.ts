@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, filterTransactions, fingerprint, imageEtag, requireDescription, searchTerm, validateExpense, validatePayment } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
+import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; }
@@ -137,13 +137,18 @@ export class MemoryRepository implements LedgerRepository {
     return structuredClone(expense);
   }
 
-  async updateExpenseDescription(userId: UUID, expenseId: UUID, description: string): Promise<Expense> {
-    const name = requireDescription(description);
+  async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
+    const { description, transactionDate } = validateExpenseChanges(changes);
     const expense = this.visibleExpenses(userId).find((candidate) => candidate.id === expenseId);
     if (!expense) throw new ApiError(404, "expense not found", "not_found");
-    if (expense.description !== name) {
-      this.auditEvents.push({ actorId: userId, eventType: "expense.description_changed", entityId: expenseId, details: { from: expense.description, to: name } });
-      expense.description = name;
+    if (expense.payerId !== userId) throw new ApiError(403, "only the payer can edit this expense", "forbidden");
+    if (description !== undefined && expense.description !== description) {
+      this.auditEvents.push({ actorId: userId, eventType: "expense.description_changed", entityId: expenseId, details: { from: expense.description, to: description } });
+      expense.description = description;
+    }
+    if (transactionDate !== undefined && expense.transactionDate !== transactionDate) {
+      this.auditEvents.push({ actorId: userId, eventType: "expense.date_changed", entityId: expenseId, details: { from: expense.transactionDate, to: transactionDate } });
+      expense.transactionDate = transactionDate;
     }
     return structuredClone(expense);
   }

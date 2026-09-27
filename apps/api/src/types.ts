@@ -24,6 +24,8 @@ export type EvidenceKind = "receipt" | "restaurant_check" | "ticket_confirmation
 export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: string; etag: string; createdAt: string; }
 
 export interface ExpenseItemInput { name: string; amountCents: number; offsetCents?: number; }
+/** The fields of an existing expense that can be edited; omitted fields are left as they are. */
+export interface ExpenseChanges { description?: string; transactionDate?: string; }
 export interface AllocationInput { userId: UUID; amountCents: number; }
 
 /** The payer and everyone allocated a share must be the creator or one of the creator's friends. */
@@ -100,10 +102,11 @@ export interface LedgerRepository {
   putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean>;
   createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
   /**
-   * Renames an active expense. Anyone on it (creator, payer, or someone with a share) may rename it; to anyone else
-   * it doesn't exist. Each change is recorded as an attributable revision holding the old and new names.
+   * Edits an active expense's name and/or transaction date. Only its payer may edit it (403 for anyone else on it); to
+   * anyone not on it, it doesn't exist (404). Each changed field is recorded as an attributable revision holding the
+   * old and new values. Amounts and allocations are untouched, so balances don't change.
    */
-  updateExpenseDescription(userId: UUID, expenseId: UUID, description: string): Promise<Expense>;
+  updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense>;
   createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
   close?(): Promise<void>;

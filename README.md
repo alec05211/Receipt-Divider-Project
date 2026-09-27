@@ -25,7 +25,7 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 5. Confirm an equal split or enter exact contributions.
 6. Save and return to Summary, or tap the + beside Save to split another expense from the same receipt.
 
-Opening an expense shows its editable name with the total and who paid on one line, then the split, the receipt image and selected items, followed by recent expenses involving the same people.
+Opening an expense shows its name with the total and who paid on one line (the payer can press and hold it to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people.
 
 ## Project layout
 

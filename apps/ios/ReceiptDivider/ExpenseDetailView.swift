@@ -7,12 +7,16 @@ struct ExpenseDetailView: View {
     let expense: Expense
     @State private var receipt: UIImage?
     @State private var isLoadingReceipt = false
-    @State private var title = ""
-    @FocusState private var isEditingTitle: Bool
-    @State private var renameError: String?
+    @State private var isEditingName = false
+    @State private var draftName = ""
+    @State private var isEditingDate = false
+    @State private var draftDate = Date.now
+    @State private var editError: String?
 
-    /// The store's copy, so a rename (or a refresh) shows here as soon as it happens.
+    /// The store's copy, so an edit (or a refresh) shows here as soon as it happens.
     private var current: Expense { store.expenses.first { $0.id == expense.id } ?? expense }
+    /// Only the person who paid owns an expense and may edit it.
+    private var canEdit: Bool { current.payer == store.activeUserID }
     /// You first, then everyone else by name.
     private var participants: [UUID] {
         current.participants.sorted { a, b in a == store.activeUserID ? b != store.activeUserID : b != store.activeUserID && store.name(for: a) < store.name(for: b) }
@@ -27,19 +31,7 @@ struct ExpenseDetailView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    // Vertical so long names wrap; Return ends editing instead of adding a line.
-                    TextField("Name", text: $title, axis: .vertical)
-                        .font(.title2.bold())
-                        .focused($isEditingTitle)
-                        .submitLabel(.done)
-                        .onChange(of: title) { _, newValue in
-                            if newValue.contains("\n") {
-                                title = newValue.replacingOccurrences(of: "\n", with: "")
-                                isEditingTitle = false
-                            } else if newValue.count > 200 {
-                                title = String(newValue.prefix(200))
-                            }
-                        }
+                    Text(current.description).font(.title2.bold())
                     HStack(spacing: 6) {
                         Text("Total").foregroundStyle(.secondary)
                         Text(current.total.usd).fontWeight(.semibold)
@@ -51,6 +43,16 @@ struct ExpenseDetailView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                // Press and hold to edit. An empty menu builder disables the menu, so only the payer gets one.
+                .contextMenu {
+                    if canEdit {
+                        ForEach(ExpenseEdit.allCases) { edit in
+                            Button(edit.title, systemImage: edit.systemImage) { begin(edit) }
+                        }
+                    }
+                }
             }
 
             Section("Split") {
@@ -98,13 +100,36 @@ struct ExpenseDetailView: View {
             }
         }
         .task(id: current.evidenceIDs.first) { await loadReceipt() }
-        .onAppear { title = current.description }
-        .onChange(of: current.description) { _, newValue in if !isEditingTitle { title = newValue } }
-        .onChange(of: isEditingTitle) { _, editing in if !editing { saveTitle() } }
-        .alert("Couldn’t rename", isPresented: Binding(get: { renameError != nil }, set: { if !$0 { renameError = nil } })) {
+        .alert("Edit name", isPresented: $isEditingName) {
+            TextField("Name", text: $draftName)
+                .onChange(of: draftName) { _, newValue in if newValue.count > 200 { draftName = String(newValue.prefix(200)) } }
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { save(description: draftName) }
+                .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .sheet(isPresented: $isEditingDate) {
+            NavigationStack {
+                DatePicker("Date", selection: $draftDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .padding(.horizontal)
+                    .navigationTitle("Date")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { isEditingDate = false } }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Save") {
+                                isEditingDate = false
+                                save(transactionDate: draftDate)
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .alert("Couldn’t save", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(renameError ?? "")
+            Text(editError ?? "")
         }
         .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
@@ -119,21 +144,44 @@ extension ExpenseDetailView {
         isLoadingReceipt = false
     }
 
-    /// Saves the edited name; a blank or unchanged one goes back to the current name.
-    private func saveTitle() {
-        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name != current.description else {
-            title = current.description
-            return
+    private func begin(_ edit: ExpenseEdit) {
+        switch edit {
+        case .name:
+            draftName = current.description
+            isEditingName = true
+        case .date:
+            draftDate = current.transactionDate
+            isEditingDate = true
         }
-        title = name
+    }
+
+    /// Shows the edit at once; the store puts the old values back and this reports why if the server refuses it.
+    private func save(description: String? = nil, transactionDate: Date? = nil) {
         Task {
             do {
-                try await store.renameExpense(expense.id, to: name, accessToken: authentication.accessToken())
+                try await store.updateExpense(expense.id, description: description, transactionDate: transactionDate, accessToken: authentication.accessToken())
             } catch {
-                title = current.description
-                renameError = error.localizedDescription
+                editError = error.localizedDescription
             }
+        }
+    }
+}
+
+/// What the payer can change from the press-and-hold menu. Add a case here (and to `begin`) to offer a new edit.
+private enum ExpenseEdit: CaseIterable, Identifiable {
+    case name, date
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .name: "Edit name"
+        case .date: "Edit date"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .name: "pencil"
+        case .date: "calendar"
         }
     }
 }

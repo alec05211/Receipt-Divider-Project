@@ -240,18 +240,39 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         return evidenceIDs
     }
 
-    /// Shows the new name immediately, and restores the old one if the server rejects it. A blank or unchanged name does nothing.
-    func renameExpense(_ expenseID: UUID, to description: String, accessToken: String) async throws {
+    /// Applies an edit immediately and restores the previous values if the server rejects it. Only the payer may edit;
+    /// a blank name is ignored, and a call that changes nothing does nothing.
+    func updateExpense(_ expenseID: UUID, description: String? = nil, transactionDate: Date? = nil, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
-        let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, let index = expenses.firstIndex(where: { $0.id == expenseID }), expenses[index].description != name else { return }
-        let previous = expenses[index].description
-        expenses[index].description = name
+        guard let index = expenses.firstIndex(where: { $0.id == expenseID }) else { return }
+        let previous = expenses[index]
+        var edited = previous
+        var changes = UpdateAPIExpense()
+        if let name = description?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty, name != previous.description {
+            edited.description = name
+            changes.description = name
+        }
+        if let transactionDate {
+            let day = Self.dayFormatter.string(from: transactionDate)
+            if day != Self.dayFormatter.string(from: previous.transactionDate) {
+                edited.transactionDate = Self.dayFormatter.date(from: day) ?? transactionDate
+                changes.transactionDate = day
+            }
+        }
+        guard changes.description != nil || changes.transactionDate != nil else { return }
+        expenses[index] = edited
         do {
-            let saved = try await api.renameExpense(id: expenseID, description: name, token: accessToken)
-            if let index = expenses.firstIndex(where: { $0.id == expenseID }) { expenses[index].description = saved.description }
+            let saved = try await api.updateExpense(id: expenseID, changes: changes, token: accessToken)
+            if let index = expenses.firstIndex(where: { $0.id == expenseID }) {
+                expenses[index].description = saved.description
+                if let day = Self.dayFormatter.date(from: saved.transactionDate) { expenses[index].transactionDate = day }
+            }
         } catch {
-            if let index = expenses.firstIndex(where: { $0.id == expenseID }), expenses[index].description == name { expenses[index].description = previous }
+            // Undo only what this edit set, in case a refresh has replaced it since.
+            if let index = expenses.firstIndex(where: { $0.id == expenseID }) {
+                if changes.description != nil, expenses[index].description == edited.description { expenses[index].description = previous.description }
+                if changes.transactionDate != nil, expenses[index].transactionDate == edited.transactionDate { expenses[index].transactionDate = previous.transactionDate }
+            }
             throw error
         }
     }

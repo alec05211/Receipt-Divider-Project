@@ -160,28 +160,51 @@ test("idempotency and exact totals protect canonical expenses", async () => {
   assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", { ...input, clientRequestId: "40000000-0000-4000-8000-000000000002", totalCents: 3999 })).status, 422);
 });
 
-test("anyone on an expense can rename it, and each rename is recorded as a revision", async () => {
+test("only the payer can edit an expense's name and date, and each change is recorded as a revision", async () => {
   const repository = new MemoryRepository();
   const app = createApp(repository, async (context) => context.req.header("x-user-id") ?? null);
   for (const user of [alex, jamie, stranger, morgan]) assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
   for (const [user, username] of [[alex, "alex"], [jamie, "jamie"], [stranger, "stranger"]] as const) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: username, lastName: "Test", username })).status, 200);
   const invite = await jsonRequest(app, "/v1/friend-requests", alex, "POST", { username: "jamie" });
   assert.equal((await jsonRequest(app, `/v1/friend-requests/${(await invite.json() as { requestId: string }).requestId}/accept`, jamie, "POST", {})).status, 200);
-  const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("50000000-0000-4000-8000-000000000001", alex, [[alex, 1000], [jamie, 1000]]));
+  // Alex creates it, but Jamie paid, so Jamie owns it.
+  const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("50000000-0000-4000-8000-000000000001", jamie, [[alex, 1000], [jamie, 1000]]));
   const { id } = await created.json() as { id: string };
+  const before = await snapshot(app, alex);
 
-  // Jamie has a share but didn't create it, and can still rename it; the name is trimmed and everyone sees it.
-  const renamed = await jsonRequest(app, `/v1/expenses/${id.toUpperCase()}`, jamie, "PATCH", { description: "  Farmers market " });
-  assert.equal(renamed.status, 200); assert.equal((await renamed.json() as { description: string }).description, "Farmers market");
-  for (const user of [alex, jamie]) assert.equal((await snapshot(app, user)).expenses[0]!.description, "Farmers market");
-  assert.deepEqual(repository.auditEvents, [{ actorId: jamie, eventType: "expense.description_changed", entityId: id, details: { from: "Groceries", to: "Farmers market" } }]);
+  // The creator, who also has a share, can't edit it; nothing changes.
+  for (const body of [{ description: "Mine now" }, { transactionDate: "2026-09-01" }]) assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", body)).status, 403);
+  assert.equal(repository.auditEvents.length, 0);
 
-  // Saving the same name records nothing; blank, overlong, or missing names are rejected; outsiders see nothing.
-  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", { description: "Farmers market" })).status, 200);
-  assert.equal(repository.auditEvents.length, 1);
-  for (const body of [{ description: "   " }, { description: "x".repeat(201) }, {}]) assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", body)).status, 400);
+  // The payer renames it (trimmed) and moves its date in one request: one revision per field, and everyone sees both.
+  const edited = await jsonRequest(app, `/v1/expenses/${id.toUpperCase()}`, jamie, "PATCH", { description: "  Farmers market ", transactionDate: "2026-09-10" });
+  assert.equal(edited.status, 200);
+  const body = await edited.json() as { description: string; transactionDate: string };
+  assert.equal(body.description, "Farmers market"); assert.equal(body.transactionDate, "2026-09-10");
+  for (const user of [alex, jamie]) {
+    const { expenses } = await snapshot(app, user) as unknown as { expenses: Array<{ description: string; transactionDate: string }> };
+    assert.equal(expenses[0]!.description, "Farmers market"); assert.equal(expenses[0]!.transactionDate, "2026-09-10");
+  }
+  assert.deepEqual(repository.auditEvents, [
+    { actorId: jamie, eventType: "expense.description_changed", entityId: id, details: { from: "Groceries", to: "Farmers market" } },
+    { actorId: jamie, eventType: "expense.date_changed", entityId: id, details: { from: "2026-09-18", to: "2026-09-10" } },
+  ]);
+  // Editing doesn't touch amounts, so balances are unchanged.
+  const after = await snapshot(app, alex);
+  assert.deepEqual(after.balances, before.balances); assert.equal(after.netBalance, before.netBalance);
+
+  // A date alone is recorded alone; unchanged values record nothing.
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { transactionDate: "2026-09-11" })).status, 200);
+  assert.equal(repository.auditEvents.length, 3); assert.equal(repository.auditEvents[2]!.eventType, "expense.date_changed");
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { description: "Farmers market", transactionDate: "2026-09-11" })).status, 200);
+  assert.equal(repository.auditEvents.length, 3);
+
+  // Invalid or empty edits are rejected; outsiders and unknown expenses see nothing.
+  for (const body of [{ description: "   " }, { description: "x".repeat(201) }, { description: 5 }, { transactionDate: "09/11/2026" }, { transactionDate: "2026-13-01" }, {}]) {
+    assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", body)).status, 400);
+  }
   assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, stranger, "PATCH", { description: "Mine now" })).status, 404);
-  assert.equal((await jsonRequest(app, "/v1/expenses/50000000-0000-4000-8000-000000000009", alex, "PATCH", { description: "Nothing" })).status, 404);
+  assert.equal((await jsonRequest(app, "/v1/expenses/50000000-0000-4000-8000-000000000009", jamie, "PATCH", { description: "Nothing" })).status, 404);
   assert.equal((await snapshot(app, alex)).expenses[0]!.description, "Farmers market");
 });
 

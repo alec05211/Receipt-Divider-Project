@@ -99,9 +99,9 @@ actor LedgerAPIClient {
         try await send(path: "/v1/expenses", method: "POST", token: token, body: encoder.encode(request))
     }
 
-    /// Renames an expense for everyone on it; any participant may do this.
-    func renameExpense(id: UUID, description: String, token: String) async throws -> APIExpense {
-        try await send(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "PATCH", token: token, body: encoder.encode(["description": description]))
+    /// Edits an expense for everyone on it; only its payer may do this. Omitted fields stay as they are.
+    func updateExpense(id: UUID, changes: UpdateAPIExpense, token: String) async throws -> APIExpense {
+        try await send(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "PATCH", token: token, body: encoder.encode(changes))
     }
 
     func createPayment(_ request: CreateAPIPayment, token: String) async throws -> APIPayment {
@@ -162,6 +162,12 @@ struct CreateAPIExpense: Encodable, Sendable {
     let evidenceIds: [UUID]
     let items: [APIExpenseItem]
     let allocations: [APIAllocation]
+}
+
+/// The editable fields of an expense; nil fields are left out of the request.
+struct UpdateAPIExpense: Encodable, Sendable {
+    var description: String?
+    var transactionDate: String?
 }
 
 struct APIExpense: Decodable, Sendable {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CreateExpenseInput, CreatePaymentInput, Expense, Payment, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseChanges, Payment, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -34,6 +34,17 @@ export function requireDescription(value: unknown): string {
     throw new ApiError(400, "description must contain 1–200 characters", "invalid_input");
   }
   return value.trim();
+}
+
+/** Validates the fields of an expense edit, which must change at least one of them; returns them normalized. */
+export function validateExpenseChanges(changes: ExpenseChanges): ExpenseChanges {
+  if (changes.description === undefined && changes.transactionDate === undefined) {
+    throw new ApiError(400, "provide description or transactionDate", "invalid_input");
+  }
+  const result: ExpenseChanges = {};
+  if (changes.description !== undefined) result.description = requireDescription(changes.description);
+  if (changes.transactionDate !== undefined) { requireDate(changes.transactionDate); result.transactionDate = changes.transactionDate; }
+  return result;
 }
 
 /** Validates `input` and lowercases its IDs in place. */
