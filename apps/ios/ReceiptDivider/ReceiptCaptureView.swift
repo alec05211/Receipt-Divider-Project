@@ -179,10 +179,14 @@ struct ReceiptCaptureView: View {
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                ContinueButton(title: isSaving ? "Saving…" : "Save expense", disabled: !isValidSplit || isSaving) { save() }
-                Button("Save and add another") { save(createNew: true) }.controlSize(.large).padding(.bottom, 10).disabled(!isValidSplit || isSaving)
+            HStack(spacing: 12) {
+                Button { save() } label: { Text(isSaving ? "Saving…" : "Save expense").prominentLabel().frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent)
+                Button { save(createNew: true) } label: { Image(systemName: "plus").fontWeight(.semibold) }
+                    .buttonStyle(.bordered).buttonBorderShape(.circle)
+                    .accessibilityLabel("Save and add another")
+                    .accessibilityHint("Saves this expense and starts another split from the same receipt.")
             }
+            .controlSize(.large).padding(.horizontal).padding(.vertical, 10).disabled(!isValidSplit || isSaving)
         }
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
