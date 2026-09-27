@@ -1,61 +1,6 @@
 import PhotosUI
 import SwiftUI
 
-struct ProfileView: View {
-    @Environment(ExpenseStore.self) private var store
-    @Environment(AuthenticationStore.self) private var authentication
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    NavigationLink { EditProfileView() } label: { profileHeader }
-                }
-                Section { friendsButton.listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
-                Section("Your balance") { LabeledContent("Overall", value: store.netBalance == 0 ? "Settled up" : store.netBalance > 0 ? "You’re owed \(store.netBalance.usd)" : "You owe \((-store.netBalance).usd)") }
-            }
-            .navigationTitle("Profile")
-            .task {
-                if let token = try? await authentication.accessToken() { try? await store.refreshFriends(accessToken: token) }
-            }
-        }
-    }
-
-    private var profileHeader: some View {
-        let name = store.profile?.displayName
-        return HStack(spacing: 14) {
-            AvatarView(userID: authentication.userID, name: name, size: 52).id(store.avatarVersion)
-            VStack(alignment: .leading) {
-                Text(name ?? "Add your name").font(.headline)
-                if let username = store.profile?.username { Text("@\(username)").font(.subheadline).foregroundStyle(.secondary) }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder private var friendsButton: some View {
-        if #available(iOS 26.0, *) {
-            friendsLink.buttonStyle(.glass)
-        } else {
-            friendsLink.buttonStyle(.bordered)
-        }
-    }
-
-    private var friendsLink: some View {
-        NavigationLink { FriendsView() } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "person.2.fill").font(.title3).frame(width: 38, height: 38)
-                Text("Friends").font(.headline)
-                Spacer()
-                Text("\(store.friendCount)").font(.system(.title3, design: .rounded, weight: .semibold)).foregroundStyle(.tint)
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 18).padding(.vertical, 14).frame(maxWidth: .infinity)
-        }
-        .accessibilityLabel("Friends, \(store.friendCount)")
-    }
-}
-
 struct EditProfileView: View {
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
