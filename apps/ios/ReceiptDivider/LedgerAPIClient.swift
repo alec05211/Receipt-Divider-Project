@@ -108,6 +108,12 @@ actor LedgerAPIClient {
         try await send(path: "/v1/payments", method: "POST", token: token, body: encoder.encode(request))
     }
 
+    /// Developer-only: deletes every account's expenses and payments. Accounts and friendships are kept.
+    func resetLedgerData(token: String) async throws {
+        let (data, status) = try await perform(path: "/v1/developer/reset-ledger", method: "POST", token: token, contentType: "application/json", body: encoder.encode(["confirm": "DELETE"]))
+        try check(data: data, status: status)
+    }
+
     private func send<Response: Decodable>(
         path: String,
         method: String = "GET",
@@ -145,7 +151,8 @@ actor LedgerAPIClient {
 }
 
 /// The name fields are nil until the user sets them; `displayName` is always "First Last".
-struct APIProfile: Decodable, Sendable { let id: UUID; let firstName: String?; let lastName: String?; let username: String?; let displayName: String? }
+/// `isDeveloper` is only sent when fetching the profile, not after an identity update.
+struct APIProfile: Decodable, Sendable { let id: UUID; let firstName: String?; let lastName: String?; let username: String?; let displayName: String?; let isDeveloper: Bool? }
 /// Someone in the caller's ledger: themselves, a friend, or anyone they share a transaction with.
 struct APILedgerPerson: Decodable, Sendable { let userId: UUID; let displayName: String?; let username: String?; let avatarEtag: String? }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }

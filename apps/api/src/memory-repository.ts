@@ -20,6 +20,9 @@ export class MemoryRepository implements LedgerRepository {
   /** Revisions, recorded like the database's audit events so tests can check them. */
   readonly auditEvents: Array<{ actorId: UUID; eventType: string; entityId: UUID; details: Record<string, unknown> }> = [];
 
+  /** `developerIds` stands in for the database's developer flag. */
+  constructor(private readonly developerIds: ReadonlySet<UUID> = new Set()) {}
+
   async checkHealth(): Promise<void> {}
 
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
@@ -27,12 +30,12 @@ export class MemoryRepository implements LedgerRepository {
     const handle = username.trim().toLowerCase();
     if ([...this.profiles.values()].some((profile) => profile.id !== userId && profile.username === handle)) throw new ApiError(409, "username is already taken", "username_taken");
     const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: handle, displayName: `${firstName.trim()} ${lastName.trim()}` };
-    this.profiles.set(userId, identity); return identity;
+    this.profiles.set(userId, { ...identity, isDeveloper: false }); return identity;
   }
   async searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]> {
     const term = searchTerm(query).toLowerCase();
     return [...this.profiles.values()]
-      .filter((profile): profile is ProfileIdentity => profile.id !== userId && profile.username !== null)
+      .filter((profile): profile is Profile & ProfileIdentity => profile.id !== userId && profile.username !== null)
       .filter((profile) => [profile.username, profile.firstName, profile.lastName, profile.displayName].some((field) => field.toLowerCase().startsWith(term)))
       .sort((left, right) => left.displayName.localeCompare(right.displayName))
       .slice(0, 20)
@@ -73,12 +76,17 @@ export class MemoryRepository implements LedgerRepository {
   }
 
   async ensureProfile(userId: UUID): Promise<Profile> {
-    const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null };
+    const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null, isDeveloper: false };
     this.profiles.set(userId, profile);
     if (!this.currencies.has(userId)) { this.currencies.set(userId, "USD"); this.filters.set(userId, []); }
-    return profile;
+    return { ...profile, isDeveloper: this.developerIds.has(userId) };
   }
-  async getProfile(userId: UUID): Promise<Profile> { return this.requireProfile(userId); }
+  async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.developerIds.has(userId) }; }
+  async resetLedgerData(userId: UUID): Promise<void> {
+    this.requireProfile(userId);
+    if (!this.developerIds.has(userId)) throw new ApiError(403, "developer access is required", "forbidden");
+    this.evidence.clear(); this.expenses = []; this.payments = []; this.requests.clear(); this.auditEvents.length = 0;
+  }
 
   async putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string> {
     this.requireProfile(userId);

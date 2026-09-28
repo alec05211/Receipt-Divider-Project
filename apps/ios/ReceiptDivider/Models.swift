@@ -80,6 +80,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     private(set) var isSyncing = false
     private(set) var friends: [APIFriend] = []
     private(set) var profile: APIProfile?
+    private(set) var isDeveloper = false
     /// Loaded profile pictures with the etag they were fetched for; a nil image records a user known to have none.
     private var avatars: [UUID: (etag: String?, image: UIImage?)] = [:]
     /// Receipt images by evidence ID. They never change once uploaded, so they're kept for the session.
@@ -128,6 +129,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         syncError = nil
         do {
             profile = try await api.ensureProfile(token: accessToken)
+            isDeveloper = profile?.isDeveloper ?? false
             if let identity { profile = try await api.updateIdentity(identity, token: accessToken) }
             try await refresh(accessToken: accessToken)
             friends = try await api.friends(token: accessToken)
@@ -315,6 +317,15 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         try await refresh(accessToken: accessToken)
     }
 
+    /// Developer-only: deletes every account's expenses and payments on the server, then reloads.
+    func resetServerLedger(accessToken: String) async throws {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        try await api.resetLedgerData(token: accessToken)
+        receiptImages = [:]
+        pendingEvidenceIDs = [:]
+        try await refresh(accessToken: accessToken)
+    }
+
     func resetLocalCache() {
         expenses = []
         payments = []
@@ -328,6 +339,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         activeUserID = nil
         hasLoadedRemoteData = false
         profile = nil
+        isDeveloper = false
         avatars = [:]
         receiptImages = [:]
         people = [:]

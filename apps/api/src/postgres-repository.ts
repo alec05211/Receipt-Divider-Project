@@ -71,13 +71,18 @@ export class PostgresRepository implements LedgerRepository {
 
   async ensureProfile(userId: UUID): Promise<Profile> {
     return this.sql.begin(async (tx) => {
-      const [row] = await tx`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id RETURNING id, first_name, last_name, username, display_name`;
+      const [row] = await tx`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id RETURNING id, first_name, last_name, username, display_name, is_developer`;
       await tx`INSERT INTO ledgers (owner_id, currency) VALUES (${userId}, 'USD') ON CONFLICT (owner_id) DO NOTHING`;
       return mapProfile(row!);
     });
   }
+  async resetLedgerData(userId: UUID): Promise<void> {
+    const [row] = await this.sql`SELECT is_developer FROM user_profiles WHERE id=${userId}`;
+    if (!row?.is_developer) throw new ApiError(403, "developer access is required", "forbidden");
+    await this.sql`TRUNCATE expense_evidence, expense_allocations, expense_items, expenses, repayments, evidence_assets, audit_events`;
+  }
   async getProfile(userId: UUID): Promise<Profile> {
-    const rows = await this.sql`SELECT id, first_name, last_name, username, display_name FROM user_profiles WHERE id=${userId}`;
+    const rows = await this.sql`SELECT id, first_name, last_name, username, display_name, is_developer FROM user_profiles WHERE id=${userId}`;
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
     return mapProfile(rows[0]!);
   }
@@ -228,7 +233,7 @@ async function requireFriends(sql: any, userId: UUID, ids: UUID[]): Promise<void
   if (rows.length !== others.length) throw new ApiError(422, "you can only split with yourself and your friends", "invalid_person");
 }
 
-function mapProfile(row: any): Profile { return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name }; }
+function mapProfile(row: any): Profile { return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name, isDeveloper: row.is_developer }; }
 function mapLedgerPerson(row: any): LedgerPerson { return { userId: row.id, displayName: row.display_name, username: row.username, avatarEtag: row.avatar_etag }; }
 function mapItem(row: any): ExpenseItemInput { return { name: row.name, amountCents: Number(row.amount_cents), offsetCents: Number(row.offset_cents) }; }
 function mapAllocation(row: any): AllocationInput { return { userId: row.user_id, amountCents: Number(row.amount_cents) }; }

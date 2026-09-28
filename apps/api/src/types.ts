@@ -1,7 +1,7 @@
 export type UUID = string;
 
 /** A profile exists as soon as the user signs in; the name fields stay null until they set them. */
-export interface Profile { id: UUID; firstName: string | null; lastName: string | null; username: string | null; displayName: string | null; }
+export interface Profile { id: UUID; firstName: string | null; lastName: string | null; username: string | null; displayName: string | null; isDeveloper: boolean; }
 export interface ProfileIdentity { id: UUID; firstName: string; lastName: string; username: string; displayName: string; }
 /** Where the searcher stands with a search result: no request, a request either way, or already friends. */
 export type Relationship = "none" | "outgoing" | "incoming" | "friend";
@@ -116,6 +116,11 @@ export interface LedgerRepository {
   updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense>;
   createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
+  /**
+   * Developer-only (403 otherwise): deletes every account's expenses, their items, allocations, and evidence, every
+   * payment, and all revision history. Profiles, ledgers, friendships, and saved filters are kept.
+   */
+  resetLedgerData(userId: UUID): Promise<void>;
   close?(): Promise<void>;
 }
 

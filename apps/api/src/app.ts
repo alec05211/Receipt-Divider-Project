@@ -93,6 +93,11 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   });
   app.post("/v1/payments", async (context) => context.json(
     await repository.createPayment(userId(context), await jsonBody(context) as unknown as CreatePaymentInput), 201));
+  app.post("/v1/developer/reset-ledger", async (context) => {
+    if ((await jsonBody(context)).confirm !== "DELETE") throw new ApiError(400, "confirm must be \"DELETE\"", "invalid_input");
+    await repository.resetLedgerData(userId(context));
+    return context.body(null, 204);
+  });
   app.get("/v1/transactions", async (context) => {
     const rawFilterId = context.req.query("filterId");
     return context.json(await repository.getSnapshot(userId(context), rawFilterId ? requireUuid(rawFilterId, "filterId") : undefined));

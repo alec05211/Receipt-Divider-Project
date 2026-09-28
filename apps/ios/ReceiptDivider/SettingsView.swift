@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
     @State private var showResetConfirmation = false
+    @State private var showServerReset = false
     @AppStorage(ContributionSliderUnit.storageKey) private var sliderUnit: ContributionSliderUnit = .dollars
 
     var body: some View {
@@ -35,9 +36,13 @@ struct SettingsView: View {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
                 }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
+                if store.isDeveloper {
+                    Section("Developer") { Button("Delete all expenses and payments", role: .destructive) { showServerReset = true } }
+                }
             }
             .navigationTitle("Settings")
             .confirmationDialog("Clear this device's cached ledger?", isPresented: $showResetConfirmation, titleVisibility: .visible) { Button("Clear cached data", role: .destructive) { store.resetLocalCache() } }
+            .sheet(isPresented: $showServerReset) { ServerResetView() }
             .task {
                 if let token = try? await authentication.accessToken() { try? await store.refreshFriends(accessToken: token) }
             }
@@ -54,5 +59,53 @@ struct SettingsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// Wipes every account's expenses and payments on the server; the destructive button only enables once DELETE is typed.
+private struct ServerResetView: View {
+    @Environment(ExpenseStore.self) private var store
+    @Environment(AuthenticationStore.self) private var authentication
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmation = ""
+    @State private var isDeleting = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("DELETE", text: $confirmation)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Type DELETE to erase every account's expenses and payments")
+                } footer: {
+                    if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
+                }
+                Section {
+                    Button(role: .destructive) { Task { await delete() } } label: {
+                        if isDeleting { ProgressView() } else { Text("Delete everything") }
+                    }
+                    .disabled(confirmation != "DELETE" || isDeleting)
+                }
+            }
+            .navigationTitle("Delete all data")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(isDeleting) } }
+            .interactiveDismissDisabled(isDeleting)
+        }
+    }
+
+    private func delete() async {
+        isDeleting = true
+        errorMessage = nil
+        do {
+            try await store.resetServerLedger(accessToken: try await authentication.accessToken())
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isDeleting = false
     }
 }

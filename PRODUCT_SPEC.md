@@ -256,6 +256,8 @@ This describes the committed initial Supabase PostgreSQL model; sharing and extr
 | Repayment | Sender User, recipient User, amount, transaction date (actual payment date), creation timestamp, recorder, and effective status. |
 | Revision/audit event | Actor, time, action, affected record, and sufficient change information to explain balance changes. |
 
+**Confirmed developer reset:** Accounts flagged `is_developer` (set by hand in the database) see a Developer section in Settings that deletes every account's expenses, expense items, allocations, evidence links and images, payments, and revision history. Users, ledgers, friendships, saved filters, and Supabase Auth accounts are kept. The action requires typing DELETE, and the server independently checks the flag and the typed confirmation.
+
 ## 8. Interface expectations
 
 **Proposed:** Use a clear, touch-friendly interface designed first for phone screens.
@@ -379,6 +381,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-27 | Expense detail: the name is editable by any participant (recorded as a revision, migration 005), total and payer share one line, and “Who owes what” became “Split”. Summary shows only the “Owed by/to” line under the total; Sign out sits on the signed-in row; contributions are entered in the chosen unit with the other beneath. Removed explanatory interface copy throughout. | Confirmed by the product owner; rename permission is provisional under D-04. API tests pass; migration 005 and Edge deploy pending. |
 | 2026-09-27 | The payer owns an expense and is the only one who can edit it (D-04 resolved). The payer presses and holds the expense's title to edit its name or date; the title is no longer an always-editable field, and others get no menu. Each changed field is recorded as a revision; a date change only reorders the expense and never changes balances. | Confirmed by the product owner. API tests pass; no migration needed; Edge deploy pending. |
 | 2026-09-27 | Expenses can carry an optional, manually chosen category (Groceries, Restaurant, Movie, Concert), picked on the split screen and shown as an icon in Summary’s expense list (migration 006). Existing expenses have none. Suggesting a category from the receipt image is planned. | Requested by the product owner. API tests pass and the app builds for the simulator; migration 006 and Edge deploy pending. |
+| 2026-09-27 | Added a developer-only reset in Settings that deletes all expense and payment data for every account while keeping users, ledgers, friendships, and saved filters (migration 007 adds the `is_developer` flag). | Keep/delete split, developer-only scope, and type-DELETE confirmation confirmed by the product owner. API tests pass and the app builds for the simulator. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

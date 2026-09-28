@@ -13,15 +13,15 @@ const morgan = "00000000-0000-4000-8000-000000000004";
 function request(app: ReturnType<typeof createApp>, path: string, userId: string, init: RequestInit = {}) { return app.request(path, { ...init, headers: { "x-user-id": userId, ...init.headers } }); }
 async function jsonRequest(app: ReturnType<typeof createApp>, path: string, userId: string, method: string, body: unknown) { return request(app, path, userId, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); }
 
-async function setup() {
-  const app = createApp(new MemoryRepository(), async (context) => context.req.header("x-user-id") ?? null);
+async function setup(developerIds = new Set<string>()) {
+  const app = createApp(new MemoryRepository(developerIds), async (context) => context.req.header("x-user-id") ?? null);
   for (const user of [alex, jamie, stranger, morgan]) assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
   return { app };
 }
 
 /** Alex is friends with Jamie and Morgan; the stranger is nobody's friend. */
-async function setupFriends() {
-  const { app } = await setup();
+async function setupFriends(developerIds?: Set<string>) {
+  const { app } = await setup(developerIds);
   const names: Array<[string, string, string]> = [[alex, "Alex", "alex"], [jamie, "Jamie", "jamie"], [stranger, "Sam", "stranger"], [morgan, "Morgan", "morgan"]];
   for (const [user, firstName, username] of names) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName, lastName: "Test", username })).status, 200);
   for (const [friend, username] of [[jamie, "jamie"], [morgan, "morgan"]] as const) {
@@ -259,6 +259,29 @@ test("removing someone who isn't a friend is a 404", async () => {
   const { app } = await setup();
   assert.equal((await request(app, `/v1/friends/${stranger}`, alex, { method: "DELETE" })).status, 404);
   assert.equal((await request(app, "/v1/friends/not-a-uuid", alex, { method: "DELETE" })).status, 400);
+});
+
+test("a developer can reset every expense and payment while accounts and friendships stay", async () => {
+  const { app } = await setupFriends(new Set([alex]));
+  assert.equal((await jsonRequest(app, "/v1/expenses", jamie, "POST", expense("10000000-0000-4000-8000-000000000041", jamie, [[alex, 500], [jamie, 500]]))).status, 201);
+  assert.equal((await jsonRequest(app, "/v1/payments", alex, "POST", { clientRequestId: "10000000-0000-4000-8000-000000000042", fromUserId: alex, toUserId: jamie, amountCents: 500, transactionDate: "2026-09-21" })).status, 201);
+  assert.equal((await (await request(app, "/v1/profile", alex)).json() as { isDeveloper: boolean }).isDeveloper, true);
+  assert.equal((await (await request(app, "/v1/profile", jamie)).json() as { isDeveloper: boolean }).isDeveloper, false);
+
+  // Only a developer may reset, and only with the exact confirmation.
+  assert.equal((await jsonRequest(app, "/v1/developer/reset-ledger", jamie, "POST", { confirm: "DELETE" })).status, 403);
+  assert.equal((await jsonRequest(app, "/v1/developer/reset-ledger", alex, "POST", { confirm: "delete" })).status, 400);
+  assert.equal((await jsonRequest(app, "/v1/developer/reset-ledger", alex, "POST", {})).status, 400);
+  assert.equal((await snapshot(app, jamie)).expenses.length, 1);
+
+  assert.equal((await jsonRequest(app, "/v1/developer/reset-ledger", alex, "POST", { confirm: "DELETE" })).status, 204);
+  for (const user of [alex, jamie]) {
+    const after = await snapshot(app, user);
+    assert.equal(after.expenses.length, 0); assert.equal(after.payments.length, 0); assert.equal(after.netBalance, 0);
+  }
+  const friends = await (await request(app, "/v1/friends", alex)).json() as unknown[];
+  assert.equal(friends.length, 2);
+  assert.equal((await (await request(app, "/v1/profile", jamie)).json() as { username: string }).username, "jamie");
 });
 
 test("Supabase JWT authentication accepts only signed authenticated-user tokens", async () => {
