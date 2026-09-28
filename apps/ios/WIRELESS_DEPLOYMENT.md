@@ -72,6 +72,14 @@ Mac is offline. Deployments run serially to avoid overlapping installs.
 - Missing runner: check its label, online status, and service login session.
 - Signing failure: run the script in Terminal as the runner user; resolve the
   Xcode account/profile or Keychain access prompt there first.
+- `errSecInternalComponent` while signing: the runner service can't use the
+  login Keychain. Allow the signing tools once with `security
+  set-key-partition-list -S apple-tool:,apple:,codesign: -s
+  ~/Library/Keychains/login.keychain-db` (it asks for the Keychain password),
+  then turn off the service's separate security session and restart it:
+  `./svc.sh stop && plutil -replace SessionCreate -bool false
+  ~/Library/LaunchAgents/actions.runner.*.plist && ./svc.sh start`. Repeat the
+  `plutil` step after any `./svc.sh install`.
 - Missing device: unlock the phone, check Developer Mode, network and pairing
   in Xcode, then rerun `xcrun devicectl list devices`.
 
