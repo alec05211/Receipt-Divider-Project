@@ -4,8 +4,9 @@ set -euo pipefail
 IOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Values pasted into GitHub variables can carry stray whitespace or newlines.
 trim() { local value="$1"; value="${value#"${value%%[![:space:]]*}"}"; printf '%s' "${value%"${value##*[![:space:]]}"}"; }
+# Comma-separated device identifiers from `xcrun devicectl list devices`, or "all" (the default) for every paired iPhone.
 IPHONE_ID="$(trim "${IPHONE_ID:-}")"
-: "${IPHONE_ID:?Set IPHONE_ID to the paired iPhone identifier from xcrun devicectl list devices}"
+IPHONE_ID="${IPHONE_ID:-all}"
 IOS_SIGNING_CONFIG="$(trim "${IOS_SIGNING_CONFIG:-}")"
 SIGNING_CONFIG="${IOS_SIGNING_CONFIG:-$IOS_DIR/Signing.local.xcconfig}"
 DERIVED_DATA="${IOS_DERIVED_DATA:-$IOS_DIR/build/wireless}"
@@ -23,9 +24,24 @@ fi
 command -v xcodegen >/dev/null || { echo 'Install XcodeGen on the runner Mac.' >&2; exit 1; }
 xcrun --find devicectl >/dev/null
 
-# Check reachability before spending time building. This also gives a useful
-# failure when the phone is offline or the pairing needs attention.
-xcrun devicectl --timeout 60 device info details --device "$IPHONE_ID"
+if [[ "$IPHONE_ID" == all ]]; then
+  DEVICE_LIST="$(mktemp)"
+  xcrun devicectl list devices --json-output "$DEVICE_LIST" >/dev/null
+  CANDIDATES=($(/usr/bin/python3 -c 'import json, sys
+for d in json.load(open(sys.argv[1]))["result"]["devices"]:
+    if d["hardwareProperties"].get("platform") == "iOS" and d["connectionProperties"].get("pairingState") == "paired": print(d["identifier"])' "$DEVICE_LIST"))
+  rm -f "$DEVICE_LIST"
+else
+  IFS=', ' read -r -a CANDIDATES <<< "$IPHONE_ID"
+fi
+# Check reachability before spending time building. An offline phone is skipped rather than failing the others.
+DEVICES=()
+for device in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+  if xcrun devicectl --timeout 60 device info details --device "$device" >/dev/null 2>&1; then DEVICES+=("$device")
+  else echo "::warning::Skipping unreachable device $device. Unlock it and check it's on the same network."; fi
+done
+(( ${#DEVICES[@]} > 0 )) || { echo 'No paired iPhone is reachable. Unlock one and check its network and pairing in Xcode.' >&2; exit 1; }
+echo "Installing on: ${DEVICES[*]}"
 cd "$IOS_DIR"
 # Signing.xcconfig includes Signing.local.xcconfig, which is how a blank setting there (such as dropping the
 # entitlements on a Personal Team) takes effect; an empty value passed with -xcconfig doesn't clear it.
@@ -44,8 +60,13 @@ xcodebuild \
 
 APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/Receipt Divider.app"
 [[ -d "$APP_PATH" ]] || { echo "Build did not produce $APP_PATH" >&2; exit 1; }
-xcrun devicectl --timeout 120 device install app --device "$IPHONE_ID" "$APP_PATH"
-if [[ "$LAUNCH_APP" == true ]]; then
-  xcrun devicectl --timeout 60 device process launch \
-    --device "$IPHONE_ID" --terminate-existing com.receiptdivider.app
-fi
+FAILED=0
+for device in "${DEVICES[@]}"; do
+  if ! xcrun devicectl --timeout 120 device install app --device "$device" "$APP_PATH"; then
+    echo "::error::Install failed on $device."; FAILED=1; continue
+  fi
+  if [[ "$LAUNCH_APP" == true ]]; then
+    xcrun devicectl --timeout 60 device process launch --device "$device" --terminate-existing com.receiptdivider.app || true
+  fi
+done
+exit "$FAILED"

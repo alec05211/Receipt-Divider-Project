@@ -2,7 +2,7 @@
 
 The workflow `.github/workflows/deploy-ios.yml` runs after every push to `main`
 or a manual run on `main`. It builds the Debug app on your Mac and installs it
-on the configured paired iPhone. Launching is optional and disabled by default.
+on every paired iPhone it can reach (offline phones are skipped). Launching is optional and disabled by default.
 No certificate or private signing key is uploaded to GitHub.
 
 ## Prepare the Mac and phone
@@ -20,12 +20,12 @@ No certificate or private signing key is uploaded to GitHub.
 4. Run the local script once before enabling automation:
 
    ```sh
-   export IPHONE_ID='identifier-from-devicectl'
    export IOS_SIGNING_CONFIG='/absolute/path/to/Signing.xcconfig'
    bash apps/ios/scripts/deploy-to-iphone.sh
    ```
 
-   Get the identifier with `xcrun devicectl list devices`. To also launch the app,
+   It installs on every paired iPhone; set `IPHONE_ID` to comma-separated identifiers
+   from `xcrun devicectl list devices` to limit it. To also launch the app,
    set `LAUNCH_APP=true`. The phone may need to be unlocked for installation or
    launch. A successful install followed by a failed launch still leaves the new
    app installed. Personal Team provisioning expires and may require refreshing.
@@ -44,7 +44,7 @@ Under **Settings → Secrets and variables → Actions → Variables**, set:
 
 | Variable | Value |
 | --- | --- |
-| `IPHONE_ID` | Paired device identifier from `devicectl list devices` |
+| `IOS_DEVICES` | Optional comma-separated identifiers from `devicectl list devices`; defaults to every paired iPhone |
 | `IOS_SIGNING_CONFIG` | Absolute path to the signing config on the Mac |
 | `IOS_LAUNCH_APP` | Optional `true`; defaults to `false` |
 
