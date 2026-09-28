@@ -38,6 +38,11 @@ actor LedgerAPIClient {
         try await send(path: "/v1/profile/identity", method: "PUT", token: token, body: encoder.encode(identity))
     }
 
+    func settings(token: String) async throws -> APISettings { try await send(path: "/v1/settings", token: token) }
+    func updateSliderUnit(_ unit: String, token: String) async throws -> APISettings {
+        try await send(path: "/v1/settings", method: "PATCH", token: token, body: encoder.encode(["sliderUnit": unit]))
+    }
+
     func searchUsers(query: String, token: String) async throws -> [APIUserResult] {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
         return try await send(path: "/v1/users/search?q=\(encoded)", token: token)
@@ -153,6 +158,8 @@ actor LedgerAPIClient {
 /// The name fields are nil until the user sets them; `displayName` is always "First Last".
 /// `isDeveloper` is only sent when fetching the profile, not after an identity update.
 struct APIProfile: Decodable, Sendable { let id: UUID; let firstName: String?; let lastName: String?; let username: String?; let displayName: String?; let isDeveloper: Bool? }
+/// `sliderUnit` is "dollars" or "percent".
+struct APISettings: Decodable, Sendable { let currency: String; let sliderUnit: String }
 /// Someone in the caller's ledger: themselves, a friend, or anyone they share a transaction with.
 struct APILedgerPerson: Decodable, Sendable { let userId: UUID; let displayName: String?; let username: String?; let avatarEtag: String? }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }

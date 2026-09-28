@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, ExpenseItemInput, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, ExpenseItemInput, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
@@ -72,9 +72,19 @@ export class PostgresRepository implements LedgerRepository {
   async ensureProfile(userId: UUID): Promise<Profile> {
     return this.sql.begin(async (tx) => {
       const [row] = await tx`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id RETURNING id, first_name, last_name, username, display_name, is_developer`;
-      await tx`INSERT INTO ledgers (owner_id, currency) VALUES (${userId}, 'USD') ON CONFLICT (owner_id) DO NOTHING`;
+      await tx`INSERT INTO user_settings (user_id) VALUES (${userId}) ON CONFLICT (user_id) DO NOTHING`;
       return mapProfile(row!);
     });
+  }
+  async getSettings(userId: UUID): Promise<UserSettings> {
+    const rows = await this.sql`SELECT currency, slider_unit FROM user_settings WHERE user_id=${userId}`;
+    if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
+    return mapSettings(rows[0]!);
+  }
+  async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit">>): Promise<UserSettings> {
+    const rows = await this.sql`UPDATE user_settings SET slider_unit=coalesce(${changes.sliderUnit ?? null}, slider_unit), updated_at=now() WHERE user_id=${userId} RETURNING currency, slider_unit`;
+    if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
+    return mapSettings(rows[0]!);
   }
   async resetLedgerData(userId: UUID): Promise<void> {
     const [row] = await this.sql`SELECT is_developer FROM user_profiles WHERE id=${userId}`;
@@ -134,9 +144,9 @@ export class PostgresRepository implements LedgerRepository {
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`expense:${creatorId}:${input.clientRequestId}`}, 0))`;
       const prior = await tx`SELECT * FROM expenses WHERE creator_id=${creatorId} AND client_request_id=${input.clientRequestId}`;
       if (prior.length) { if (prior[0]!.request_fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict"); return this.loadExpense(tx, prior[0]!); }
-      const ledgers = await tx`SELECT currency FROM ledgers WHERE owner_id=${creatorId}`;
-      if (!ledgers.length) throw new ApiError(404, "profile not found", "not_found");
-      if (ledgers[0]!.currency !== input.currency) throw new ApiError(422, "expense currency must match the ledger currency", "currency_mismatch");
+      const settings = await tx`SELECT currency FROM user_settings WHERE user_id=${creatorId}`;
+      if (!settings.length) throw new ApiError(404, "profile not found", "not_found");
+      if (settings[0]!.currency !== input.currency) throw new ApiError(422, "expense currency must match your account currency", "currency_mismatch");
       await requireFriends(tx, creatorId, [input.payerId, ...input.allocations.map((a) => a.userId)]);
       const evidenceIds = input.evidenceIds ?? [];
       if (evidenceIds.length && (await tx`SELECT id FROM evidence_assets WHERE uploaded_by=${creatorId} AND id IN ${tx(evidenceIds)}`).length !== evidenceIds.length) throw new ApiError(400, "evidence was not uploaded by you", "invalid_evidence");
@@ -189,15 +199,15 @@ export class PostgresRepository implements LedgerRepository {
 
   async getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot> {
     const visibleIds = this.sql`SELECT e.id FROM expenses e WHERE e.status='active' AND ${visibleTo(this.sql, userId)}`;
-    const [ledgers, savedFilters, expenseRows, itemRows, allocationRows, evidenceRows, paymentRows, friendRows] = await Promise.all([
-      this.sql`SELECT currency FROM ledgers WHERE owner_id=${userId}`, this.listSavedFilters(userId),
+    const [settings, savedFilters, expenseRows, itemRows, allocationRows, evidenceRows, paymentRows, friendRows] = await Promise.all([
+      this.sql`SELECT currency FROM user_settings WHERE user_id=${userId}`, this.listSavedFilters(userId),
       this.sql`SELECT * FROM expenses WHERE id IN (${visibleIds}) ORDER BY transaction_date DESC, created_at DESC, id`,
       this.sql`SELECT * FROM expense_items WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, position`,
       this.sql`SELECT * FROM expense_allocations WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, user_id`,
       this.sql`SELECT * FROM expense_evidence WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, position`,
       this.sql`SELECT * FROM repayments WHERE status='active' AND (from_user_id=${userId} OR to_user_id=${userId}) ORDER BY transaction_date DESC, created_at DESC, id`,
       this.sql`SELECT CASE WHEN requester_id=${userId} THEN addressee_id ELSE requester_id END user_id FROM friend_requests WHERE status='accepted' AND (requester_id=${userId} OR addressee_id=${userId})`]);
-    if (!ledgers.length) throw new ApiError(404, "profile not found", "not_found");
+    if (!settings.length) throw new ApiError(404, "profile not found", "not_found");
     let expenses = expenseRows.map((row) => mapExpense(row, itemRows.filter((i) => i.expense_id === row.id).map(mapItem), allocationRows.filter((a) => a.expense_id === row.id).map(mapAllocation), evidenceRows.filter((e) => e.expense_id === row.id).map((e) => e.evidence_id)));
     let payments = paymentRows.map(mapPayment);
     const balances = calculateBalances(userId, expenses, payments);
@@ -210,7 +220,7 @@ export class PostgresRepository implements LedgerRepository {
       if (!filter) throw new ApiError(404, "saved filter not found", "not_found");
       ({ expenses, payments } = filterTransactions(filter.userIds, expenses, payments));
     }
-    const result: LedgerSnapshot = { currency: ledgers[0]!.currency, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
+    const result: LedgerSnapshot = { currency: settings[0]!.currency, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
     if (filterId) result.appliedFilterId = filterId; return result;
   }
 
@@ -234,6 +244,7 @@ async function requireFriends(sql: any, userId: UUID, ids: UUID[]): Promise<void
 }
 
 function mapProfile(row: any): Profile { return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name, isDeveloper: row.is_developer }; }
+function mapSettings(row: any): UserSettings { return { currency: row.currency, sliderUnit: row.slider_unit }; }
 function mapLedgerPerson(row: any): LedgerPerson { return { userId: row.id, displayName: row.display_name, username: row.username, avatarEtag: row.avatar_etag }; }
 function mapItem(row: any): ExpenseItemInput { return { name: row.name, amountCents: Number(row.amount_cents), offsetCents: Number(row.offset_cents) }; }
 function mapAllocation(row: any): AllocationInput { return { userId: row.user_id, amountCents: Number(row.amount_cents) }; }

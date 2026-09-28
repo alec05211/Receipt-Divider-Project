@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { calculateBalances, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; }
@@ -9,7 +9,7 @@ interface FriendRequest { id: UUID; requesterId: UUID; addresseeId: UUID; status
 /** Test/local adapter. It deliberately has no persistence and is never selected when DATABASE_URL is set. */
 export class MemoryRepository implements LedgerRepository {
   private profiles = new Map<UUID, Profile>();
-  private currencies = new Map<UUID, string>();
+  private settings = new Map<UUID, UserSettings>();
   private avatars = new Map<UUID, ImageRecord>();
   private filters = new Map<UUID, SavedFilter[]>();
   private evidence = new Map<UUID, ImageRecord>();
@@ -78,10 +78,15 @@ export class MemoryRepository implements LedgerRepository {
   async ensureProfile(userId: UUID): Promise<Profile> {
     const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null, isDeveloper: false };
     this.profiles.set(userId, profile);
-    if (!this.currencies.has(userId)) { this.currencies.set(userId, "USD"); this.filters.set(userId, []); }
+    if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "dollars" }); this.filters.set(userId, []); }
     return { ...profile, isDeveloper: this.developerIds.has(userId) };
   }
   async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.developerIds.has(userId) }; }
+  async getSettings(userId: UUID): Promise<UserSettings> { this.requireProfile(userId); return { ...this.settings.get(userId)! }; }
+  async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit">>): Promise<UserSettings> {
+    this.requireProfile(userId);
+    const updated = { ...this.settings.get(userId)!, ...changes }; this.settings.set(userId, updated); return { ...updated };
+  }
   async resetLedgerData(userId: UUID): Promise<void> {
     this.requireProfile(userId);
     if (!this.developerIds.has(userId)) throw new ApiError(403, "developer access is required", "forbidden");
@@ -130,7 +135,7 @@ export class MemoryRepository implements LedgerRepository {
 
   async createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense> {
     this.requireProfile(creatorId); validateExpense(input);
-    if (this.currencies.get(creatorId) !== input.currency) throw new ApiError(422, "expense currency must match the ledger currency", "currency_mismatch");
+    if (this.settings.get(creatorId)!.currency !== input.currency) throw new ApiError(422, "expense currency must match your account currency", "currency_mismatch");
     this.requireFriends(creatorId, [input.payerId, ...input.allocations.map((allocation) => allocation.userId)]);
     for (const evidenceId of input.evidenceIds ?? []) {
       if (this.evidence.get(evidenceId)?.ownerId !== creatorId) throw new ApiError(400, "evidence was not uploaded by you", "invalid_evidence");
@@ -194,7 +199,7 @@ export class MemoryRepository implements LedgerRepository {
       if (!filter) throw new ApiError(404, "saved filter not found", "not_found");
       ({ expenses, payments } = filterTransactions(filter.userIds, expenses, payments));
     }
-    const snapshot: LedgerSnapshot = { currency: this.currencies.get(userId)!, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
+    const snapshot: LedgerSnapshot = { currency: this.settings.get(userId)!.currency, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
     if (filterId) snapshot.appliedFilterId = filterId;
     return snapshot;
   }

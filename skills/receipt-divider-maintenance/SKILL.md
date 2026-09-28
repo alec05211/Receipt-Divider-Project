@@ -27,3 +27,13 @@ Keep user-visible text minimal. The UI states what the user needs to act, never 
 - Do not add footers, hints, descriptions, or notes that explain mechanics, describe a change you made, or restate what the interface already shows. Examples of what not to ship: “Dimmed items are already in an expense you saved from this receipt.”, “Sliders show each contribution in both dollars and percent of the total…”, and settings rows naming the backend (“Ledger: Supabase”).
 - Prefer a short label or no text. Keep errors, validation, and labels needed to act.
 - Report behavior details to the developer in your summary or in `PRODUCT_SPEC.md`, not in the app.
+
+## Shipping
+
+“Ship it” authorizes the whole rollout for the current feature work, with no further confirmation:
+
+1. Apply any new files in `apps/api/db/migrations/` to the live Supabase project, in order.
+2. If the API changed, redeploy the Edge Function immediately after (`npm run deploy:edge` from `apps/api`) and confirm `/ready` returns 200. Keep the gap between migration and deploy short, since the deployed API may not match the new schema until then.
+3. Commit the feature. On `main`, push `main`. On another branch or worktree, commit there, merge into `main` locally, then push `main`.
+
+A push to `main` installs the app on the paired iPhones, so the backend must be live before pushing.

@@ -82,12 +82,19 @@ export interface LedgerSnapshot {
   netBalance: number;
 }
 
+export type SliderUnit = "dollars" | "percent";
+/** Account-wide preferences. Currency is fixed for now; the slider unit is how contributions are entered. */
+export interface UserSettings { currency: string; sliderUnit: SliderUnit; }
+
 export interface StoredImage { contentType: string; bytes: Uint8Array; etag: string; }
 
 export interface LedgerRepository {
   checkHealth(): Promise<void>;
+  /** Creates the profile and its settings if missing. */
   ensureProfile(userId: UUID): Promise<Profile>;
   getProfile(userId: UUID): Promise<Profile>;
+  getSettings(userId: UUID): Promise<UserSettings>;
+  updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit">>): Promise<UserSettings>;
   updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
   searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]>;
   listFriends(userId: UUID): Promise<FriendConnection[]>;
@@ -118,7 +125,7 @@ export interface LedgerRepository {
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
   /**
    * Developer-only (403 otherwise): deletes every account's expenses, their items, allocations, and evidence, every
-   * payment, and all revision history. Profiles, ledgers, friendships, and saved filters are kept.
+   * payment, and all revision history. Profiles, settings, friendships, and saved filters are kept.
    */
   resetLedgerData(userId: UUID): Promise<void>;
   close?(): Promise<void>;

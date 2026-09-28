@@ -34,6 +34,9 @@ struct SettingsView: View {
                 Section("App") { LabeledContent("Currency", value: "USD") }
                 Section("Contribution sliders") {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
+                        .onChange(of: sliderUnit) { _, unit in
+                            Task { if let token = try? await authentication.accessToken() { await store.updateSliderUnit(unit, accessToken: token) } }
+                        }
                 }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
                 if store.isDeveloper {

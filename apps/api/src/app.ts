@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { hasImageSignature, requireUuid } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseChanges, LedgerRepository, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseChanges, LedgerRepository, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const avatarLimit = 5 * 1024 * 1024;
@@ -39,6 +39,16 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   app.put("/v1/profile/identity", async (context) => {
     const body = await jsonBody(context);
     return context.json(await repository.updateIdentity(userId(context), stringField(body, "firstName"), stringField(body, "lastName"), stringField(body, "username")));
+  });
+  app.get("/v1/settings", async (context) => context.json(await repository.getSettings(userId(context))));
+  app.patch("/v1/settings", async (context) => {
+    const body = await jsonBody(context);
+    const changes: Partial<Pick<UserSettings, "sliderUnit">> = {};
+    if (body.sliderUnit !== undefined) {
+      if (body.sliderUnit !== "dollars" && body.sliderUnit !== "percent") throw new ApiError(400, "sliderUnit must be dollars or percent", "invalid_input");
+      changes.sliderUnit = body.sliderUnit;
+    }
+    return context.json(await repository.updateSettings(userId(context), changes));
   });
   app.put("/v1/profile/avatar", async (context) => {
     const image = await imageBody(context, avatarLimit);

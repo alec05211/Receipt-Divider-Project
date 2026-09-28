@@ -30,7 +30,7 @@ This mode is non-persistent. Send a UUID in `x-user-id`, create the profile with
 
 ## Supabase PostgreSQL
 
-1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `007_developer_flag.sql`) in its SQL editor or migration runner.
+1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `008_user_settings.sql`) in its SQL editor or migration runner.
 2. For the local Node test harness, copy Supabase’s **Session pooler** URI into `DATABASE_URL`, set `SUPABASE_URL`, and leave `ALLOW_INSECURE_DEV_AUTH` false. Copy `.env.example` to the Git-ignored `.env.local` and run `npm run dev:local`.
 3. Run this API as a trusted backend. Public tables have RLS enabled and direct `anon`/`authenticated` grants revoked; mobile clients use only the API.
 
@@ -44,8 +44,10 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | --- | --- | --- |
 | `GET` | `/health` | Confirm that the API process is running. |
 | `GET` | `/ready` | Confirm that the API can reach its configured datastore. |
-| `PUT` | `/v1/profile` | Create the account profile and ledger if missing; returns the profile. |
+| `PUT` | `/v1/profile` | Create the account profile and settings if missing; returns the profile. |
 | `GET` | `/v1/profile` | Read the caller's name, username, display name, and `isDeveloper`. |
+| `GET` | `/v1/settings` | Read the caller's `currency` and `sliderUnit` (`dollars` or `percent`). |
+| `PATCH` | `/v1/settings` | Change `sliderUnit`; returns the updated settings. |
 | `PUT` | `/v1/profile/avatar` | Store the account avatar. |
 | `GET` | `/v1/users/{userId}/avatar` | Read your own avatar or that of any user who has set a username (and so appears in search). |
 | `PUT` | `/v1/profile/identity` | Set the real first/last name and unique username. The display name is always derived as "First Last". |
@@ -61,7 +63,7 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `POST` | `/v1/expenses` | Atomically post a reviewed general expense between you and your friends, with an optional `category` (`groceries`, `restaurant`, `movie`, or `concert`; returned as `null` when absent). |
 | `PATCH` | `/v1/expenses/:expenseId` | Payer only: change `description` and/or `transactionDate` (`YYYY-MM-DD`). Records one revision per changed field with the old and new value; amounts and balances are untouched. Other participants get 403; anyone else 404. |
 | `POST` | `/v1/payments` | Record a repayment you sent or received (`fromUserId`, `toUserId`). |
-| `POST` | `/v1/developer/reset-ledger` | Developer accounts only (`user_profiles.is_developer`; others get 403): with `{ "confirm": "DELETE" }`, deletes every account's expenses, evidence, payments, and revision history. Profiles, ledgers, friendships, and saved filters are kept. |
+| `POST` | `/v1/developer/reset-ledger` | Developer accounts only (`user_profiles.is_developer`; others get 403): with `{ "confirm": "DELETE" }`, deletes every account's expenses, evidence, payments, and revision history. Profiles, settings, friendships, and saved filters are kept. |
 | `GET` | `/v1/transactions?filterId={id}` | Read every transaction you're on, the people in them, and your balance with each person, optionally filtered by a saved filter. |
 
 Example manual expense (no image and no itemization):

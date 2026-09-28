@@ -130,6 +130,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         do {
             profile = try await api.ensureProfile(token: accessToken)
             isDeveloper = profile?.isDeveloper ?? false
+            if let settings = try? await api.settings(token: accessToken) { applySliderUnit(settings.sliderUnit) }
             if let identity { profile = try await api.updateIdentity(identity, token: accessToken) }
             try await refresh(accessToken: accessToken)
             friends = try await api.friends(token: accessToken)
@@ -183,6 +184,20 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         let etag = try await api.uploadAvatar(jpeg, token: accessToken)
         avatars[userID] = (etag, resized)
         avatarVersion += 1
+    }
+
+    /// Saves the slider unit to the account, restoring the account's unit if the server rejects it.
+    func updateSliderUnit(_ unit: ContributionSliderUnit, accessToken: String) async {
+        guard let api, unit.rawValue != savedSliderUnit else { return }
+        do { applySliderUnit(try await api.updateSliderUnit(unit.rawValue, token: accessToken).sliderUnit) }
+        catch { applySliderUnit(savedSliderUnit) }
+    }
+    /// The unit last confirmed by the server; the phone keeps a copy for the sliders to read.
+    private var savedSliderUnit: String?
+    private func applySliderUnit(_ rawValue: String?) {
+        savedSliderUnit = rawValue
+        guard let rawValue, ContributionSliderUnit(rawValue: rawValue) != nil else { return }
+        UserDefaults.standard.set(rawValue, forKey: ContributionSliderUnit.storageKey)
     }
 
     func updateProfile(_ identity: AccountIdentity, accessToken: String) async throws {
@@ -340,6 +355,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         hasLoadedRemoteData = false
         profile = nil
         isDeveloper = false
+        savedSliderUnit = nil
         avatars = [:]
         receiptImages = [:]
         people = [:]

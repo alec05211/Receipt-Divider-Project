@@ -245,7 +245,7 @@ This describes the committed initial Supabase PostgreSQL model; sharing and extr
 | Entity | Purpose and important fields |
 | --- | --- |
 | User | Identity, display name, and an optional database-backed profile image. |
-| Ledger | An account's currency and timestamps. |
+| User settings | An account's currency and contribution slider unit (dollars or percent), with timestamps. Settings follow the account across devices. |
 | Friendship | A request between two Users that becomes an accepted friendship; only friends can be added to each other's expenses. |
 | Saved filter | An account's name for a collection of User IDs; it has no ownership, permission, invitation, or balance semantics. |
 | Evidence asset | Uploader, private image bytes stored in PostgreSQL, kind, media type, integrity hash, extraction status, and optional extracted data. Evidence is optional and may represent a receipt, restaurant check, ticket confirmation, or other paper trail. |
@@ -256,7 +256,7 @@ This describes the committed initial Supabase PostgreSQL model; sharing and extr
 | Repayment | Sender User, recipient User, amount, transaction date (actual payment date), creation timestamp, recorder, and effective status. |
 | Revision/audit event | Actor, time, action, affected record, and sufficient change information to explain balance changes. |
 
-**Confirmed developer reset:** Accounts flagged `is_developer` (set by hand in the database) see a Developer section in Settings that deletes every account's expenses, expense items, allocations, evidence links and images, payments, and revision history. Users, ledgers, friendships, saved filters, and Supabase Auth accounts are kept. The action requires typing DELETE, and the server independently checks the flag and the typed confirmation.
+**Confirmed developer reset:** Accounts flagged `is_developer` (set by hand in the database) see a Developer section in Settings that deletes every account's expenses, expense items, allocations, evidence links and images, payments, and revision history. Users, user settings, friendships, saved filters, and Supabase Auth accounts are kept. The action requires typing DELETE, and the server independently checks the flag and the typed confirmation.
 
 ## 8. Interface expectations
 
@@ -342,7 +342,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | ID | Decision | Proposed starting point | When needed |
 | --- | --- | --- | --- |
 | D-01 | Resolved: reference client platform | Confirmed: native SwiftUI iPhone app. The existing web prototype remains a workflow reference; Android follows after the backend and contracts are defined. | Core decision resolved. |
-| D-02 | Initial currency? | The backend currently defaults each account ledger to USD; confirm settings and multi-currency behavior before broader use. | Before production use outside the initial household. |
+| D-02 | Initial currency? | The backend currently defaults each account's settings to USD; confirm settings and multi-currency behavior before broader use. | Before production use outside the initial household. |
 | D-03 | What does “who added what” include? | Show creator, payer, selected items, and each member’s assigned amount. | Before finalizing expense detail. |
 | D-04 | Resolved: who can edit expenses? | The payer owns an expense and is the only one who can edit it; who created it doesn't matter. Each change is recorded in history. The payer edits the name and date by pressing and holding the expense's title; editing the total, split, and items comes later from the same menu. Voiding remains open. | Resolved 2026-09-27. |
 | D-05 | How are tax and receipt-wide discounts allocated? | Suggest proportional amounts, clearly disclosed and editable. | Before receipt calculation implementation. |
@@ -381,7 +381,8 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-27 | Expense detail: the name is editable by any participant (recorded as a revision, migration 005), total and payer share one line, and “Who owes what” became “Split”. Summary shows only the “Owed by/to” line under the total; Sign out sits on the signed-in row; contributions are entered in the chosen unit with the other beneath. Removed explanatory interface copy throughout. | Confirmed by the product owner; rename permission is provisional under D-04. API tests pass; migration 005 and Edge deploy pending. |
 | 2026-09-27 | The payer owns an expense and is the only one who can edit it (D-04 resolved). The payer presses and holds the expense's title to edit its name or date; the title is no longer an always-editable field, and others get no menu. Each changed field is recorded as a revision; a date change only reorders the expense and never changes balances. | Confirmed by the product owner. API tests pass; no migration needed; Edge deploy pending. |
 | 2026-09-27 | Expenses can carry an optional, manually chosen category (Groceries, Restaurant, Movie, Concert), picked on the split screen and shown as an icon in Summary’s expense list (migration 006). Existing expenses have none. Suggesting a category from the receipt image is planned. | Requested by the product owner. API tests pass and the app builds for the simulator; migration 006 and Edge deploy pending. |
-| 2026-09-27 | Added a developer-only reset in Settings that deletes all expense and payment data for every account while keeping users, ledgers, friendships, and saved filters (migration 007 adds the `is_developer` flag). | Keep/delete split, developer-only scope, and type-DELETE confirmation confirmed by the product owner. API tests pass and the app builds for the simulator. |
+| 2026-09-27 | Added a developer-only reset in Settings that deletes all expense and payment data for every account while keeping users, account settings, friendships, and saved filters (migration 007 adds the `is_developer` flag). | Keep/delete split, developer-only scope, and type-DELETE confirmation confirmed by the product owner. API tests pass and the app builds for the simulator. |
+| 2026-09-27 | Renamed the per-account `ledgers` table, which only held a currency after expenses became shared, to `user_settings` (migration 008). The contribution slider unit moved there, so it follows the account across devices instead of staying on one phone. | Confirmed by the product owner. API tests pass and the app builds for the simulator. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

@@ -60,7 +60,7 @@ Open `http://127.0.0.1:4173` in a browser.
 6. Select an iPhone running a current iOS release and run the app.
 7. Allow Camera and Photo Library access when prompted.
 
-The native app now restores a Supabase session, provisions its account ledger, downloads canonical transactions and balances from the deployed Edge Function, and posts new expenses, optional receipt evidence, and repayments back to Supabase. It retains an account-scoped device cache for display continuity. Capture and text recognition remain on-device, and users still review editable receipt items and exact-cent splits before upload.
+The native app now restores a Supabase session, provisions its account, downloads canonical transactions and balances from the deployed Edge Function, and posts new expenses, optional receipt evidence, and repayments back to Supabase. It retains an account-scoped device cache for display continuity. Capture and text recognition remain on-device, and users still review editable receipt items and exact-cent splits before upload.
 
 A Supabase-only backend foundation lives in `apps/api` and `supabase/functions/ledger-api`. It implements account-owned ledgers, local people, saved people filters, optional database-backed evidence and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, derived balances, and Supabase access-token verification. Supabase Edge Functions are the selected production runtime; the Node entry point remains a local test harness. The iPhone client is wired to this live API. Multi-account sharing, dynamic people management, and extraction providers remain deliberately undecided.
 
