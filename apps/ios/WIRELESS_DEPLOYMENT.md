@@ -86,3 +86,15 @@ Mac is offline. Deployments run serially to avoid overlapping installs.
 References: [GitHub runner setup](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners),
 [GitHub runner security](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#hardening-for-self-hosted-runners),
 [Apple command-line tools](https://developer.apple.com/documentation/xcode/xcode-command-line-tool-reference).
+
+## Install notifications
+
+To get a push notification when an install finishes or fails, install the free
+[ntfy](https://ntfy.sh) app on your phone and subscribe to a hard-to-guess topic
+name. Save that name on the runner Mac:
+
+```sh
+echo 'your-topic-name' > ~/.config/receipt-divider/ntfy-topic
+```
+
+Keep the topic out of this repository: anyone who knows it can read and post to it.
