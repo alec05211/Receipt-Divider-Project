@@ -22,10 +22,23 @@ jobs:
       IOS_SIGNING_CONFIG: ${{ vars.IOS_SIGNING_CONFIG }}
       LAUNCH_APP: ${{ vars.IOS_LAUNCH_APP || 'false' }}
     steps:
-      - uses: actions/checkout@v4
+      # A run that waited while the Mac was asleep may be behind main by now; the run for the newest commit
+      # installs everything, so this one stops instead of building an outdated app.
+      - name: Skip if main has moved on
+        id: latest
+        shell: bash
+        run: |
+          latest="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" refs/heads/main | cut -f1)"
+          if [[ -n "$latest" && "$latest" != "$GITHUB_SHA" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipped: main is now at ${latest:0:7}, which will be installed instead."
+          fi
+      - if: steps.latest.outputs.skip != 'true'
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Build and install
+        if: steps.latest.outputs.skip != 'true'
         shell: bash
         run: |
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
