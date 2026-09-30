@@ -62,13 +62,6 @@ enum ExpenseCategory: String, CaseIterable, Identifiable, Hashable, Codable, Sen
         case .concert: "music.mic"
         }
     }
-    var recommendedLayout: ExpenseLayout {
-        switch self {
-        case .movie: .splitTotal
-        case .groceries, .concert: .selectItems
-        case .restaurant: .assignItems
-        }
-    }
     var suggestedName: String {
         switch self {
         case .groceries: "Grocery Purchase"
@@ -79,14 +72,13 @@ enum ExpenseCategory: String, CaseIterable, Identifiable, Hashable, Codable, Sen
     }
 }
 
-/// The receipt-review interaction used to turn evidence into one expense. Category recommends a layout but never locks it.
+/// The receipt-review interaction used to turn evidence into one expense. Recognized row count recommends a layout.
 enum ExpenseLayout: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
-    case splitTotal, selectItems, assignItems
+    case splitTotal, assignItems
     var id: Self { self }
     var title: String {
         switch self {
         case .splitTotal: "Split Total"
-        case .selectItems: "Select Items"
         case .assignItems: "Assign Items"
         }
     }

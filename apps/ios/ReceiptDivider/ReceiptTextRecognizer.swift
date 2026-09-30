@@ -25,7 +25,7 @@ struct ReceiptScan {
         guard let printed = printedTotalCents else { return nil }
         let found = items.reduce(0) { $0 + $1.totalCents }
         guard found != printed else { return nil }
-        return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the prices below."
+        return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Review the total and item prices."
     }
 }
 
@@ -52,7 +52,8 @@ enum ExpenseSuggester {
         } else {
             category = nil
         }
-        let layout = category?.recommendedLayout ?? .selectItems
+        // A single recognized charge needs only a total split. Multiple rows benefit from explicit assignment.
+        let layout: ExpenseLayout = scan.items.count <= 1 ? .splitTotal : .assignItems
         let name = merchant(in: text).map { merchant in
             switch category {
             case .groceries: "\(merchant) Groceries"

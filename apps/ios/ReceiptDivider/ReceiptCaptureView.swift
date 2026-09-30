@@ -4,7 +4,7 @@ import UIKit
 import VisionKit
 
 struct ReceiptCaptureView: View {
-    enum Step: Int { case capture, reading, select, people, assign, split }
+    enum Step: Int { case capture, reading, review, assign, split, contributions }
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
     let finish: () -> Void
@@ -13,12 +13,11 @@ struct ReceiptCaptureView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showCamera = false
     @State private var items: [ReceiptItem] = []
+    @State private var reviewedTotalCents: Int?
     @State private var purchaseDate = Date()
     @State private var recognizedText: String?
     /// The receipt's evidence once an earlier expense from it was saved; later expenses from it reuse this instead of uploading again.
     @State private var receiptEvidenceID: UUID?
-    /// Items an earlier expense from this receipt already includes; shown dimmed but still selectable.
-    @State private var claimedItemIDs: Set<UUID> = []
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -29,7 +28,7 @@ struct ReceiptCaptureView: View {
     @State private var description = "Shared Expense"
     @State private var payer: UUID?
     @State private var category: ExpenseCategory?
-    @State private var layout: ExpenseLayout = .selectItems
+    @State private var layout: ExpenseLayout = .splitTotal
     @State private var error: String?
     @State private var editingItemID: UUID?
     @State private var personSearch = ""
@@ -42,12 +41,20 @@ struct ReceiptCaptureView: View {
     private var includedItemIDs: Set<UUID> {
         switch layout {
         case .splitTotal: Set(items.filter { $0.totalCents > 0 }.map(\.id))
-        case .selectItems: Set(items.filter(\.isSelected).map(\.id))
         case .assignItems: Set(itemAssignments.compactMap { $0.value.isEmpty ? nil : $0.key })
         }
     }
-    /// Includes each included item's share of tax and discounts, which the item list doesn't show.
-    private var total: Int { max(0, items.filter { includedItemIDs.contains($0.id) }.reduce(0) { $0 + $1.totalCents }) }
+    private var receiptTotal: Int { max(0, items.reduce(0) { $0 + $1.totalCents }) }
+    /// Before assignments exist, Assign Items reviews the whole receipt; afterwards its total follows assigned rows.
+    private var total: Int {
+        switch layout {
+        case .splitTotal: max(0, reviewedTotalCents ?? receiptTotal)
+        case .assignItems:
+            guard !itemAssignments.isEmpty || step == .review else { return 0 }
+            if itemAssignments.isEmpty { return receiptTotal }
+            return max(0, items.filter { includedItemIDs.contains($0.id) }.reduce(0) { $0 + $1.totalCents })
+        }
+    }
     private var allocationTotal: Int { selectedPeople.reduce(0) { $0 + (shares[$1] ?? 0) } }
     private var isValidSplit: Bool { !selectedPeople.isEmpty && allocationTotal == total && payer.map(selectedPeople.contains) == true }
     /// The signed-in user first, then everyone else by name.
@@ -64,10 +71,10 @@ struct ReceiptCaptureView: View {
                 switch step {
                 case .capture: captureScreen
                 case .reading: readingScreen
-                case .select: itemSelectionScreen
-                case .people: peopleScreen
+                case .review: reviewScreen
                 case .assign: assignmentScreen
                 case .split: splitScreen
+                case .contributions: contributionsScreen
                 }
             }
             .navigationTitle(title)
@@ -76,108 +83,75 @@ struct ReceiptCaptureView: View {
             .fullScreenCover(isPresented: $showCamera) { DocumentScanner(image: $image).ignoresSafeArea() }
             .onChange(of: image) { _, newImage in if newImage != nil { startReading() } }
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
-            .sensoryFeedback(.selection, trigger: items.filter(\.isSelected).count)
             .overlay { if showSaveSuccess { SaveSuccessView().transition(.scale(scale: 0.75).combined(with: .opacity)) } }
         }
     }
 
     /// The scanner is unavailable in Simulator and on devices without a camera.
     private var canScan: Bool { VNDocumentCameraViewController.isSupported }
-    private var title: String { switch step { case .capture: "Add expense"; case .reading: "Reading receipt"; case .select: "Review expense"; case .people: "Split with"; case .assign: "Assign items"; case .split: "Split expense" } }
+    private var title: String { switch step { case .capture: "Add expense"; case .reading: "Reading receipt"; case .review, .split: "Review expense"; case .assign: "Assign items"; case .contributions: "Edit contributions" } }
     private var captureScreen: some View {
         ContentUnavailableView {
             Label("Scan a receipt", systemImage: "camera.viewfinder")
         } description: { EmptyView() } actions: {
             Button { showCamera = true } label: { Label("Scan receipt", systemImage: "doc.viewfinder").prominentLabel() }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
-            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; step = .select }.padding(.top, 12)
+            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; reviewedTotalCents = 0; layout = .splitTotal; step = .review }.padding(.top, 12)
         }
     }
     private var readingScreen: some View {
         VStack(spacing: 16) { ProgressView().controlSize(.large); Text("Finding items").font(.headline) }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    private var itemSelectionScreen: some View {
+    /// Receipt details and participant selection share the first screen after recognition.
+    private var reviewScreen: some View {
         List {
-            Section { Picker("Split by", selection: $layout) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } } }
-            Section("Receipt details") { DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date) }
-            if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
-            if layout == .splitTotal {
-                Section { LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
-            } else if layout == .assignItems {
-                Section("Items") {
-                    ForEach($items) { $item in
-                        HStack {
-                            Text(item.name.isEmpty ? "Unnamed item" : item.name).foregroundStyle(item.name.isEmpty ? .secondary : .primary)
-                            Spacer()
-                            Text(item.cents.usd).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
+            Section {
+                if layout == .splitTotal {
+                    LabeledContent("Expense total") { CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold) }
+                } else {
+                    LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
                 }
-            } else {
-                Section("Select items to share") {
-                    ForEach($items) { $item in
-                        Button { withAnimation(.snappy(duration: 0.15)) { item.isSelected.toggle() } } label: {
-                            HStack {
-                                Text(item.name.isEmpty ? "Unnamed item" : item.name).foregroundStyle(item.name.isEmpty ? .secondary : .primary)
+                DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
+                Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
+            }
+            if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
+            Section {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search friends", text: $personSearch).submitLabel(.done)
+                    if !personSearch.isEmpty { Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }.labelStyle(.iconOnly).foregroundStyle(.secondary) }
+                }
+            }
+            Section {
+                if shownPeople.isEmpty {
+                    ContentUnavailableView.search(text: personSearch)
+                } else {
+                    ForEach(shownPeople) { person in
+                        let isSelected = selectedPeople.contains(person.id)
+                        Button { withAnimation(.snappy(duration: 0.15)) { if isSelected { selectedPeople.remove(person.id) } else { selectedPeople.insert(person.id) } } } label: {
+                            HStack(spacing: 12) {
+                                AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
+                                Text(store.name(for: person.id))
                                 Spacer()
-                                Text(item.cents.usd).monospacedDigit().foregroundStyle(.secondary)
-                                SelectionCircle(isSelected: item.isSelected)
+                                SelectionCircle(isSelected: isSelected)
                             }
-                            .opacity(claimedItemIDs.contains(item.id) && !item.isSelected ? 0.4 : 1)
                             .contentShape(Rectangle())
                         }
                         .foregroundStyle(.primary)
-                        .sensoryFeedback(.selection, trigger: item.isSelected)
-                        .accessibilityAddTraits(item.isSelected ? .isSelected : [])
-                        .accessibilityValue(claimedItemIDs.contains(item.id) ? "In an earlier expense" : "")
-                        .contextMenu {
-                            Button("Edit", systemImage: "pencil") { editingItemID = item.id }
-                            Button("Delete", systemImage: "trash", role: .destructive) { items.removeAll { $0.id == item.id } }
-                        }
+                        .sensoryFeedback(.selection, trigger: isSelected)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
-                    .onDelete { items.remove(atOffsets: $0) }
-                    Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0, isSelected: true); items.append(item); editingItemID = item.id }
-                }
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            ContinueButton(title: layout == .assignItems ? "Choose people" : "Split \(total.usd)", disabled: layout != .assignItems && total == 0) { step = .people }
-        }
-        .sheet(item: $editingItemID) { id in
-            if let index = items.firstIndex(where: { $0.id == id }) { ItemEditor(item: $items[index]) }
-        }
-    }
-    private var peopleScreen: some View {
-        List {
-            Section {
-                ForEach(shownPeople) { person in
-                    let isSelected = selectedPeople.contains(person.id)
-                    Button { withAnimation(.snappy(duration: 0.15)) { if isSelected { selectedPeople.remove(person.id) } else { selectedPeople.insert(person.id) } } } label: {
-                        HStack(spacing: 12) {
-                            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
-                            Text(store.name(for: person.id))
-                            Spacer()
-                            SelectionCircle(isSelected: isSelected)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .foregroundStyle(.primary)
-                    .sensoryFeedback(.selection, trigger: isSelected)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             } footer: {
                 if store.splitCandidates.count <= 1 { Text("Add friends in Settings.") }
             }
         }
-        .searchable(text: $personSearch, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search friends")
-        .submitLabel(.done)
-        .overlay { if shownPeople.isEmpty { ContentUnavailableView.search(text: personSearch) } }
         .onAppear { if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] } }
         .safeAreaInset(edge: .bottom) {
-            ContinueButton(title: "Confirm people", disabled: selectedPeople.isEmpty) {
+            ContinueButton(title: "Split \(total.usd)", disabled: selectedPeople.isEmpty || total == 0) {
                 personSearch = ""
                 if layout == .assignItems { prepareAssignments(); step = .assign }
-                else { setEqualSplit(); step = .split }
+                else { prepareFinalSplit(); step = .split }
             }
         }
     }
@@ -186,45 +160,58 @@ struct ReceiptCaptureView: View {
             Section { Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } } }
             if assignItemsControl == .selectPersonFirst {
                 Section {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 5) {
-                            let allIsActive = activeAssignmentTarget == .all
-                            Button { selectAssignmentTarget(.all) } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "person.2.fill").font(.caption2)
-                                    Text("All")
-                                }
-                                .assignmentTargetPill(isActive: allIsActive)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(allIsActive ? .isSelected : [])
-
-                            ForEach(recentAssignmentPeople, id: \.self) { personID in
-                                let person = store.person(for: personID)
-                                let isActive = activeAssignmentTarget == .person(personID)
-                                Button { selectAssignmentTarget(.person(personID)) } label: {
-                                    HStack(spacing: 4) {
-                                        AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 18)
-                                        Text(person.firstName).lineLimit(1)
-                                    }
-                                    .assignmentTargetPill(isActive: isActive)
+                    GeometryReader { geometry in
+                        let targetCount = recentAssignmentPeople.count + 1
+                        let visibleCount = min(targetCount, 5)
+                        let spacing: CGFloat = 8
+                        let pillWidth = (geometry.size.width - spacing * CGFloat(visibleCount - 1)) / CGFloat(visibleCount)
+                        ScrollView(.horizontal, showsIndicators: targetCount > 5) {
+                            HStack(spacing: spacing) {
+                                let allIsActive = activeAssignmentTarget == .all
+                                Button { selectAssignmentTarget(.all) } label: {
+                                    Text("All").assignmentTargetPill(isActive: allIsActive, width: pillWidth)
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityAddTraits(isActive ? .isSelected : [])
+                                .accessibilityAddTraits(allIsActive ? .isSelected : [])
+
+                                ForEach(recentAssignmentPeople, id: \.self) { personID in
+                                    let person = store.person(for: personID)
+                                    let isActive = activeAssignmentTarget == .person(personID)
+                                    Button { selectAssignmentTarget(.person(personID)) } label: {
+                                        Text(person.firstName)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.72)
+                                            .assignmentTargetPill(isActive: isActive, width: pillWidth)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityAddTraits(isActive ? .isSelected : [])
+                                }
                             }
+                            .frame(minWidth: geometry.size.width, alignment: .leading)
                         }
                     }
+                    .frame(height: 36)
                     .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                 }
             }
             Section {
                 ForEach(items) { item in
                     HStack(spacing: 10) {
-                        Text(item.name.isEmpty ? "Unnamed item" : item.name).fontWeight(.medium)
-                        Spacer(minLength: 8)
+                        Text(item.name.isEmpty ? "Unnamed item" : item.name)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(1)
+                            .mask {
+                                LinearGradient(
+                                    stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.58), .init(color: .clear, location: 0.95)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            }
                         let assigned = recentAssignmentPeople.filter { itemAssignments[item.id, default: []].contains($0) }
                         if !assigned.isEmpty { AvatarStack(people: assigned, size: 22) }
-                        Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary)
+                        Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                     }
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
@@ -262,9 +249,18 @@ struct ReceiptCaptureView: View {
                         if assignItemsControl == .pressAndHold { assignmentPopoverItemID = item.id }
                         else if let target = activeAssignmentTarget { toggleAssignment(target, for: item.id) }
                     }
+                    .swipeActions {
+                        Button("Edit", systemImage: "pencil") { editingItemID = item.id }
+                        Button("Delete", systemImage: "trash", role: .destructive) { items.removeAll { $0.id == item.id }; itemAssignments[item.id] = nil; shares = assignedShares() }
+                    }
                 }
+                Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0); items.append(item); editingItemID = item.id }
             }
         }
+        .sheet(item: $editingItemID) { id in
+            if let index = items.firstIndex(where: { $0.id == id }) { ItemEditor(item: $items[index]) }
+        }
+        .onChange(of: items) { _, _ in shares = assignedShares() }
         .safeAreaInset(edge: .bottom) {
             ContinueButton(title: "Continue with \(total.usd)", disabled: total == 0) { shares = assignedShares(); setDefaultPayer(); step = .split }
         }
@@ -284,16 +280,15 @@ struct ReceiptCaptureView: View {
     private var recentAssignmentPeople: [UUID] {
         friendsByRecency.map(\.id).filter(selectedPeople.contains)
     }
-    /// You and your most recent friends for quick tapping, plus anyone already selected from a search. Searching covers every friend.
+    /// You first, then every friend by recency; searching narrows the same complete list.
     private var shownPeople: [LedgerPerson] {
         guard personSearch.isEmpty else {
             return friendsByRecency.filter { [$0.name, $0.username ?? ""].contains { $0.localizedCaseInsensitiveContains(personSearch) } }
         }
-        return friendsByRecency.enumerated().filter { $0.offset < 6 || selectedPeople.contains($0.element.id) }.map(\.element)
+        return friendsByRecency
     }
     private var splitScreen: some View {
         List {
-            Section { Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } } }
             Section("Name") {
                 TextField("What was this for?", text: $description).submitLabel(.done)
                 Picker("Category", selection: $category) {
@@ -301,18 +296,14 @@ struct ReceiptCaptureView: View {
                     ForEach(ExpenseCategory.allCases) { Label($0.title, systemImage: $0.symbol).tag(Optional($0)) }
                 }
             }
-            Section { Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }; LabeledContent("Expense total", value: total.usd).fontWeight(.semibold) }
-            Section("Contributions") {
-                ForEach(orderedSelection, id: \.self) { person in
-                    VStack(spacing: 4) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(store.name(for: person))
-                            Spacer()
-                            ContributionAmountField(name: store.name(for: person), cents: shareBinding(for: person), total: total)
-                        }
-                        if selectedPeople.count > 1 { ContributionSlider(name: store.name(for: person), cents: shareBinding(for: person), total: total, detent: equalShare(for: person)) }
-                    }
-                }
+            Section {
+                Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
+                DatePicker("Date of expense", selection: $purchaseDate, displayedComponents: .date)
+                Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
+                LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
+            }
+            Section {
+                Button("Edit Contributions") { step = .contributions }
             }
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
             if let error { Section { Text(error).foregroundStyle(.red) } }
@@ -326,6 +317,26 @@ struct ReceiptCaptureView: View {
                     .accessibilityLabel("Save and add another")
             }
             .controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(!isValidSplit || isSaving)
+        }
+    }
+    private var contributionsScreen: some View {
+        List {
+            Section("Contributions") {
+                ForEach(orderedSelection, id: \.self) { person in
+                    VStack(spacing: 4) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(store.name(for: person))
+                            Spacer()
+                            ContributionAmountField(name: store.name(for: person), cents: shareBinding(for: person), total: total)
+                        }
+                        if selectedPeople.count > 1 { ContributionSlider(name: store.name(for: person), cents: shareBinding(for: person), total: total, detent: equalShare(for: person)) }
+                    }
+                }
+            }
+            if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
+        }
+        .safeAreaInset(edge: .bottom) {
+            ContinueButton(title: "Done", disabled: !isValidSplit) { step = .split }
         }
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
@@ -348,20 +359,39 @@ struct ReceiptCaptureView: View {
             category = suggestion.category
             layout = suggestion.layout
             description = suggestion.name
-            if layout != .selectItems { for index in items.indices { items[index].isSelected = true } }
+            for index in items.indices { items[index].isSelected = true }
+            reviewedTotalCents = scan.printedTotalCents ?? receiptTotal
             if let date = scan.purchaseDate { purchaseDate = date }
             error = scan.mismatchWarning
-            if items.isEmpty { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; error = "No prices found." }
-            step = .select
+            if items.isEmpty {
+                items = [ReceiptItem(name: "", cents: 0, isSelected: true)]
+                reviewedTotalCents = scan.printedTotalCents ?? 0
+                if scan.printedTotalCents != nil { error = nil }
+                else { error = "No prices found." }
+            }
+            step = .review
         }
+    }
+    private var totalBinding: Binding<Int> {
+        Binding(get: { total }, set: { reviewedTotalCents = max(0, $0) })
+    }
+    private var reviewLayoutBinding: Binding<ExpenseLayout> {
+        Binding(get: { layout }, set: { newLayout in
+            guard newLayout != layout else { return }
+            layout = newLayout
+            if newLayout == .splitTotal, reviewedTotalCents == nil { reviewedTotalCents = receiptTotal }
+            shares = [:]
+            balancer = ContributionBalancer()
+        })
     }
     private var layoutBinding: Binding<ExpenseLayout> {
         Binding(get: { layout }, set: { newLayout in
             guard newLayout != layout else { return }
             layout = newLayout
+            if newLayout == .splitTotal, reviewedTotalCents == nil { reviewedTotalCents = receiptTotal }
             shares = [:]
             balancer = ContributionBalancer()
-            if step == .assign || step == .split { step = .select }
+            if step == .assign || step == .split || step == .contributions { step = .review }
         })
     }
     /// Preserves valid prior assignments. Press-and-hold starts with reviewed rows shared by everyone; person-first
@@ -431,14 +461,21 @@ struct ReceiptCaptureView: View {
         balancer = ContributionBalancer()
         setDefaultPayer()
     }
+    private func prepareFinalSplit() {
+        let hasEveryPerson = Set(shares.keys) == selectedPeople
+        if !hasEveryPerson || allocationTotal != total { setEqualSplit() }
+        else { setDefaultPayer() }
+    }
     /// With `createNew`, stays on this receipt afterwards so another expense can be split from it.
     private func save(createNew: Bool = false) {
         guard let payer else { return }
         let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let savedItemIDs = includedItemIDs
+        // Split Total saves the reviewed amount without line items; Assign Items saves only assigned rows.
+        let savedItemIDs: Set<UUID> = layout == .splitTotal ? [] : includedItemIDs
         var savedItems = items
         for index in savedItems.indices { savedItems[index].isSelected = savedItemIDs.contains(savedItems[index].id) }
         var expense = Expense(description: name.isEmpty ? (category?.suggestedName ?? "Shared Expense") : name, transactionDate: purchaseDate, payer: payer, items: savedItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category)
+        if layout == .splitTotal { expense.recordedTotalCents = total }
         // A receipt already saved with an earlier expense is attached again rather than uploaded twice.
         if let receiptEvidenceID { expense.evidenceIDs = [receiptEvidenceID]; expense.receiptImageData = nil }
         isSaving = true
@@ -469,18 +506,27 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
-    /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
-    /// saved as claimed, and clears the item, people and contribution choices.
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; receiptEvidenceID = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
+    /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it while clearing
+    /// participant and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
         receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
-        claimedItemIDs.formUnion(includedItemIDs)
         for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
-        step = .select
+        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil
+        layout = items.count <= 1 ? .splitTotal : .assignItems
+        reviewedTotalCents = receiptTotal
+        step = .review
     }
     /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
-    private func back() { switch step { case .select: receiptEvidenceID = nil; claimedItemIDs = []; step = .capture; case .people: personSearch = ""; step = .select; case .assign: step = .people; case .split: step = layout == .assignItems ? .assign : .people; default: break } }
+    private func back() {
+        switch step {
+        case .review: receiptEvidenceID = nil; personSearch = ""; step = .capture
+        case .assign: step = .review
+        case .split: step = layout == .assignItems ? .assign : .review
+        case .contributions: step = .split
+        default: break
+        }
+    }
 }
 
 /// Keeps contributions adding up to the total. Touching a contribution fixes it; the change is split equally among
@@ -594,13 +640,11 @@ private struct AssignmentPeoplePopover: View {
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
-    func assignmentTargetPill(isActive: Bool) -> some View {
+    func assignmentTargetPill(isActive: Bool, width: CGFloat) -> some View {
         self
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .fixedSize(horizontal: true, vertical: false)
+            .frame(width: width, minHeight: 28)
             .background(isActive ? Color.black : Color(red: 0.16, green: 0.17, blue: 0.19), in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(isActive ? 0.55 : 0.12), lineWidth: 1))
     }
