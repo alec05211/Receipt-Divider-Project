@@ -21,7 +21,7 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 1. Tap **Add expense** and capture a receipt with the camera.
 2. The app reads likely item names and prices on-device and suggests a short name, category, and split layout.
 3. Review **Split Total**, **Select Items**, or **Assign Items** and switch layouts without losing the receipt or corrections.
-4. Tag the friends involved, with recent people first. Assign Items can attach each row to one or more people using the control style chosen in Settings: press and hold a compact item row, or select one participant above the list and tap their items.
+4. Tag the friends involved, with recent people first. Assign Items can attach each row to one or more people using the control style chosen in Settings: press and hold a compact item row, or choose All or one participant from the compact scrolling line above the list and tap their items.
 5. Review the name, category, payer, and exact contributions.
 6. Save to see the expense in Summary immediately while its evidence and canonical database row finish uploading, or tap the + beside Save to split another expense from the same receipt.
 

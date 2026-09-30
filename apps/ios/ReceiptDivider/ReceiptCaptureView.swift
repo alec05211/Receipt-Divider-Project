@@ -36,7 +36,7 @@ struct ReceiptCaptureView: View {
     @State private var isSaving = false
     @State private var showSaveSuccess = false
     @State private var assignmentPopoverItemID: UUID?
-    @State private var activeAssignmentPersonID: UUID?
+    @State private var activeAssignmentTarget: AssignmentTarget?
     @AppStorage(AssignItemsControlStyle.storageKey) private var assignItemsControl: AssignItemsControlStyle = .pressAndHold
 
     private var includedItemIDs: Set<UUID> {
@@ -186,25 +186,35 @@ struct ReceiptCaptureView: View {
             Section { Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } } }
             if assignItemsControl == .selectPersonFirst {
                 Section {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 8)], spacing: 8) {
-                        ForEach(recentAssignmentPeople, id: \.self) { personID in
-                            let person = store.person(for: personID)
-                            let isActive = activeAssignmentPersonID == personID
-                            Button { activeAssignmentPersonID = personID } label: {
-                                HStack(spacing: 7) {
-                                    AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 28)
-                                    Text(person.firstName).fontWeight(.medium).lineLimit(1)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 5) {
+                            let allIsActive = activeAssignmentTarget == .all
+                            Button { selectAssignmentTarget(.all) } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "person.2.fill").font(.caption2)
+                                    Text("All")
                                 }
-                                .frame(maxWidth: .infinity)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .foregroundStyle(isActive ? Color.white : Color.primary)
-                                .background(isActive ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
+                                .assignmentTargetPill(isActive: allIsActive)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityAddTraits(isActive ? .isSelected : [])
+                            .accessibilityAddTraits(allIsActive ? .isSelected : [])
+
+                            ForEach(recentAssignmentPeople, id: \.self) { personID in
+                                let person = store.person(for: personID)
+                                let isActive = activeAssignmentTarget == .person(personID)
+                                Button { selectAssignmentTarget(.person(personID)) } label: {
+                                    HStack(spacing: 4) {
+                                        AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 18)
+                                        Text(person.firstName).lineLimit(1)
+                                    }
+                                    .assignmentTargetPill(isActive: isActive)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityAddTraits(isActive ? .isSelected : [])
+                            }
                         }
                     }
+                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                 }
             }
             Section {
@@ -219,8 +229,8 @@ struct ReceiptCaptureView: View {
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        guard assignItemsControl == .selectPersonFirst, let personID = activeAssignmentPersonID else { return }
-                        toggleAssignment(personID, for: item.id)
+                        guard assignItemsControl == .selectPersonFirst, let target = activeAssignmentTarget else { return }
+                        toggleAssignment(target, for: item.id)
                     }
                     .onLongPressGesture(minimumDuration: 0.45) {
                         guard assignItemsControl == .pressAndHold else { return }
@@ -250,7 +260,7 @@ struct ReceiptCaptureView: View {
                     }
                     .accessibilityAction(named: "Assign people") {
                         if assignItemsControl == .pressAndHold { assignmentPopoverItemID = item.id }
-                        else if let personID = activeAssignmentPersonID { toggleAssignment(personID, for: item.id) }
+                        else if let target = activeAssignmentTarget { toggleAssignment(target, for: item.id) }
                     }
                 }
             }
@@ -366,13 +376,24 @@ struct ReceiptCaptureView: View {
             let selected = items.filter(\.isSelected)
             for item in selected.isEmpty ? items : selected { itemAssignments[item.id] = validPeople }
         }
-        if activeAssignmentPersonID.map(validPeople.contains) != true { activeAssignmentPersonID = recentAssignmentPeople.first }
+        if case let .person(personID) = activeAssignmentTarget, !validPeople.contains(personID) { activeAssignmentTarget = nil }
+        if activeAssignmentTarget == nil { activeAssignmentTarget = recentAssignmentPeople.first.map(AssignmentTarget.person) ?? .all }
         shares = assignedShares()
         setDefaultPayer()
     }
-    private func toggleAssignment(_ personID: UUID, for itemID: UUID) {
-        if itemAssignments[itemID, default: []].contains(personID) { itemAssignments[itemID, default: []].remove(personID) }
-        else { itemAssignments[itemID, default: []].insert(personID) }
+    private func selectAssignmentTarget(_ target: AssignmentTarget) {
+        activeAssignmentTarget = target
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+    private func toggleAssignment(_ target: AssignmentTarget, for itemID: UUID) {
+        switch target {
+        case .all:
+            if selectedPeople.isSubset(of: itemAssignments[itemID, default: []]) { itemAssignments[itemID, default: []].subtract(selectedPeople) }
+            else { itemAssignments[itemID, default: []].formUnion(selectedPeople) }
+        case let .person(personID):
+            if itemAssignments[itemID, default: []].contains(personID) { itemAssignments[itemID, default: []].remove(personID) }
+            else { itemAssignments[itemID, default: []].insert(personID) }
+        }
         shares = assignedShares()
         UISelectionFeedbackGenerator().selectionChanged()
     }
@@ -448,14 +469,14 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentPersonID = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
     /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
     /// saved as claimed, and clears the item, people and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
         receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
         claimedItemIDs.formUnion(includedItemIDs)
         for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentPersonID = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
+        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
         step = .select
     }
     /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
@@ -524,6 +545,11 @@ private struct SaveSuccessView: View {
 
 private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(disabled) } }
 
+private enum AssignmentTarget: Equatable {
+    case all
+    case person(UUID)
+}
+
 /// Compact assignment shortcut shown by pressing and holding an item row.
 private struct AssignmentPeoplePopover: View {
     @Environment(ExpenseStore.self) private var store
@@ -568,6 +594,16 @@ private struct AssignmentPeoplePopover: View {
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
+    func assignmentTargetPill(isActive: Bool) -> some View {
+        self
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .fixedSize(horizontal: true, vertical: false)
+            .background(isActive ? Color.black : Color(red: 0.16, green: 0.17, blue: 0.19), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(isActive ? 0.55 : 0.12), lineWidth: 1))
+    }
 }
 
 /// The app tint is `.primary`, so a prominent button fills black in light mode and white in dark mode while the
