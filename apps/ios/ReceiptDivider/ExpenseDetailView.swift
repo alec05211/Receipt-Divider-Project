@@ -140,7 +140,9 @@ struct ExpenseDetailView: View {
             Text("paid by").foregroundStyle(.secondary)
             AvatarView(userID: current.payer, name: payer.name, etag: payer.avatarEtag, size: avatarSize)
                 .accessibilityHidden(true)
-            Text("\(payer.firstName) on \(current.transactionDate.formatted(date: .abbreviated, time: .omitted))")
+            Text(payer.firstName)
+            Text("on").foregroundStyle(.secondary)
+            Text(current.transactionDate.formatted(date: .abbreviated, time: .omitted))
         }
         .font(font)
         .lineLimit(1)

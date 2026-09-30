@@ -34,6 +34,8 @@ struct ReceiptCaptureView: View {
     @State private var showSaveSuccess = false
     @State private var activeAssignmentTarget: AssignmentTarget?
     @State private var assignmentsLocked = false
+    /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
+    @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
 
     private var includedItemIDs: Set<UUID> {
         switch layout {
@@ -129,57 +131,40 @@ struct ReceiptCaptureView: View {
     }
     /// Receipt details and participant selection share the first screen after recognition.
     private var reviewScreen: some View {
-        VStack(spacing: 10) {
-            VStack(spacing: 0) {
-                if layout == .splitTotal {
-                    LabeledContent("Expense total") { CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold) }
-                        .frame(height: 42)
-                } else {
-                    LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
-                        .frame(height: 42)
-                }
-                Divider()
-                DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
-                    .frame(height: 42)
-                Divider()
-                LabeledContent("Split by") {
+        VStack(spacing: 12) {
+            List {
+                Section {
+                    if layout == .splitTotal {
+                        LabeledContent("Expense total") { CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold) }
+                    } else {
+                        LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
+                    }
+                    DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
                     Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                }
-                    .frame(height: 42)
-                Divider()
-                LabeledContent("Paid by") {
                     Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
                 }
-                    .frame(height: 42)
-            }
-            .padding(.horizontal, 16)
-            .reviewCard()
-
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search friends", text: $personSearch).submitLabel(.done)
-                if !personSearch.isEmpty {
-                    Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(.secondary)
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search friends", text: $personSearch).submitLabel(.done)
+                        if !personSearch.isEmpty {
+                            Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }
+                                .labelStyle(.iconOnly)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .frame(height: 44)
-            .reviewCard()
+            .reviewListStyle()
+            .scrollDisabled(true)
+            .frame(height: 232)
 
-            ScrollView {
-                if shownPeople.isEmpty {
-                    ContentUnavailableView.search(text: personSearch)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
-                } else {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(shownPeople.enumerated()), id: \.element.id) { index, person in
+            List {
+                Section {
+                    if shownPeople.isEmpty {
+                        ContentUnavailableView.search(text: personSearch)
+                    } else {
+                        ForEach(shownPeople) { person in
                             let isSelected = selectedPeople.contains(person.id)
                             Button {
                                 withAnimation(.snappy(duration: 0.15)) {
@@ -193,38 +178,29 @@ struct ReceiptCaptureView: View {
                                     Spacer()
                                     SelectionCircle(isSelected: isSelected)
                                 }
-                                .padding(.horizontal, 16)
-                                .frame(height: 52)
                                 .contentShape(Rectangle())
                             }
                             .foregroundStyle(.primary)
                             .sensoryFeedback(.selection, trigger: isSelected)
                             .accessibilityAddTraits(isSelected ? .isSelected : [])
-                            if index < shownPeople.count - 1 { Divider().padding(.leading, 62) }
-                        }
-                        if store.splitCandidates.count <= 1 {
-                            Text("Add friends in Settings.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
                         }
                     }
+                } footer: {
+                    if store.splitCandidates.count <= 1 { Text("Add friends in Settings.") }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .reviewCard()
+            .reviewListStyle()
+            .frame(maxHeight: .infinity)
 
             if let error {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .reviewCard()
+                List {
+                    Section { Text(error).font(.footnote).foregroundStyle(.secondary) }
+                }
+                .reviewListStyle()
+                .scrollDisabled(true)
+                .frame(height: 82)
             }
         }
-        .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(Color(.systemGroupedBackground))
         .onAppear {
@@ -471,6 +447,7 @@ struct ReceiptCaptureView: View {
         }
         activeAssignmentTarget = .all
         assignmentsLocked = false
+        assignmentsBeforeLock = nil
         shares = assignedShares()
         setDefaultPayer()
     }
@@ -499,6 +476,7 @@ struct ReceiptCaptureView: View {
         }
         setDefaultPayer()
         guard let payer else { return }
+        assignmentsBeforeLock = itemAssignments
         withAnimation(.snappy(duration: 0.2)) {
             for item in items where itemAssignments[item.id, default: []].isEmpty {
                 itemAssignments[item.id] = [payer]
@@ -507,6 +485,15 @@ struct ReceiptCaptureView: View {
             assignmentsLocked = true
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+    private func undoAssignmentConfirmation() {
+        withAnimation(.snappy(duration: 0.2)) {
+            if let assignmentsBeforeLock { itemAssignments = assignmentsBeforeLock }
+            shares = assignedShares()
+            assignmentsLocked = false
+            assignmentsBeforeLock = nil
+        }
+        UISelectionFeedbackGenerator().selectionChanged()
     }
     private func assignedShares() -> [UUID: Int] {
         var result = Dictionary(uniqueKeysWithValues: orderedSelection.map { ($0, 0) })
@@ -576,12 +563,20 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
     private func back() {
         switch step {
         case .review: personSearch = ""; step = .capture
-        case .assign: step = .review
-        case .split: step = layout == .assignItems ? .assign : .review
+        case .assign:
+            if assignmentsLocked { undoAssignmentConfirmation() }
+            else { step = .review }
+        case .split:
+            if layout == .assignItems {
+                step = .assign
+                if assignmentsLocked { undoAssignmentConfirmation() }
+            } else {
+                step = .review
+            }
         case .contributions: step = .split
         default: break
         }
@@ -684,8 +679,11 @@ private struct AssignmentTargetPill<Icon: View>: View {
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
-    func reviewCard() -> some View {
-        background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    func reviewListStyle() -> some View {
+        listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.vertical, 0, for: .scrollContent)
+            .listSectionSpacing(12)
     }
 }
 
