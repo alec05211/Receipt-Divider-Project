@@ -644,7 +644,8 @@ private extension View {
         self
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.white)
-            .frame(width: width, minHeight: 28)
+            .frame(width: width)
+            .frame(minHeight: 28)
             .background(isActive ? Color.black : Color(red: 0.16, green: 0.17, blue: 0.19), in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(isActive ? 0.55 : 0.12), lineWidth: 1))
     }
