@@ -48,7 +48,7 @@ struct ReceiptCaptureView: View {
     /// Before assignments exist, Assign Items reviews the whole receipt; afterwards its total follows assigned rows.
     private var total: Int {
         switch layout {
-        case .splitTotal: max(0, reviewedTotalCents ?? receiptTotal)
+        case .splitTotal: return max(0, reviewedTotalCents ?? receiptTotal)
         case .assignItems:
             guard !itemAssignments.isEmpty || step == .review else { return 0 }
             if itemAssignments.isEmpty { return receiptTotal }
