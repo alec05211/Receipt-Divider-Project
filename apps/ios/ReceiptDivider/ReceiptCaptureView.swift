@@ -143,6 +143,12 @@ struct ReceiptCaptureView: View {
                     Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
                     Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
                 }
+            }
+            .reviewListStyle()
+            .scrollDisabled(true)
+            .frame(height: 176)
+
+            List {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -157,7 +163,7 @@ struct ReceiptCaptureView: View {
             }
             .reviewListStyle()
             .scrollDisabled(true)
-            .frame(height: 232)
+            .frame(height: 44)
 
             List {
                 Section {
@@ -190,7 +196,8 @@ struct ReceiptCaptureView: View {
                 }
             }
             .reviewListStyle()
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
 
             if let error {
                 List {
