@@ -5,7 +5,7 @@ struct SettingsView: View {
     @Environment(AuthenticationStore.self) private var authentication
     @State private var showResetConfirmation = false
     @State private var showServerReset = false
-    @AppStorage(ContributionSliderUnit.storageKey) private var sliderUnit: ContributionSliderUnit = .dollars
+    @AppStorage(ContributionSliderUnit.storageKey) private var sliderUnit: ContributionSliderUnit = .percent
 
     var body: some View {
         NavigationStack {

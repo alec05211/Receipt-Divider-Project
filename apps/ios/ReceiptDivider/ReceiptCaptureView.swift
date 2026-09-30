@@ -142,13 +142,21 @@ struct ReceiptCaptureView: View {
                 DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
                     .frame(height: 42)
                 Divider()
-                Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
+                LabeledContent("Split by") {
+                    Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                }
                     .frame(height: 42)
                 Divider()
-                Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
+                LabeledContent("Paid by") {
+                    Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                }
                     .frame(height: 42)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .reviewCard()
 
             HStack(spacing: 10) {
@@ -160,7 +168,7 @@ struct ReceiptCaptureView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .frame(height: 44)
             .reviewCard()
 
@@ -180,19 +188,19 @@ struct ReceiptCaptureView: View {
                                 }
                             } label: {
                                 HStack(spacing: 12) {
-                                    AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 32)
+                                    AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
                                     Text(store.name(for: person.id))
                                     Spacer()
                                     SelectionCircle(isSelected: isSelected)
                                 }
-                                .padding(.horizontal, 12)
-                                .frame(height: 48)
+                                .padding(.horizontal, 16)
+                                .frame(height: 52)
                                 .contentShape(Rectangle())
                             }
                             .foregroundStyle(.primary)
                             .sensoryFeedback(.selection, trigger: isSelected)
                             .accessibilityAddTraits(isSelected ? .isSelected : [])
-                            if index < shownPeople.count - 1 { Divider().padding(.leading, 56) }
+                            if index < shownPeople.count - 1 { Divider().padding(.leading, 62) }
                         }
                         if store.splitCandidates.count <= 1 {
                             Text("Add friends in Settings.")
@@ -216,8 +224,8 @@ struct ReceiptCaptureView: View {
                     .reviewCard()
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
         .background(Color(.systemGroupedBackground))
         .onAppear {
             if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] }
@@ -677,7 +685,7 @@ private struct AssignmentTargetPill<Icon: View>: View {
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
     func reviewCard() -> some View {
-        background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

@@ -32,23 +32,13 @@ struct ExpenseDetailView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(current.description).font(.title2.bold())
-                    HStack(spacing: 4) {
-                        Text(current.total.usd).fontWeight(.semibold)
-                        Text("paid by").foregroundStyle(.secondary)
-                        let payer = store.person(for: current.payer)
-                        AvatarView(userID: current.payer, name: payer.name, etag: payer.avatarEtag, size: 20)
-                            .accessibilityHidden(false)
-                            .accessibilityLabel("Paid by \(payer.name)")
-                        Text(payer.firstName)
-                        Spacer(minLength: 2)
-                        Text("on").foregroundStyle(.secondary)
-                        Text(current.transactionDate, style: .date)
-                            .layoutPriority(1)
+                    ViewThatFits(in: .horizontal) {
+                        metadataLine(font: .subheadline, avatarSize: 20)
+                        metadataLine(font: .caption, avatarSize: 18)
+                        metadataLine(font: .caption2, avatarSize: 16)
+                        metadataLine(font: .system(size: 9), avatarSize: 14)
                     }
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .allowsTightening(true)
+                    .accessibilityElement(children: .combine)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -141,6 +131,20 @@ struct ExpenseDetailView: View {
         }
         .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func metadataLine(font: Font, avatarSize: CGFloat) -> some View {
+        let payer = store.person(for: current.payer)
+        return HStack(spacing: 4) {
+            Text(current.total.usd).fontWeight(.semibold)
+            Text("paid by").foregroundStyle(.secondary)
+            AvatarView(userID: current.payer, name: payer.name, etag: payer.avatarEtag, size: avatarSize)
+                .accessibilityHidden(true)
+            Text("\(payer.firstName) on \(current.transactionDate.formatted(date: .abbreviated, time: .omitted))")
+        }
+        .font(font)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 

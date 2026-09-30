@@ -22,10 +22,10 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 2. The app reads likely item names and prices on-device and suggests a short name, category, and split layout.
 3. Review the total, purchase date, **Split Total** or **Assign Items** recommendation, and payer on one fixed page. Search sits above the largest-possible friends region, which scrolls internally when needed, and the receipt warning remains at the bottom. The top-right action is **Split**.
 4. A single recognized charge goes directly to final review; multiple recognized rows open Assign Items. Choose All or one participant from the bottom icon-and-first-name filter row and tap their items; five filters fit before scrolling. Confirming fills untouched rows to the payer before Continue becomes available.
-5. Review the suggested category and identifying name together, followed by payer, date, layout, and total. Receipt text and merchant cues suggest Restaurant, Movie, Groceries, or Concert when possible. Open **Edit Contributions** only when the suggested shares need adjustment.
+5. Review the suggested category and identifying name together, followed by payer, date, layout, and total. Receipt text and merchant cues suggest Restaurant, Movie, Groceries, or Concert when possible. Open **Edit Contributions** only when the suggested shares need adjustment; percentages are the default input unit and the equivalent dollar amount appears beside them in parentheses.
 6. Save from the top-right action to see the expense in Summary immediately while its evidence and canonical database row finish uploading.
 
-Opening an expense shows its name followed by the amount, payer avatar, payer first name, and purchase date (the payer can press and hold the card to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people. Settings can label the signed-in participant by full name, “Me,” or “You.”
+Opening an expense shows its name followed by one continuous fit-to-width reading of the amount, payer avatar, payer first name, and purchase date (the payer can press and hold the card to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people. The Balances screen uses first-name-only relationship sentences and every row opens Settle Up for that person. Settings can label the signed-in participant by full name, “Me,” or “You.”
 
 ## Project layout
 

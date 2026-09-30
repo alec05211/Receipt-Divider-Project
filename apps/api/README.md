@@ -30,7 +30,7 @@ This mode is non-persistent. Send a UUID in `x-user-id`, create the profile with
 
 ## Supabase PostgreSQL
 
-1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `008_user_settings.sql`) in its SQL editor or migration runner.
+1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `009_slider_unit_percent_default.sql`) in its SQL editor or migration runner.
 2. For the local Node test harness, copy Supabase’s **Session pooler** URI into `DATABASE_URL`, set `SUPABASE_URL`, and leave `ALLOW_INSECURE_DEV_AUTH` false. Copy `.env.example` to the Git-ignored `.env.local` and run `npm run dev:local`.
 3. Run this API as a trusted backend. Public tables have RLS enabled and direct `anon`/`authenticated` grants revoked; mobile clients use only the API.
 
@@ -46,7 +46,7 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `GET` | `/ready` | Confirm that the API can reach its configured datastore. |
 | `PUT` | `/v1/profile` | Create the account profile and settings if missing; returns the profile. |
 | `GET` | `/v1/profile` | Read the caller's name, username, display name, and `isDeveloper`. |
-| `GET` | `/v1/settings` | Read the caller's `currency` and `sliderUnit` (`dollars` or `percent`). |
+| `GET` | `/v1/settings` | Read the caller's `currency` and `sliderUnit` (`dollars` or `percent`, default `percent`). |
 | `PATCH` | `/v1/settings` | Change `sliderUnit`; returns the updated settings. |
 | `PUT` | `/v1/profile/avatar` | Store the account avatar. |
 | `GET` | `/v1/users/{userId}/avatar` | Read your own avatar or that of any user who has set a username (and so appears in search). |

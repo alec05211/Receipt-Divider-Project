@@ -78,7 +78,7 @@ export class MemoryRepository implements LedgerRepository {
   async ensureProfile(userId: UUID): Promise<Profile> {
     const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null, isDeveloper: false };
     this.profiles.set(userId, profile);
-    if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "dollars" }); this.filters.set(userId, []); }
+    if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "percent" }); this.filters.set(userId, []); }
     return { ...profile, isDeveloper: this.developerIds.has(userId) };
   }
   async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.developerIds.has(userId) }; }

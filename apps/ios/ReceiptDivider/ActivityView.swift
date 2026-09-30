@@ -109,19 +109,28 @@ private struct BalanceCard: View {
 /// Every open balance. Each row opens the existing Settle Up screen with that person selected.
 private struct BalancesView: View {
     @Environment(ExpenseStore.self) private var store
+    @State private var selectedPerson: LedgerPerson?
     var body: some View {
         List {
             if store.openBalances.isEmpty {
                 ContentUnavailableView("All settled up", systemImage: "checkmark.circle")
             } else {
                 ForEach(store.openBalances, id: \.person.id) { entry in
-                    NavigationLink { SettleUpView(initialPerson: entry.person.id) } label: { BalanceRow(person: entry.person, cents: entry.cents) }
-                        .simultaneousGesture(TapGesture().onEnded { UISelectionFeedbackGenerator().selectionChanged() })
+                    Button {
+                        selectedPerson = entry.person
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    } label: {
+                        BalanceRow(person: entry.person, cents: entry.cents)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
         .navigationTitle("Balances")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $selectedPerson) { person in
+            SettleUpView(initialPerson: person.id)
+        }
     }
 }
 
@@ -133,10 +142,21 @@ private struct BalanceRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 30)
-            Text(store.describeBalance(cents, with: person.name)).multilineTextAlignment(.leading)
+            Text(relationship)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .allowsTightening(true)
             Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
+    private var relationship: String {
+        let me = store.activeUserID.map { store.person(for: $0).firstName } ?? "Me"
+        if cents > 0 { return "\(person.firstName) owes \(me) \(cents.usd)" }
+        return "\(me) owes \(person.firstName) \((-cents).usd)"
     }
 }
 

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The unit contributions lead with; chosen in Settings. The amount is entered in this unit with the other shown beneath
+/// The unit contributions lead with; chosen in Settings. The amount is entered in this unit with the other shown beside
 /// it, and the slider snaps more firmly to it. Values are always stored in cents.
 enum ContributionSliderUnit: String, CaseIterable, Identifiable {
     case dollars, percent
@@ -20,15 +20,15 @@ enum ContributionSliderUnit: String, CaseIterable, Identifiable {
 }
 
 /// A contribution entered exactly in the Settings unit (dollars, or percent of `total` converted to cents), with the
-/// other unit in small gray text beneath it. The only place a contribution's value is shown.
+/// other unit in gray parentheses on the same line. The only place a contribution's value is shown.
 struct ContributionAmountField: View {
     let name: String
     @Binding var cents: Int
     let total: Int
-    @AppStorage(ContributionSliderUnit.storageKey) private var unit: ContributionSliderUnit = .dollars
+    @AppStorage(ContributionSliderUnit.storageKey) private var unit: ContributionSliderUnit = .percent
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
             Group {
                 switch unit {
                 case .dollars: CentsField(title: "0.00", cents: $cents)
@@ -36,7 +36,10 @@ struct ContributionAmountField: View {
                 }
             }
             .accessibilityLabel("\(name)’s contribution")
-            Text(unit.other.format(cents, of: total)).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("(\(unit.other.format(cents, of: total)))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         }
         .monospacedDigit()
         .fixedSize()
@@ -52,7 +55,7 @@ struct ContributionSlider: View {
     @Binding var cents: Int
     let total: Int
     let detent: Int
-    @AppStorage(ContributionSliderUnit.storageKey) private var unit: ContributionSliderUnit = .dollars
+    @AppStorage(ContributionSliderUnit.storageKey) private var unit: ContributionSliderUnit = .percent
 
     var body: some View {
         SystemSlider(cents: $cents, total: total, detent: detent, unit: unit, label: "\(name)’s contribution",
