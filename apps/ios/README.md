@@ -24,7 +24,7 @@ The app opens through a custom SwiftUI authentication gate. Email and password i
 - `LedgerAPIClient.swift` owns authenticated HTTP requests to the Edge Function configured by `API_BASE_URL`.
 - Authenticated launch upserts the profile and replaces the displayed ledger with the server snapshot. Summary reloads it whenever it appears and on pull to refresh, so expenses friends add that include you show up.
 - Everyone in the ledger is an app account identified by user ID (`LedgerPerson`). The split flow offers you plus your accepted friends; Summary shows your overall balance and your balance with each person.
-- Saving an expense uploads its optional JPEG evidence first and then posts one idempotent expense command. Recording a payment follows the same server-first pattern.
+- Saving an expense inserts it into local history and balances immediately, identified by its client request ID, while its optional JPEG evidence and idempotent expense command upload. A later snapshot replaces that pending row with the canonical database expense without duplication. Recording a payment remains server-first.
 - New account entry collects real first name, real last name, a unique username, and private authentication email. Profile presents a system Liquid Glass Friends control on current iOS, with a bordered fallback on older supported releases.
 - Friends supports searching by name or username, invitations, incoming acceptance, pending requests, accepted lists with profile photos, and press-and-hold to remove a friend. The open screen refreshes every 5 seconds.
 

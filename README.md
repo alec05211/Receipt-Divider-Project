@@ -19,11 +19,11 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 ## Main receipt flow
 
 1. Tap **Add expense** and capture a receipt with the camera.
-2. The app reads likely item names and prices from the image.
-3. Review a multi-select list of receipt rows and confirm the items to share.
-4. Tag the friends involved, with recent people first.
-5. Name the expense, optionally pick a category, and confirm an equal split or enter exact contributions.
-6. Save and return to Summary, or tap the + beside Save to split another expense from the same receipt.
+2. The app reads likely item names and prices on-device and suggests a short name, category, and split layout.
+3. Review **Split Total**, **Select Items**, or **Assign Items** and switch layouts without losing the receipt or corrections.
+4. Tag the friends involved, with recent people first. Assign Items can attach each row to one or more people.
+5. Review the name, category, payer, and exact contributions.
+6. Save to see the expense in Summary immediately while its evidence and canonical database row finish uploading, or tap the + beside Save to split another expense from the same receipt.
 
 Opening an expense shows its name with the total and who paid on one line (the payer can press and hold it to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people.
 
@@ -60,7 +60,7 @@ Open `http://127.0.0.1:4173` in a browser.
 6. Select an iPhone running a current iOS release and run the app.
 7. Allow Camera and Photo Library access when prompted.
 
-The native app now restores a Supabase session, provisions its account, downloads canonical transactions and balances from the deployed Edge Function, and posts new expenses, optional receipt evidence, and repayments back to Supabase. It retains an account-scoped device cache for display continuity. Capture and text recognition remain on-device, and users still review editable receipt items and exact-cent splits before upload.
+The native app now restores a Supabase session, provisions its account, downloads canonical transactions and balances from the deployed Edge Function, and posts new expenses, optional receipt evidence, and repayments back to Supabase. It retains an account-scoped device cache for display continuity. Capture, text recognition, and the initial category/layout suggestions remain on-device. Expense creation is optimistic: the client-generated idempotency key identifies the pending history row until a server snapshot replaces it with the canonical expense.
 
 A Supabase-only backend foundation lives in `apps/api` and `supabase/functions/ledger-api`. It implements account-owned ledgers, local people, saved people filters, optional database-backed evidence and avatar images, atomic expense and repayment writes, idempotency, audit versions, authorization boundaries, derived balances, and Supabase access-token verification. Supabase Edge Functions are the selected production runtime; the Node entry point remains a local test harness. The iPhone client is wired to this live API. Multi-account sharing, dynamic people management, and extraction providers remain deliberately undecided.
 

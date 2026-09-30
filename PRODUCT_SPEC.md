@@ -65,8 +65,7 @@ Measure scanning corrections, time required to save an expense, failed uploads, 
 - Currency conversion and expenses involving multiple currencies within one group.
 - Multiple payers for a single expense.
 - Automatic recurring charges, subscriptions, and monetization.
-- Complex approval workflows and assigning every individual item to different subsets of members.
-- Splitting one evidence image into multiple expense entries in one guided flow.
+- Complex approval workflows that require every participant to approve an expense before it affects balances.
 
 **Confirmed:** The iPhone app is the reference experience. It uses standard SwiftUI navigation, tabs, toolbars, sheets, and controls so the current iOS system supplies Liquid Glass behavior. Avoid custom recreation of Liquid Glass effects. Use haptics only for meaningful selection and successful completion feedback.
 
@@ -91,13 +90,25 @@ Do not make saved groups the primary navigation model. An expense can include an
 **Confirmed:** The central Add action in the native iOS tab bar begins a receipt capture flow:
 
 1. Open the camera. The user may instead choose an existing receipt image or manually enter items.
-2. Show a short loading state while receipt item rows and likely costs are extracted.
-3. Present an editable multi-select list of receipt rows: item description, cost, and include control. The user confirms selected items and any adjustments.
-4. Present a participant picker, ordered by recently used people. The user tags the friends involved and confirms.
-5. Present the split screen, where the user names the expense and may pick a category (Groceries, Restaurant, Movie, or Concert; optional, none by default). Summary shows each expense with its category’s icon, or a neutral receipt icon when it has none. Suggesting a category automatically from the receipt image is planned but not yet built. Equal shares are the default; each person’s contribution can be adjusted exactly or in the unit chosen in Settings, with the other unit shown beneath it, or with a system slider. The slider snaps most strongly to their equal share, lightly to every whole unit of the chosen unit, and faintly to whole units of the other, each with a matching haptic; between snaps it moves freely to the cent. Touching a contribution fixes it, and the change is split equally among the contributions not yet fixed; one always stays free, so touching the last free one releases the one touched longest ago. Saving requires contributions to equal the expense total.
-6. **Save expense** returns to Summary, where the saved expense displays its associated participant avatars. The small circular **+** button beside it (Save and add another) saves it and returns to item selection on the same receipt, keeping its photo, recognized text, and items while clearing the item, people, and contribution choices; items claimed by an earlier expense are dimmed but still selectable.
+2. Show a short loading state while receipt item rows, likely costs, category, a short editable name, and a recommended split layout are extracted or inferred.
+3. Open the recommended split layout. The member can switch among **Split Total**, **Select Items**, and **Assign Items** at any time before saving. Switching layouts preserves the receipt image, recognized rows, corrections, date, name, and category; it must not silently discard reviewed work.
+4. Present a participant picker, ordered by recently used people. The user tags the friends involved and confirms. A layout may incorporate participant selection directly when that produces a shorter flow.
+5. Present the final split screen, where the user reviews the suggested 2–3 word expense name and category (Groceries, Restaurant, Movie, or Concert; optional). Summary shows each expense with its category’s icon, or a neutral receipt icon when it has none. Equal shares are the default where the chosen layout does not already derive contributions from item assignments; each person’s contribution can be adjusted exactly or in the unit chosen in Settings, with the other unit shown beneath it, or with a system slider. The slider snaps most strongly to their equal share, lightly to every whole unit of the chosen unit, and faintly to whole units of the other, each with a matching haptic; between snaps it moves freely to the cent. Touching a contribution fixes it, and the change is split equally among the contributions not yet fixed; one always stays free, so touching the last free one releases the one touched longest ago. Saving requires contributions to equal the expense total.
+6. **Save expense** gives immediate visual success feedback and returns to Summary, where the expense and its balance effect appear optimistically while evidence and the canonical database record finish uploading. The pending row uses the expense's client request ID and is replaced, not duplicated, when a server snapshot contains that request. If creation fails, remove the optimistic effect and present the error. The small circular **+** button beside Save (Save and add another) saves it and returns to item selection on the same receipt, keeping its photo, recognized text, and items while clearing the item, people, and contribution choices; items claimed by an earlier expense are dimmed but still selectable.
 
 The receipt’s purchase date, rather than time of entry, determines its position in Summary.
+
+#### Split layouts
+
+**Confirmed:** Category and split layout are separate. On-device analysis recommends both, with strong default associations, but neither choice locks the other and the member has final control.
+
+| Layout | Purpose | Strong category associations |
+| --- | --- | --- |
+| **Split Total** | Review one total, choose people, and divide it equally or with custom contributions. Item selection is omitted, while the receipt details remain available to edit. | Movie and other single-charge expenses. |
+| **Select Items** | Choose one or more receipt rows that belong to this expense, then divide the selected total among its participants. | Groceries and concert tickets. |
+| **Assign Items** | Assign each row to one or more people; shared rows are divided among their assignees and receipt-wide adjustments are distributed by a reviewed rule. | Restaurant checks. |
+
+The recommendation also considers document structure and confidence. For example, a theater receipt with one meaningful ticket charge can open in **Split Total**, while a theater concession receipt can open in **Select Items**. Unknown or low-confidence inputs default to **Select Items** because it exposes the recognized data for review.
 
 ### Expense detail and evidence
 
@@ -113,7 +124,7 @@ The member takes a photo or chooses an existing image. The app shows upload and 
 
 ### C. Review and select items
 
-The app presents editable extracted rows with selection controls. Each row shows an item description and line total; quantity and unit price appear when available. The selected total changes immediately as rows are selected or corrected.
+The app opens the recommended split layout and keeps the other layouts available through a concise layout control. Extracted rows remain editable in layouts that use items. Each row shows an item description and line total; quantity and unit price appear when available. The selected or assigned total changes immediately as rows are selected, assigned, or corrected.
 
 The original receipt is accessible during review. Unselected personal items do not contribute to the shared expense. Receipt-level adjustments are shown separately and explicitly included or excluded.
 
@@ -121,7 +132,7 @@ The original receipt is accessible during review. Unselected personal items do n
 
 ### D. Allocate contributions
 
-On the next screen, the member confirms the tagged people, enters a description, identifies the payer, and assigns contributions. Proposed split modes are equal shares, percentages, and exact amounts.
+The member confirms the tagged people, reviews the suggested short name and category, identifies the payer, and assigns contributions. **Split Total** and **Select Items** support equal and custom contributions; **Assign Items** derives initial contributions from item assignments while keeping the final amounts reviewable.
 
 The screen displays the expense total, each contribution, and the remaining unallocated amount. Saving is blocked until the allocation matches the expense total.
 
@@ -159,6 +170,10 @@ The saved entry appears in the group log at its transaction date, even when ente
 | E-05 | Proposed | Support equal, percentage, and exact-amount allocation, including a zero share. |
 | E-06 | Proposed | Save the expense, items, and allocations atomically and prevent duplicate saves caused by retries. |
 | E-07 | Proposed | Copy reviewed item values into a saved expense snapshot so later extraction changes cannot silently alter balances. |
+| E-08 | Confirmed | Provide three named split layouts—Split Total, Select Items, and Assign Items—and let the member switch among them before saving without losing the source receipt or reviewed corrections. |
+| E-09 | Confirmed | Suggest a category, a basic editable 2–3 word expense name, and a split layout from on-device analysis when available; treat every result as an editable recommendation. |
+| E-10 | Confirmed | Strongly associate Movie with Split Total, Groceries and Concert with Select Items, and Restaurant with Assign Items, while also considering receipt structure and confidence and allowing manual override. |
+| E-11 | Confirmed | Show a saved expense and its balance effect immediately, mark it as uploading, reconcile it by client request ID when the canonical snapshot arrives, and roll it back with an error if creation fails. |
 
 ### People filters and history
 
@@ -251,6 +266,7 @@ This describes the committed initial Supabase PostgreSQL model; sharing and extr
 | Evidence asset | Uploader, private image bytes stored in PostgreSQL, kind, media type, integrity hash, extraction status, and optional extracted data. Evidence is optional and may represent a receipt, restaurant check, ticket confirmation, or other paper trail. |
 | Expense | Creator User, payer User, description, optional category (groceries, restaurant, movie, or concert), currency, explicit total, transaction date, zero or more evidence references, effective status, creation timestamp, and modification timestamp. |
 | Expense item | Saved description, quantity if known, selected line total, and source receipt-row reference if available. |
+| Expense item assignment | Optional mapping from an Expense item to one or more Users, including the exact derived share per assignee when the expense uses Assign Items. |
 | Expense adjustment | Included tax, tip, fee, or discount, with amount and allocation method. |
 | Expense allocation | Expense, User, and exact assigned amount; preserve chosen split mode where useful for editing. |
 | Repayment | Sender User, recipient User, amount, transaction date (actual payment date), creation timestamp, recorder, and effective status. |
@@ -359,6 +375,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | D-16 | Resolved: primary native authentication flow? | Confirmed: custom SwiftUI email/password sign-in and account creation, emailed password reset, secondary native Sign in with Apple, automatic local session restoration, and explicit sign out in Settings. | Authentication direction resolved; account linking and deletion remain open. |
 | D-17 | Resolved: how are expenses shared? | Confirmed: an expense appears for everyone on it and counts toward both sides' balances; you can only split with accepted friends. Removing a friend keeps shared history, and repayments stay possible with anyone you've shared an expense with. Only the payer can edit an expense (D-04). | Resolved 2026-09-27. |
 | D-18 | Resolved: how are accounts identified and connected? | Profiles use a real first and last name for display, a unique lowercase username for exact-match discovery, and a private email for authentication. Friends are accepted account relationships and are distinct from saved filter groups. | Core identity and friendship direction resolved. |
+| D-19 | Resolved: how does category affect expense entry? | On-device analysis suggests a category, short name, and one of three split layouts: Split Total, Select Items, or Assign Items. Categories have strong default layout associations, but the member can switch layouts before saving and always makes the final decision. | Resolved 2026-09-29; deterministic on-device suggestions and the first switchable layouts are implemented, while Apple Intelligence inference and persisted item-assignment detail remain pending. |
 
 ## 13. Decision and change log
 
@@ -383,6 +400,8 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-27 | Expenses can carry an optional, manually chosen category (Groceries, Restaurant, Movie, Concert), picked on the split screen and shown as an icon in Summary’s expense list (migration 006). Existing expenses have none. Suggesting a category from the receipt image is planned. | Requested by the product owner. API tests pass and the app builds for the simulator; migration 006 and Edge deploy pending. |
 | 2026-09-27 | Added a developer-only reset in Settings that deletes all expense and payment data for every account while keeping users, account settings, friendships, and saved filters (migration 007 adds the `is_developer` flag). | Keep/delete split, developer-only scope, and type-DELETE confirmation confirmed by the product owner. API tests pass and the app builds for the simulator. |
 | 2026-09-27 | Renamed the per-account `ledgers` table, which only held a currency after expenses became shared, to `user_settings` (migration 008). The contribution slider unit moved there, so it follows the account across devices instead of staying on one phone. | Confirmed by the product owner. API tests pass and the app builds for the simulator. |
+| 2026-09-29 | Defined three switchable expense layouts: Split Total, Select Items, and Assign Items. On-device analysis will suggest a 2–3 word name, category, and layout, with strong category associations but no locked behavior; the member can switch layouts before saving without losing reviewed receipt data. | Confirmed by the product owner; the first native implementation slice is described below. |
+| 2026-09-29 | Implemented the first adaptive-entry slice: deterministic on-device suggestions, switchable Split Total/Select Items/Assign Items views, item-derived restaurant contributions, a save-success animation, and optimistic history/balance updates reconciled through the existing client request ID. | API tests pass. Native compilation and device interaction testing remain pending; Apple Intelligence inference and persisted per-item assignments are not yet implemented. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

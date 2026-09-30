@@ -29,6 +29,55 @@ struct ReceiptScan {
     }
 }
 
+struct ExpenseSuggestion {
+    var category: ExpenseCategory?
+    var layout: ExpenseLayout
+    var name: String
+}
+
+/// Fast, deterministic on-device suggestions from Vision's recognized text. This remains the fallback when the
+/// Apple Intelligence model is unavailable and keeps a model suggestion from becoming accounting truth.
+enum ExpenseSuggester {
+    static func suggest(from scan: ReceiptScan) -> ExpenseSuggestion {
+        let text = scan.recognizedText.lowercased()
+        let category: ExpenseCategory?
+        if containsAny(text, ["ticketmaster", "live nation", "concert", "music venue", "eventbrite"]) {
+            category = .concert
+        } else if containsAny(text, ["amc theatres", "amc theaters", "regal cinemas", "cinemark", "showtime", "auditorium"]) {
+            category = .movie
+        } else if containsAny(text, ["restaurant", "server", "table", "gratuity", "suggested tip", "dine in", "diner", "bistro", "cafe"]) {
+            category = .restaurant
+        } else if containsAny(text, ["trader joe", "whole foods", "costco", "kroger", "publix", "wegmans", "safeway", "supermarket", "grocery", "produce"]) {
+            category = .groceries
+        } else {
+            category = nil
+        }
+        let layout = category?.recommendedLayout ?? .selectItems
+        let name = merchant(in: text).map { merchant in
+            switch category {
+            case .groceries: "\(merchant) Groceries"
+            case .restaurant: "\(merchant) Meal"
+            case .movie: "\(merchant) Movie Tickets"
+            case .concert: "\(merchant) Tickets"
+            case nil: "\(merchant) Expense"
+            }
+        } ?? category?.suggestedName ?? "Shared Expense"
+        return ExpenseSuggestion(category: category, layout: layout, name: name)
+    }
+
+    private static func containsAny(_ text: String, _ terms: [String]) -> Bool { terms.contains(where: text.contains) }
+    private static func merchant(in text: String) -> String? {
+        let known: [(String, String)] = [
+            ("trader joe", "Trader Joe's"), ("whole foods", "Whole Foods"), ("ticketmaster", "Ticketmaster"),
+            ("live nation", "Live Nation"), ("amc", "AMC"), ("regal", "Regal"), ("cinemark", "Cinemark"),
+            ("starbucks", "Starbucks"), ("chipotle", "Chipotle"), ("chick-fil-a", "Chick-fil-A"),
+            ("mcdonald", "McDonald's"), ("costco", "Costco"), ("walmart", "Walmart"), ("target", "Target"),
+            ("kroger", "Kroger"), ("publix", "Publix"), ("wegmans", "Wegmans"), ("safeway", "Safeway")
+        ]
+        return known.first(where: { text.contains($0.0) })?.1
+    }
+}
+
 enum ReceiptTextRecognizer {
     /// One piece of recognized text with its Vision bounding box (normalized, origin bottom-left).
     struct Fragment { var text: String; var box: CGRect }

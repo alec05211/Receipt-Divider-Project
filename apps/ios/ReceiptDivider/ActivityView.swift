@@ -12,6 +12,10 @@ struct ActivityView: View {
                 .navigationDestination(item: $settleUpPerson) { SettleUpView(initialPerson: $0) }
                 .task { await refresh() }
                 .refreshable { await refresh() }
+                .alert("Couldn’t save expense", isPresented: Binding(
+                    get: { store.expenseSaveError != nil },
+                    set: { if !$0 { store.expenseSaveError = nil } }
+                )) { Button("OK") { store.expenseSaveError = nil } } message: { Text(store.expenseSaveError ?? "Try again.") }
         }
     }
 
@@ -125,6 +129,7 @@ private struct BalanceRow: View {
     }
 }
 private struct ExpenseRow: View {
+    @Environment(ExpenseStore.self) private var store
     let expense: Expense
     var body: some View {
         HStack(spacing: 12) {
@@ -135,6 +140,7 @@ private struct ExpenseRow: View {
                 HStack(spacing: 6) { AvatarStack(people: expense.participants); Text(expense.transactionDate, style: .date).font(.caption).foregroundStyle(.secondary) }
             }
             Spacer()
+            if store.isExpensePending(expense.id) { ProgressView().controlSize(.small).accessibilityLabel("Uploading") }
             Text(expense.total.usd).fontWeight(.semibold)
         }
     }

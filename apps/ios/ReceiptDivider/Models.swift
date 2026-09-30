@@ -62,6 +62,34 @@ enum ExpenseCategory: String, CaseIterable, Identifiable, Hashable, Codable, Sen
         case .concert: "music.mic"
         }
     }
+    var recommendedLayout: ExpenseLayout {
+        switch self {
+        case .movie: .splitTotal
+        case .groceries, .concert: .selectItems
+        case .restaurant: .assignItems
+        }
+    }
+    var suggestedName: String {
+        switch self {
+        case .groceries: "Grocery Purchase"
+        case .restaurant: "Restaurant Meal"
+        case .movie: "Movie Tickets"
+        case .concert: "Concert Tickets"
+        }
+    }
+}
+
+/// The receipt-review interaction used to turn evidence into one expense. Category recommends a layout but never locks it.
+enum ExpenseLayout: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
+    case splitTotal, selectItems, assignItems
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .splitTotal: "Split Total"
+        case .selectItems: "Select Items"
+        case .assignItems: "Assign Items"
+        }
+    }
 }
 struct Payment: Identifiable, Hashable, Codable { var id = UUID(); var amount: Int; var from: UUID; var to: UUID; var transactionDate: Date; var createdAt = Date() }
 /// An app user who appears in the signed-in user's ledger: themselves, a friend, or someone they share a transaction with.
@@ -75,6 +103,10 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     private let storageKeyPrefix = "receipt-divider-ledger-v3"
     private let api: LedgerAPIClient?
     private var pendingEvidenceIDs: [UUID: UUID] = [:]
+    /// Optimistic expenses keyed by the same client request ID used for idempotent server creation.
+    private var pendingExpenses: [UUID: Expense] = [:]
+    private var confirmedBalances: [UUID: Int] = [:]
+    private(set) var pendingExpenseIDs: Set<UUID> = []
     private(set) var activeUserID: UUID?
     private(set) var hasLoadedRemoteData = false
     private(set) var isSyncing = false
@@ -88,6 +120,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     /// Bumped when the signed-in user's own picture changes, so views showing it reload.
     private(set) var avatarVersion = 0
     var syncError: String?
+    var expenseSaveError: String?
     /// Everyone who appears in the ledger, by user ID.
     private(set) var people: [UUID: LedgerPerson] = [:]
     /// What each person owes the signed-in user; negative when the signed-in user owes them.
@@ -145,6 +178,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         apply(try await api.snapshot(token: accessToken))
     }
+    func isExpensePending(_ expenseID: UUID) -> Bool { pendingExpenseIDs.contains(expenseID) }
     func searchUsers(_ query: String, accessToken: String) async throws -> [APIUserResult] {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         return try await api.searchUsers(query: query, token: accessToken)
@@ -241,43 +275,66 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         try await refreshFriends(accessToken: accessToken)
     }
 
+    /// Inserts the actual client-created expense into local history before its image and database row finish uploading.
+    /// It is reconciled by `clientRequestId`, so it cannot become a second expense when the server snapshot arrives.
+    func stage(_ expense: Expense) {
+        var preview = expense
+        preview.recognizedText = nil
+        pendingExpenses[expense.id] = preview
+        pendingExpenseIDs.insert(expense.id)
+        if !expenses.contains(where: { $0.id == expense.id }) { expenses.append(preview) }
+        rebuildBalances()
+    }
+
     /// Uploads `receiptImageData` unless the expense already names its `evidenceIDs`, as a later expense from a receipt
-    /// saved earlier does, so every expense from one receipt shares that receipt's evidence. Returns the evidence IDs used.
+    /// saved earlier does, so every expense from one receipt shares that receipt's evidence. The caller stages it first.
     @discardableResult
-    func add(_ expense: Expense, accessToken: String) async throws -> [UUID] {
-        guard let api else { throw LedgerAPIClientError.configurationMissing }
-        let allocations = expense.shares.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
-        var evidenceIDs = expense.evidenceIDs
-        if evidenceIDs.isEmpty, let image = expense.receiptImageData {
-            if let pending = pendingEvidenceIDs[expense.id] { evidenceIDs = [pending] }
-            else {
-                let evidence = try await api.uploadReceipt(image, token: accessToken)
-                pendingEvidenceIDs[expense.id] = evidence.id
-                receiptImages[evidence.id] = UIImage(data: image)
-                evidenceIDs = [evidence.id]
-                // Only for troubleshooting a misread, so a failure here shouldn't block saving.
-                if let text = expense.recognizedText, !text.isEmpty { try? await api.putEvidenceText(text, evidenceID: evidence.id, token: accessToken) }
+    func syncStaged(_ expense: Expense, accessToken: String) async throws -> [UUID] {
+        guard let api else {
+            discardPendingExpense(expense.id)
+            expenseSaveError = LedgerAPIClientError.configurationMissing.localizedDescription
+            throw LedgerAPIClientError.configurationMissing
+        }
+        do {
+            let allocations = expense.shares.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
+            var evidenceIDs = expense.evidenceIDs
+            if evidenceIDs.isEmpty, let image = expense.receiptImageData {
+                if let pending = pendingEvidenceIDs[expense.id] { evidenceIDs = [pending] }
+                else {
+                    let evidence = try await api.uploadReceipt(image, token: accessToken)
+                    pendingEvidenceIDs[expense.id] = evidence.id
+                    receiptImages[evidence.id] = UIImage(data: image)
+                    evidenceIDs = [evidence.id]
+                    // Only for troubleshooting a misread, so a failure here shouldn't block saving.
+                    if let text = expense.recognizedText, !text.isEmpty { try? await api.putEvidenceText(text, evidenceID: evidence.id, token: accessToken) }
+                }
             }
+            let selectedItems = expense.items.filter(\.isSelected).map {
+                APIExpenseItem(name: $0.name, amountCents: $0.cents, offsetCents: $0.offsetCents)
+            }
+            let request = CreateAPIExpense(
+                clientRequestId: expense.id,
+                description: expense.description,
+                category: expense.category?.rawValue,
+                transactionDate: Self.dayFormatter.string(from: expense.transactionDate),
+                payerId: expense.payer,
+                currency: "USD",
+                totalCents: expense.total,
+                evidenceIds: evidenceIDs,
+                items: selectedItems,
+                allocations: allocations
+            )
+            _ = try await api.createExpense(request, token: accessToken)
+            pendingEvidenceIDs[expense.id] = nil
+            do { try await refresh(accessToken: accessToken) }
+            catch { syncError = error.localizedDescription }
+            return evidenceIDs
+        } catch {
+            discardPendingExpense(expense.id)
+            syncError = error.localizedDescription
+            expenseSaveError = error.localizedDescription
+            throw error
         }
-        let selectedItems = expense.items.filter(\.isSelected).map {
-            APIExpenseItem(name: $0.name, amountCents: $0.cents, offsetCents: $0.offsetCents)
-        }
-        let request = CreateAPIExpense(
-            clientRequestId: expense.id,
-            description: expense.description,
-            category: expense.category?.rawValue,
-            transactionDate: Self.dayFormatter.string(from: expense.transactionDate),
-            payerId: expense.payer,
-            currency: "USD",
-            totalCents: expense.total,
-            evidenceIds: evidenceIDs,
-            items: selectedItems,
-            allocations: allocations
-        )
-        _ = try await api.createExpense(request, token: accessToken)
-        pendingEvidenceIDs[expense.id] = nil
-        try await refresh(accessToken: accessToken)
-        return evidenceIDs
     }
 
     /// Applies an edit immediately and restores the previous values if the server rejects it. Only the payer may edit;
@@ -338,12 +395,17 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         try await api.resetLedgerData(token: accessToken)
         receiptImages = [:]
         pendingEvidenceIDs = [:]
+        pendingExpenses = [:]
+        pendingExpenseIDs = []
         try await refresh(accessToken: accessToken)
     }
 
     func resetLocalCache() {
         expenses = []
         payments = []
+        pendingExpenses = [:]
+        pendingExpenseIDs = []
+        confirmedBalances = [:]
         people = [:]
         balances = [:]
         friends = []
@@ -358,18 +420,27 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         savedSliderUnit = nil
         avatars = [:]
         receiptImages = [:]
+        pendingEvidenceIDs = [:]
+        pendingExpenses = [:]
+        pendingExpenseIDs = []
+        confirmedBalances = [:]
         people = [:]
         balances = [:]
         friends = []
         expenses = []
         payments = []
         syncError = nil
+        expenseSaveError = nil
     }
 
     private func activate(_ userID: UUID) {
         activeUserID = nil
         hasLoadedRemoteData = false
         profile = nil
+        pendingEvidenceIDs = [:]
+        pendingExpenses = [:]
+        pendingExpenseIDs = []
+        confirmedBalances = [:]
         people = [:]
         balances = [:]
         friends = []
@@ -380,9 +451,11 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     }
 
     private func apply(_ snapshot: APILedgerSnapshot) {
+        let acknowledged = Set(snapshot.expenses.map(\.clientRequestId))
+        for id in acknowledged { pendingExpenses[id] = nil; pendingExpenseIDs.remove(id) }
         people = Dictionary(snapshot.people.map { ($0.userId, LedgerPerson(id: $0.userId, displayName: $0.displayName, username: $0.username, avatarEtag: $0.avatarEtag)) }, uniquingKeysWith: { first, _ in first })
-        balances = Dictionary(snapshot.balances.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } }, uniquingKeysWith: +)
-        expenses = snapshot.expenses.map { remote in
+        confirmedBalances = Dictionary(snapshot.balances.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } }, uniquingKeysWith: +)
+        let confirmedExpenses = snapshot.expenses.map { remote in
             Expense(
                 id: remote.id,
                 description: remote.description,
@@ -397,6 +470,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 category: remote.category.flatMap(ExpenseCategory.init(rawValue:))
             )
         }
+        expenses = confirmedExpenses + Array(pendingExpenses.values)
         payments = snapshot.payments.map { remote in
             Payment(
                 id: remote.id,
@@ -407,10 +481,33 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 createdAt: Self.isoDate(remote.createdAt)
             )
         }
+        rebuildBalances()
+    }
+
+    private func discardPendingExpense(_ id: UUID) {
+        pendingExpenses[id] = nil
+        pendingExpenseIDs.remove(id)
+        pendingEvidenceIDs[id] = nil
+        expenses.removeAll { $0.id == id }
+        rebuildBalances()
+    }
+
+    /// Applies the same payer/allocation rule as the server to the confirmed balances plus optimistic expenses.
+    private func rebuildBalances() {
+        var result = confirmedBalances
+        guard let me = activeUserID else { balances = result; return }
+        for expense in pendingExpenses.values {
+            for (person, cents) in expense.shares where person != expense.payer {
+                if expense.payer == me { result[person, default: 0] += cents }
+                else if person == me { result[expense.payer, default: 0] -= cents }
+            }
+        }
+        balances = result
     }
 
     private func persist() {
-        guard let activeUserID, let data = try? JSONEncoder().encode(LocalLedger(expenses: expenses, payments: payments, people: Array(people.values), balances: balances)) else { return }
+        let confirmedExpenses = expenses.filter { !pendingExpenseIDs.contains($0.id) }
+        guard let activeUserID, let data = try? JSONEncoder().encode(LocalLedger(expenses: confirmedExpenses, payments: payments, people: Array(people.values), balances: confirmedBalances)) else { return }
         UserDefaults.standard.set(data, forKey: storageKey(for: activeUserID))
     }
 
@@ -418,6 +515,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         guard let data = UserDefaults.standard.data(forKey: storageKey(for: userID)), let ledger = try? JSONDecoder().decode(LocalLedger.self, from: data) else { return }
         people = Dictionary(ledger.people.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         balances = ledger.balances
+        confirmedBalances = ledger.balances
         expenses = ledger.expenses
         payments = ledger.payments
     }

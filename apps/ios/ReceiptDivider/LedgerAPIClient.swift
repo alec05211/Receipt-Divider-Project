@@ -188,6 +188,7 @@ struct UpdateAPIExpense: Encodable, Sendable {
 
 struct APIExpense: Decodable, Sendable {
     let id: UUID
+    let clientRequestId: UUID
     let description: String
     /// Kept as a string so a category this build doesn't know shows as uncategorized instead of failing the snapshot.
     let category: String?
