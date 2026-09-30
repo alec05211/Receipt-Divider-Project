@@ -31,7 +31,13 @@ struct SettingsView: View {
                     }
                     NavigationLink { PaymentsView() } label: { Label("Payments", systemImage: "arrow.left.arrow.right.circle") }
                 }
-                Section("App") { LabeledContent("Currency", value: "USD") }
+                Section("App") {
+                    LabeledContent("Currency", value: "USD")
+                    Picker("Self reference", selection: Binding(
+                        get: { store.selfReferenceMode },
+                        set: { store.updateSelfReference($0) }
+                    )) { ForEach(SelfReferenceMode.allCases) { Text($0.title).tag($0) } }
+                }
                 Section("Contribution sliders") {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
                         .onChange(of: sliderUnit) { _, unit in

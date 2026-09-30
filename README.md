@@ -8,13 +8,13 @@ The native iPhone app is the product reference client. It uses SwiftUI system co
 
 The main navigation is:
 
-- **Summary:** your overall balance, a one-line summary of who owes you or whom you owe that expands into per-person balances, and a chronological expense list with participant photos.
+- **Summary:** your overall balance, a one-line adaptive summary of who owes you or whom you owe, and a chronological expense list with participant photos. The whole balance card opens every per-person balance, and each row opens Settle Up for that person.
 - **Add expense:** camera-first receipt flow.
 - **Settings:** your profile and account, Friends, Payments, and app settings.
 
 Saved groups are personal named collections of people used only as transaction filters. Each transaction has its own participant list and never enters a group pool. A “Roommates” filter, for example, shows transactions involving any person in that saved collection; creating it sends no invitations and changes no balances or access rights.
 
-Everyone in a transaction is an app user: you split expenses with yourself and your friends, and each expense appears for everyone on it and counts toward both sides' balances. Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username; email remains private. Settings opens a Friends list where you can search by name or username, accept requests, and press and hold a friend to remove them. Removing a friend keeps your shared history.
+Everyone in a transaction is an app user: you split expenses with yourself and your friends, and each expense appears for everyone on it and counts toward both sides' balances. Friends are separate from saved groups. Accounts use a real first and last name for display and a unique username; email remains private. Profile editing keeps those three identity fields together and lets a selected profile photo be repositioned and zoomed in a circular crop before upload. Settings opens a Friends list where you can search by name or username, accept requests, and press and hold a friend to remove them. Removing a friend keeps your shared history.
 
 ## Main receipt flow
 
@@ -25,7 +25,7 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 5. Review the name, category, payer, and exact contributions.
 6. Save to see the expense in Summary immediately while its evidence and canonical database row finish uploading, or tap the + beside Save to split another expense from the same receipt.
 
-Opening an expense shows its name with the total and who paid on one line (the payer can press and hold it to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people.
+Opening an expense shows its name followed by the amount, payer avatar, and payer first name (the payer can press and hold the card to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people. Settings can label the signed-in participant by full name, “Me,” or “You”; full name is the default.
 
 ## Project layout
 

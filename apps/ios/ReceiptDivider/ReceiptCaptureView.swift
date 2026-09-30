@@ -32,7 +32,6 @@ struct ReceiptCaptureView: View {
     @State private var layout: ExpenseLayout = .selectItems
     @State private var error: String?
     @State private var editingItemID: UUID?
-    @State private var didSave = false
     @State private var personSearch = ""
     @State private var isSaving = false
     @State private var showSaveSuccess = false
@@ -75,7 +74,6 @@ struct ReceiptCaptureView: View {
             .onChange(of: image) { _, newImage in if newImage != nil { startReading() } }
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
             .sensoryFeedback(.selection, trigger: items.filter(\.isSelected).count)
-            .sensoryFeedback(.success, trigger: didSave)
             .overlay { if showSaveSuccess { SaveSuccessView().transition(.scale(scale: 0.75).combined(with: .opacity)) } }
         }
     }
@@ -371,7 +369,7 @@ struct ReceiptCaptureView: View {
             do {
                 let token = try await authentication.accessToken()
                 store.stage(expense)
-                didSave.toggle()
+                UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1)
                 withAnimation(.spring(duration: 0.3, bounce: 0.25)) { showSaveSuccess = true }
                 if createNew {
                     let upload = Task { try await store.syncStaged(expense, accessToken: token) }

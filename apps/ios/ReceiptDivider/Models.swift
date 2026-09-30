@@ -91,11 +91,25 @@ enum ExpenseLayout: String, CaseIterable, Identifiable, Hashable, Codable, Senda
         }
     }
 }
+
+enum SelfReferenceMode: String, CaseIterable, Identifiable {
+    static let storageKey = "self-reference-mode"
+    case fullName, me, you
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .fullName: "Full name"
+        case .me: "Me"
+        case .you: "You"
+        }
+    }
+}
 struct Payment: Identifiable, Hashable, Codable { var id = UUID(); var amount: Int; var from: UUID; var to: UUID; var transactionDate: Date; var createdAt = Date() }
 /// An app user who appears in the signed-in user's ledger: themselves, a friend, or someone they share a transaction with.
 struct LedgerPerson: Identifiable, Hashable, Codable {
     let id: UUID; var displayName: String?; var username: String?; var avatarEtag: String?
     var name: String { displayName ?? username.map { "@\($0)" } ?? "Unknown" }
+    var firstName: String { displayName?.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? name }
 }
 
 @MainActor
@@ -107,6 +121,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     private var pendingExpenses: [UUID: Expense] = [:]
     private var confirmedBalances: [UUID: Int] = [:]
     private(set) var pendingExpenseIDs: Set<UUID> = []
+    private(set) var selfReferenceMode = SelfReferenceMode(rawValue: UserDefaults.standard.string(forKey: SelfReferenceMode.storageKey) ?? "") ?? .fullName
     private(set) var activeUserID: UUID?
     private(set) var hasLoadedRemoteData = false
     private(set) var isSyncing = false
@@ -149,8 +164,39 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         if userID == activeUserID, let profile { return LedgerPerson(id: userID, displayName: profile.displayName, username: profile.username) }
         return LedgerPerson(id: userID)
     }
-    /// "You" for the signed-in user, otherwise the person's name.
-    func name(for userID: UUID) -> String { userID == activeUserID ? "You" : person(for: userID).name }
+    /// Uses the account holder's chosen self-reference everywhere a participant name appears.
+    func name(for userID: UUID) -> String { userID == activeUserID ? selfReferenceName : person(for: userID).name }
+    var selfReferenceName: String {
+        switch selfReferenceMode {
+        case .fullName: profile?.displayName ?? activeUserID.map { person(for: $0).name } ?? "Me"
+        case .me: "Me"
+        case .you: "You"
+        }
+    }
+    var selfReferenceSubject: String {
+        switch selfReferenceMode {
+        case .fullName: selfReferenceName
+        case .me: "I"
+        case .you: "You"
+        }
+    }
+    var selfReferenceObject: String {
+        switch selfReferenceMode {
+        case .fullName: selfReferenceName
+        case .me: "me"
+        case .you: "you"
+        }
+    }
+    func updateSelfReference(_ mode: SelfReferenceMode) {
+        selfReferenceMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: SelfReferenceMode.storageKey)
+    }
+    func describeBalance(_ cents: Int, with name: String) -> String {
+        guard cents != 0 else { return "Settled up" }
+        if cents > 0 { return "\(name) owes \(selfReferenceObject) \(cents.usd)" }
+        let verb = selfReferenceMode == .fullName ? "owes" : "owe"
+        return "\(selfReferenceSubject) \(verb) \(name) \((-cents).usd)"
+    }
 
     func synchronize(userID: UUID, identity: AccountIdentity? = nil, accessToken: String) async {
         guard let api else {

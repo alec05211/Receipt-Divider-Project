@@ -1,15 +1,14 @@
 import SwiftUI
+import UIKit
 
 struct ActivityView: View {
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
-    /// The person whose balance row was tapped; opens Settle up preselected to them.
-    @State private var settleUpPerson: UUID?
     var body: some View {
         NavigationStack {
-            SummaryContent(balance: store.netBalance, balances: store.openBalances, expenses: store.expenses.sorted { $0.transactionDate > $1.transactionDate }) { settleUpPerson = $0 }
+            SummaryContent(balance: store.netBalance, balances: store.openBalances, expenses: store.expenses.sorted { $0.transactionDate > $1.transactionDate })
                 .navigationTitle("Summary")
-                .navigationDestination(item: $settleUpPerson) { SettleUpView(initialPerson: $0) }
+                .navigationBarTitleDisplayMode(.inline)
                 .task { await refresh() }
                 .refreshable { await refresh() }
                 .alert("Couldn’t save expense", isPresented: Binding(
@@ -25,24 +24,26 @@ struct ActivityView: View {
         try? await store.refresh(accessToken: token)
     }
 }
-/// The balance card above the expenses, laid out like a grouped list. It's a scroll view rather than a List because
-/// List can't animate a row's height: expanding the card cross-faded its content and jumped the expenses below.
+/// The balance card above the expenses, laid out like a grouped list.
 private struct SummaryContent: View {
     let balance: Int
     let balances: [(person: LedgerPerson, cents: Int)]
     let expenses: [Expense]
-    let settleUp: (UUID) -> Void
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                BalanceCard(balance: balance, balances: balances, settleUp: settleUp)
+                NavigationLink { BalancesView() } label: { BalanceCard(balance: balance, balances: balances) }
+                    .buttonStyle(.plain)
+                    .simultaneousGesture(TapGesture().onEnded { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.55) })
                 Text("Expenses").font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 8)
                 if expenses.isEmpty { ContentUnavailableView("No shared expenses", systemImage: "receipt").groupedCard() }
                 else {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(expenses.enumerated()), id: \.element.id) { index, expense in
                             if index > 0 { Divider().padding(.leading, 50) }
-                            NavigationLink { ExpenseDetailView(expense: expense) } label: { ExpenseRow(expense: expense).disclosureRow() }.buttonStyle(RowButtonStyle())
+                            NavigationLink { ExpenseDetailView(expense: expense) } label: { ExpenseRow(expense: expense).disclosureRow() }
+                                .buttonStyle(RowButtonStyle())
+                                .simultaneousGesture(TapGesture().onEnded { UISelectionFeedbackGenerator().selectionChanged() })
                         }
                     }
                     .groupedCard()
@@ -50,6 +51,7 @@ private struct SummaryContent: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Color(.systemGroupedBackground))
     }
@@ -70,62 +72,98 @@ private struct RowButtonStyle: ButtonStyle {
         configuration.label.foregroundStyle(.primary).background(configuration.isPressed ? Color(.systemGray4) : .clear)
     }
 }
-/// The overall balance, a one-line summary of who's involved, and a disclosure of each person's balance ("All settled up" when there are none).
+/// The overall balance and a one-line, width-aware summary. The enclosing NavigationLink makes the entire card a button.
 private struct BalanceCard: View {
     let balance: Int
     let balances: [(person: LedgerPerson, cents: Int)]
-    /// Called with the person whose balance row was tapped.
-    let settleUp: (UUID) -> Void
-    @State private var isExpanded = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(balance.usd).font(.title.bold()).foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
-                if balances.isEmpty { Text("All settled up").font(.subheadline) }
-                else {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(BalanceText.summary(balances)).multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
-                    .font(.subheadline)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(balance.usd).font(.title.bold()).foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
+            if balances.isEmpty {
+                Text("All settled up").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    summary(BalanceSummary.full(for: balances))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 3))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 2))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 1))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 0))
                 }
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(BalanceSummary.full(for: balances))
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture { if !balances.isEmpty { withAnimation(.snappy) { isExpanded.toggle() } } }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(balances.isEmpty ? [] : .isButton)
-            .accessibilityValue(balances.isEmpty ? "" : isExpanded ? "Expanded" : "Collapsed")
-            // The rows stay laid out and are uncovered by animating a clipped height, so the card grows as one
-            // piece from the top and everything below moves with it.
-            VStack(spacing: 0) {
-                ForEach(balances, id: \.person.id) { entry in
-                    Divider().padding(.leading, 58)
-                    Button { settleUp(entry.person.id) } label: { BalanceRow(person: entry.person, cents: entry.cents) }.buttonStyle(RowButtonStyle())
-                }
-            }
-            .frame(height: isExpanded ? nil : 0, alignment: .top)
-            .clipped()
-            .allowsHitTesting(isExpanded)
-            .accessibilityHidden(!isExpanded)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .groupedCard(Color(.systemGray5))
     }
+
+    private func summary(_ value: String) -> some View {
+        Text(value).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+    }
 }
-/// One person's balance with their photo; tapping it opens Settle up with them.
+
+/// Every open balance. Each row opens the existing Settle Up screen with that person selected.
+private struct BalancesView: View {
+    @Environment(ExpenseStore.self) private var store
+    var body: some View {
+        List {
+            if store.openBalances.isEmpty {
+                ContentUnavailableView("All settled up", systemImage: "checkmark.circle")
+            } else {
+                ForEach(store.openBalances, id: \.person.id) { entry in
+                    NavigationLink { SettleUpView(initialPerson: entry.person.id) } label: { BalanceRow(person: entry.person, cents: entry.cents) }
+                        .simultaneousGesture(TapGesture().onEnded { UISelectionFeedbackGenerator().selectionChanged() })
+                }
+            }
+        }
+        .navigationTitle("Balances")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// One person's balance with their photo.
 private struct BalanceRow: View {
+    @Environment(ExpenseStore.self) private var store
     let person: LedgerPerson
     let cents: Int
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 30)
-            Text(BalanceText.describe(cents, name: person.name)).multilineTextAlignment(.leading)
+            Text(store.describeBalance(cents, with: person.name)).multilineTextAlignment(.leading)
             Spacer(minLength: 0)
         }
-        .disclosureRow()
+        .padding(.vertical, 4)
+    }
+}
+
+private enum BalanceSummary {
+    static func full(for balances: [(person: LedgerPerson, cents: Int)]) -> String {
+        let owedBy = balances.filter { $0.cents > 0 }.map(\.person.firstName)
+        let owedTo = balances.filter { $0.cents < 0 }.map(\.person.firstName)
+        return render(owedBy: owedBy, owedTo: owedTo, byLimit: owedBy.count, toLimit: owedTo.count)
+    }
+
+    static func limited(for balances: [(person: LedgerPerson, cents: Int)], namesPerGroup: Int) -> String {
+        let owedBy = balances.filter { $0.cents > 0 }.map(\.person.firstName)
+        let owedTo = balances.filter { $0.cents < 0 }.map(\.person.firstName)
+        return render(owedBy: owedBy, owedTo: owedTo, byLimit: min(namesPerGroup, owedBy.count), toLimit: min(namesPerGroup, owedTo.count))
+    }
+
+    private static func render(owedBy: [String], owedTo: [String], byLimit: Int, toLimit: Int) -> String {
+        [segment("Owed by", names: owedBy, limit: byLimit), segment("Owed to", names: owedTo, limit: toLimit)]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private static func segment(_ label: String, names: [String], limit: Int) -> String? {
+        guard !names.isEmpty else { return nil }
+        let shown = names.prefix(limit).joined(separator: ", ")
+        let hidden = names.count - min(limit, names.count)
+        if shown.isEmpty { return "\(label) +\(hidden)" }
+        return hidden > 0 ? "\(label) \(shown), +\(hidden)" : "\(label) \(shown)"
     }
 }
 private struct ExpenseRow: View {

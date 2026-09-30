@@ -33,14 +33,15 @@ struct ExpenseDetailView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(current.description).font(.title2.bold())
                     HStack(spacing: 6) {
-                        Text("Total").foregroundStyle(.secondary)
                         Text(current.total.usd).fontWeight(.semibold)
                         Text("paid by").foregroundStyle(.secondary)
-                        PersonBadge(person: current.payer)
+                        let payer = store.person(for: current.payer)
+                        AvatarView(userID: current.payer, name: payer.name, etag: payer.avatarEtag, size: 24)
+                            .accessibilityHidden(false)
+                            .accessibilityLabel("Paid by \(payer.name)")
+                        Text(payer.firstName)
                     }
                     .lineLimit(1)
-                    Text(current.transactionDate, format: .dateTime.month(.wide).day().year())
-                        .font(.subheadline).foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)

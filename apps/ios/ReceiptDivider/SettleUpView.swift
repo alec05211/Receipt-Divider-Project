@@ -30,7 +30,7 @@ struct SettleUpView: View {
                     Picker("With", selection: $other) {
                         ForEach(candidates) { Text($0.name).tag(Optional($0.id)) }
                     }
-                    if let other { LabeledContent("Current balance", value: BalanceText.describe(balance, name: store.person(for: other).name)) }
+                    if let other { LabeledContent("Current balance", value: store.describeBalance(balance, with: store.person(for: other).name)) }
                 }
                 Section("Record payment") {
                     Picker("Direction", selection: $theyPaidMe) {
@@ -77,25 +77,5 @@ struct SettleUpView: View {
             }
             isSaving = false
         }
-    }
-}
-
-enum BalanceText {
-    /// "Alec owes you $12.00", "You owe Alec $12.00", or "Settled up".
-    static func describe(_ cents: Int, name: String) -> String {
-        cents > 0 ? "\(name) owes you \(cents.usd)" : cents < 0 ? "You owe \(name) \((-cents).usd)" : "Settled up"
-    }
-    /// Joins names in English with an Oxford comma: "A", "A and B", "A, B, and C".
-    static func list(_ names: [String]) -> String {
-        switch names.count {
-        case 0, 1: names.first ?? ""
-        case 2: "\(names[0]) and \(names[1])"
-        default: names.dropLast().joined(separator: ", ") + ", and " + names[names.count - 1]
-        }
-    }
-    /// "Owed by Alec and Willem", "Owed to Luke", or both as "Owed by Alec · Owed to Luke"; empty when all settled.
-    static func summary(_ balances: [(person: LedgerPerson, cents: Int)]) -> String {
-        let owedBy = list(balances.filter { $0.cents > 0 }.map(\.person.name)), owedTo = list(balances.filter { $0.cents < 0 }.map(\.person.name))
-        return [owedBy.isEmpty ? nil : "Owed by \(owedBy)", owedTo.isEmpty ? nil : "Owed to \(owedTo)"].compactMap { $0 }.joined(separator: " · ")
     }
 }
