@@ -114,7 +114,7 @@ The recommendation also considers document structure and confidence. For example
 
 ### Expense detail and evidence
 
-**Confirmed:** Opening an expense begins with a minimal card: the expense title, then the amount followed by “paid by,” the payer's profile image, and the payer's first name. Do not prefix the amount with “Total” or repeat the transaction date in this card. The exact assigned share for every tagged person follows, using the chosen self-reference label. Scrolling then reveals the original receipt photo and selected line items as the paper trail. The final section shows recent expenses involving one or more of the same tagged people, with their avatars visible.
+**Confirmed:** Opening an expense begins with a minimal card: the expense title, then the amount followed by “paid by,” the payer's profile image, the payer's first name, “on,” and the transaction date. Do not prefix the amount with “Total.” The exact assigned share for every tagged person follows, using the chosen self-reference label. Scrolling then reveals the original receipt photo and selected line items as the paper trail. The final section shows recent expenses involving one or more of the same tagged people, with their avatars visible.
 
 ### A. Open Summary
 
@@ -409,6 +409,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-29 | Added the payer's first name after their avatar in expense detail, moved Summary upward with an inline title, reduced and dimmed the owed summary while allowing it the card width, and added a subtle selection haptic when an expense opens. | Confirmed by the product owner; native compilation and device testing remain pending. |
 | 2026-09-29 | Combined first name, last name, and username in one profile-editing section and added a draggable, pinch-to-zoom circular crop step before profile-photo upload. | Confirmed by the product owner; native compilation and device testing remain pending. |
 | 2026-09-29 | Replaced Summary's expandable balance card with a full-card button and light haptic that opens a dedicated Balances list; each balance row opens the existing Settle Up view. The card keeps its total styling and uses a one-line first-name summary with adaptive `+N` overflow. | Confirmed by the product owner; native compilation and device testing remain pending. |
+| 2026-09-30 | Added the transaction date to the expense-detail title card after the payer's avatar and first name. In Assign Items, pressing and holding an item opens a compact scrollable participant popover ordered by recent use, with profile images, first names, and direct assignment toggles. | Confirmed by the product owner; implemented with the modern long-press equivalent of Force Touch. Native compilation and device testing remain pending. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

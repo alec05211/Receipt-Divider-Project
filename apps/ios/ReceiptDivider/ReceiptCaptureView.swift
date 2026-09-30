@@ -35,6 +35,7 @@ struct ReceiptCaptureView: View {
     @State private var personSearch = ""
     @State private var isSaving = false
     @State private var showSaveSuccess = false
+    @State private var assignmentPopoverItemID: UUID?
 
     private var includedItemIDs: Set<UUID> {
         switch layout {
@@ -207,6 +208,33 @@ struct ReceiptCaptureView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .onLongPressGesture(minimumDuration: 0.45) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        assignmentPopoverItemID = item.id
+                    }
+                    .popover(
+                        isPresented: Binding(
+                            get: { assignmentPopoverItemID == item.id },
+                            set: { isPresented in if !isPresented && assignmentPopoverItemID == item.id { assignmentPopoverItemID = nil } }
+                        ),
+                        attachmentAnchor: .rect(.bounds),
+                        arrowEdge: .trailing
+                    ) {
+                        AssignmentPeoplePopover(
+                            itemName: item.name.isEmpty ? "Unnamed item" : item.name,
+                            people: recentAssignmentPeople,
+                            assignedPeople: Binding(
+                                get: { itemAssignments[item.id, default: []] },
+                                set: { people in
+                                    itemAssignments[item.id] = people
+                                    shares = assignedShares()
+                                }
+                            )
+                        )
+                        .presentationCompactAdaptation(.popover)
+                    }
+                    .accessibilityAction(named: "Assign people") { assignmentPopoverItemID = item.id }
                 }
             }
         }
@@ -224,6 +252,10 @@ struct ReceiptCaptureView: View {
             let (dateA, dateB) = (latest[a.element.id] ?? .distantPast, latest[b.element.id] ?? .distantPast)
             return dateA != dateB ? dateA > dateB : a.offset < b.offset
         }.map(\.element)
+    }
+    /// Selected participants in recent-use order for the assignment row's press-and-hold shortcut.
+    private var recentAssignmentPeople: [UUID] {
+        friendsByRecency.map(\.id).filter(selectedPeople.contains)
     }
     /// You and your most recent friends for quick tapping, plus anyone already selected from a search. Searching covers every friend.
     private var shownPeople: [LedgerPerson] {
@@ -391,14 +423,14 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
     /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
     /// saved as claimed, and clears the item, people and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
         receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
         claimedItemIDs.formUnion(includedItemIDs)
         for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
+        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
         step = .select
     }
     /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
@@ -466,6 +498,47 @@ private struct SaveSuccessView: View {
 }
 
 private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(disabled) } }
+
+/// Compact assignment shortcut shown by pressing and holding an item row.
+private struct AssignmentPeoplePopover: View {
+    @Environment(ExpenseStore.self) private var store
+    let itemName: String
+    let people: [UUID]
+    @Binding var assignedPeople: Set<UUID>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(itemName).font(.headline).lineLimit(1).padding(.horizontal, 16).padding(.vertical, 12)
+            Divider()
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(people, id: \.self) { personID in
+                        let person = store.person(for: personID)
+                        let isAssigned = assignedPeople.contains(personID)
+                        Button {
+                            if isAssigned { assignedPeople.remove(personID) }
+                            else { assignedPeople.insert(personID) }
+                        } label: {
+                            HStack(spacing: 10) {
+                                AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 32)
+                                Text(person.firstName).foregroundStyle(.primary)
+                                Spacer()
+                                SelectionCircle(isSelected: isAssigned)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 9)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(isAssigned ? .isSelected : [])
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+        }
+        .frame(width: 250)
+    }
+}
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }

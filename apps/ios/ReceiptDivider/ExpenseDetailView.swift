@@ -40,6 +40,8 @@ struct ExpenseDetailView: View {
                             .accessibilityHidden(false)
                             .accessibilityLabel("Paid by \(payer.name)")
                         Text(payer.firstName)
+                        Text("on").foregroundStyle(.secondary)
+                        Text(current.transactionDate, style: .date)
                     }
                     .lineLimit(1)
                 }
