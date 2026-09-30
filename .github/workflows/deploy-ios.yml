@@ -16,11 +16,12 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, receipt-divider-ios]
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       IPHONE_ID: ${{ vars.IOS_DEVICES || 'all' }}
       IOS_SIGNING_CONFIG: ${{ vars.IOS_SIGNING_CONFIG }}
       LAUNCH_APP: ${{ vars.IOS_LAUNCH_APP || 'false' }}
+      RETRY_MINUTES: ${{ vars.IOS_RETRY_MINUTES || '20' }}
     steps:
       # A run that waited while the Mac was asleep may be behind main by now; the run for the newest commit
       # installs everything, so this one stops instead of building an outdated app.

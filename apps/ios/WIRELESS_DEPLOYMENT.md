@@ -2,7 +2,9 @@
 
 The workflow `.github/workflows/deploy-ios.yml` runs after every push to `main`
 or a manual run on `main`. It builds the Debug app on your Mac and installs it
-on every paired iPhone it can reach (offline phones are skipped). Launching is optional and disabled by default.
+on every paired iPhone. A phone that is asleep or off the network is retried
+every minute for 20 minutes (set the `IOS_RETRY_MINUTES` repository variable to
+change this), unless a newer push to `main` takes over. Launching is optional and disabled by default.
 No certificate or private signing key is uploaded to GitHub.
 
 ## Prepare the Mac and phone
@@ -65,8 +67,9 @@ pull-request trigger to this runner for untrusted contributions.
 ## Verify and troubleshoot
 
 Push the workflow to `main`, then check **Actions → Deploy iOS to iPhone**.
-Verify installation on the actual phone with its cable disconnected. An offline
-phone fails the job; reconnect it and rerun the workflow. Jobs queue while the
+Verify installation on the actual phone with its cable disconnected. The job fails
+only if no phone accepted the install before the retry window ran out; reconnect
+one and rerun the workflow. Jobs queue while the
 Mac is offline. Deployments run serially to avoid overlapping installs.
 
 - Missing runner: check its label, online status, and service login session.
@@ -89,7 +92,8 @@ References: [GitHub runner setup](https://docs.github.com/en/actions/how-tos/man
 
 ## Install notifications
 
-To get a push notification when an install finishes or fails, install the free
+To get a push notification when an install finishes or fails (with the build
+error or each missed phone and why, and a tap-through to the run log), install the free
 [ntfy](https://ntfy.sh) app on your phone and subscribe to a hard-to-guess topic
 name. Save that name on the runner Mac:
 
