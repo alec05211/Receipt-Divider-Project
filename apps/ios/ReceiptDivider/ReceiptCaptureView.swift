@@ -36,6 +36,9 @@ struct ReceiptCaptureView: View {
     @State private var assignmentsLocked = false
     /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
     @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
+    /// Allows the fixed Review expense controls to grow with the system text size without clipping a section.
+    @ScaledMetric(relativeTo: .body) private var reviewControlRowHeight: CGFloat = 50
+    @ScaledMetric(relativeTo: .footnote) private var reviewWarningHeight: CGFloat = 82
 
     private var includedItemIDs: Set<UUID> {
         switch layout {
@@ -157,39 +160,52 @@ struct ReceiptCaptureView: View {
             }
             .reviewListStyle()
             .scrollDisabled(true)
-            .frame(height: 260)
+            .frame(height: reviewControlRowHeight * 5 + 28)
 
-            List {
-                Section {
-                    if shownPeople.isEmpty {
-                        ContentUnavailableView.search(text: personSearch)
-                    } else {
-                        ForEach(shownPeople) { person in
-                            let isSelected = selectedPeople.contains(person.id)
-                            Button {
-                                withAnimation(.snappy(duration: 0.15)) {
-                                    if isSelected { selectedPeople.remove(person.id) }
-                                    else { selectedPeople.insert(person.id) }
-                                }
-                            } label: {
-                                HStack(spacing: 12) {
-                                    AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
-                                    Text(store.name(for: person.id))
-                                    Spacer()
-                                    SelectionCircle(isSelected: isSelected)
-                                }
-                                .contentShape(Rectangle())
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(shownPeople.enumerated()), id: \.element.id) { index, person in
+                        let isSelected = selectedPeople.contains(person.id)
+                        Button {
+                            withAnimation(.snappy(duration: 0.15)) {
+                                if isSelected { selectedPeople.remove(person.id) }
+                                else { selectedPeople.insert(person.id) }
                             }
-                            .foregroundStyle(.primary)
-                            .sensoryFeedback(.selection, trigger: isSelected)
-                            .accessibilityAddTraits(isSelected ? .isSelected : [])
+                        } label: {
+                            HStack(spacing: 12) {
+                                AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
+                                Text(store.name(for: person.id))
+                                Spacer()
+                                SelectionCircle(isSelected: isSelected)
+                            }
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 56)
+                            .contentShape(Rectangle())
+                        }
+                        .foregroundStyle(.primary)
+                        .sensoryFeedback(.selection, trigger: isSelected)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                        if index < shownPeople.count - 1 {
+                            Divider().padding(.leading, 62).padding(.trailing, 16)
                         }
                     }
-                } footer: {
-                    if store.splitCandidates.count <= 1 { Text("Add friends in Settings.") }
+                    if shownPeople.isEmpty {
+                        ContentUnavailableView.search(text: personSearch)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 24)
+                    }
+                    if store.splitCandidates.count <= 1 {
+                        Text("Add friends in Settings.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                    }
                 }
             }
-            .reviewListStyle()
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .padding(.horizontal, 20)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
 
@@ -199,7 +215,7 @@ struct ReceiptCaptureView: View {
                 }
                 .reviewListStyle()
                 .scrollDisabled(true)
-                .frame(height: 82)
+                .frame(height: reviewWarningHeight)
             }
         }
         .padding(.vertical, 12)
