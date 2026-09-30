@@ -6,7 +6,6 @@ struct SettingsView: View {
     @State private var showResetConfirmation = false
     @State private var showServerReset = false
     @AppStorage(ContributionSliderUnit.storageKey) private var sliderUnit: ContributionSliderUnit = .dollars
-    @AppStorage(AssignItemsControlStyle.storageKey) private var assignItemsControl: AssignItemsControlStyle = .pressAndHold
 
     var body: some View {
         NavigationStack {
@@ -44,12 +43,6 @@ struct SettingsView: View {
                         .onChange(of: sliderUnit) { _, unit in
                             Task { if let token = try? await authentication.accessToken() { await store.updateSliderUnit(unit, accessToken: token) } }
                         }
-                }
-                Section("Assign items") {
-                    Picker("Controls", selection: $assignItemsControl) {
-                        ForEach(AssignItemsControlStyle.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.menu)
                 }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
                 if store.isDeveloper {

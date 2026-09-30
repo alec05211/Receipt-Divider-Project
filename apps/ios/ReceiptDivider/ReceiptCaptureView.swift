@@ -16,8 +16,6 @@ struct ReceiptCaptureView: View {
     @State private var reviewedTotalCents: Int?
     @State private var purchaseDate = Date()
     @State private var recognizedText: String?
-    /// The receipt's evidence once an earlier expense from it was saved; later expenses from it reuse this instead of uploading again.
-    @State private var receiptEvidenceID: UUID?
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -34,9 +32,8 @@ struct ReceiptCaptureView: View {
     @State private var personSearch = ""
     @State private var isSaving = false
     @State private var showSaveSuccess = false
-    @State private var assignmentPopoverItemID: UUID?
     @State private var activeAssignmentTarget: AssignmentTarget?
-    @AppStorage(AssignItemsControlStyle.storageKey) private var assignItemsControl: AssignItemsControlStyle = .pressAndHold
+    @State private var assignmentsLocked = false
 
     private var includedItemIDs: Set<UUID> {
         switch layout {
@@ -79,7 +76,32 @@ struct ReceiptCaptureView: View {
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { if step != .capture && step != .reading { ToolbarItem(placement: .topBarLeading) { Button("Back") { back() } } } }
+            .toolbar {
+                if step != .capture && step != .reading {
+                    ToolbarItem(placement: .topBarLeading) { Button("Back") { back() } }
+                }
+                if step == .review {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Split \(total.usd)") { advanceFromReview() }
+                            .disabled(selectedPeople.isEmpty || total == 0)
+                    }
+                }
+                if step == .assign {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button { confirmAssignments() } label: {
+                            if assignmentsLocked { Text("Continue") }
+                            else { Image(systemName: "checkmark").accessibilityLabel("Confirm assignments") }
+                        }
+                        .disabled(items.isEmpty || receiptTotal == 0)
+                    }
+                }
+                if step == .split {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(isSaving ? "Saving…" : "Save") { save() }
+                            .disabled(!isValidSplit || isSaving)
+                    }
+                }
+            }
             .fullScreenCover(isPresented: $showCamera) { DocumentScanner(image: $image).ignoresSafeArea() }
             .onChange(of: image) { _, newImage in if newImage != nil { startReading() } }
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
@@ -113,8 +135,8 @@ struct ReceiptCaptureView: View {
                 }
                 DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
                 Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
+                Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
             }
-            if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
             Section {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -145,55 +167,16 @@ struct ReceiptCaptureView: View {
             } footer: {
                 if store.splitCandidates.count <= 1 { Text("Add friends in Settings.") }
             }
+            if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
         }
-        .onAppear { if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] } }
-        .safeAreaInset(edge: .bottom) {
-            ContinueButton(title: "Split \(total.usd)", disabled: selectedPeople.isEmpty || total == 0) {
-                personSearch = ""
-                if layout == .assignItems { prepareAssignments(); step = .assign }
-                else { prepareFinalSplit(); step = .split }
-            }
+        .onAppear {
+            if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] }
+            setDefaultPayer()
         }
+        .onChange(of: selectedPeople) { _, _ in setDefaultPayer() }
     }
     private var assignmentScreen: some View {
         List {
-            Section { Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } } }
-            if assignItemsControl == .selectPersonFirst {
-                Section {
-                    GeometryReader { geometry in
-                        let targetCount = recentAssignmentPeople.count + 1
-                        let visibleCount = min(targetCount, 5)
-                        let spacing: CGFloat = 8
-                        let pillWidth = (geometry.size.width - spacing * CGFloat(visibleCount - 1)) / CGFloat(visibleCount)
-                        ScrollView(.horizontal, showsIndicators: targetCount > 5) {
-                            HStack(spacing: spacing) {
-                                let allIsActive = activeAssignmentTarget == .all
-                                Button { selectAssignmentTarget(.all) } label: {
-                                    Text("All").assignmentTargetPill(isActive: allIsActive, width: pillWidth)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityAddTraits(allIsActive ? .isSelected : [])
-
-                                ForEach(recentAssignmentPeople, id: \.self) { personID in
-                                    let person = store.person(for: personID)
-                                    let isActive = activeAssignmentTarget == .person(personID)
-                                    Button { selectAssignmentTarget(.person(personID)) } label: {
-                                        Text(person.firstName)
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.72)
-                                            .assignmentTargetPill(isActive: isActive, width: pillWidth)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityAddTraits(isActive ? .isSelected : [])
-                                }
-                            }
-                            .frame(minWidth: geometry.size.width, alignment: .leading)
-                        }
-                    }
-                    .frame(height: 36)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                }
-            }
             Section {
                 ForEach(items) { item in
                     HStack(spacing: 10) {
@@ -213,48 +196,26 @@ struct ReceiptCaptureView: View {
                         if !assigned.isEmpty { AvatarStack(people: assigned, size: 22) }
                         Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                     }
+                    .frame(height: 26)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        guard assignItemsControl == .selectPersonFirst, let target = activeAssignmentTarget else { return }
+                        guard !assignmentsLocked, let target = activeAssignmentTarget else { return }
                         toggleAssignment(target, for: item.id)
                     }
-                    .onLongPressGesture(minimumDuration: 0.45) {
-                        guard assignItemsControl == .pressAndHold else { return }
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        assignmentPopoverItemID = item.id
-                    }
-                    .popover(
-                        isPresented: Binding(
-                            get: { assignItemsControl == .pressAndHold && assignmentPopoverItemID == item.id },
-                            set: { isPresented in if !isPresented && assignmentPopoverItemID == item.id { assignmentPopoverItemID = nil } }
-                        ),
-                        attachmentAnchor: .rect(.bounds),
-                        arrowEdge: .top
-                    ) {
-                        AssignmentPeoplePopover(
-                            itemName: item.name.isEmpty ? "Unnamed item" : item.name,
-                            people: recentAssignmentPeople,
-                            assignedPeople: Binding(
-                                get: { itemAssignments[item.id, default: []] },
-                                set: { people in
-                                    itemAssignments[item.id] = people
-                                    shares = assignedShares()
-                                }
-                            )
-                        )
-                        .presentationCompactAdaptation(.popover)
-                    }
                     .accessibilityAction(named: "Assign people") {
-                        if assignItemsControl == .pressAndHold { assignmentPopoverItemID = item.id }
-                        else if let target = activeAssignmentTarget { toggleAssignment(target, for: item.id) }
+                        if !assignmentsLocked, let target = activeAssignmentTarget { toggleAssignment(target, for: item.id) }
                     }
                     .swipeActions {
-                        Button("Edit", systemImage: "pencil") { editingItemID = item.id }
-                        Button("Delete", systemImage: "trash", role: .destructive) { items.removeAll { $0.id == item.id }; itemAssignments[item.id] = nil; shares = assignedShares() }
+                        if !assignmentsLocked {
+                            Button("Edit", systemImage: "pencil") { editingItemID = item.id }
+                            Button("Delete", systemImage: "trash", role: .destructive) { items.removeAll { $0.id == item.id }; itemAssignments[item.id] = nil; shares = assignedShares() }
+                        }
                     }
                 }
-                Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0); items.append(item); editingItemID = item.id }
+                if !assignmentsLocked {
+                    Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0); items.append(item); editingItemID = item.id }
+                }
             }
         }
         .sheet(item: $editingItemID) { id in
@@ -262,8 +223,46 @@ struct ReceiptCaptureView: View {
         }
         .onChange(of: items) { _, _ in shares = assignedShares() }
         .safeAreaInset(edge: .bottom) {
-            ContinueButton(title: "Continue with \(total.usd)", disabled: total == 0) { shares = assignedShares(); setDefaultPayer(); step = .split }
+            assignmentFilters
         }
+    }
+
+    private var assignmentFilters: some View {
+        GeometryReader { geometry in
+            let spacing: CGFloat = 6
+            let horizontalPadding: CGFloat = 16
+            let pillWidth = (geometry.size.width - horizontalPadding * 2 - spacing * 4) / 5
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: spacing) {
+                    let allIsActive = activeAssignmentTarget == .all
+                    Button { selectAssignmentTarget(.all) } label: {
+                        AssignmentTargetPill(title: "All", isActive: allIsActive, width: pillWidth) {
+                            Image(systemName: "person.3.fill").font(.caption)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(assignmentsLocked)
+                    .accessibilityAddTraits(allIsActive ? .isSelected : [])
+
+                    ForEach(recentAssignmentPeople, id: \.self) { personID in
+                        let person = store.person(for: personID)
+                        let isActive = activeAssignmentTarget == .person(personID)
+                        Button { selectAssignmentTarget(.person(personID)) } label: {
+                            AssignmentTargetPill(title: person.firstName, isActive: isActive, width: pillWidth) {
+                                AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 20)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(assignmentsLocked)
+                        .accessibilityAddTraits(isActive ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, 10)
+            }
+        }
+        .frame(height: 56)
+        .background(.bar)
     }
     /// You first, then friends ordered by their latest shared transaction; friends never shared with are alphabetical.
     private var friendsByRecency: [LedgerPerson] {
@@ -276,7 +275,7 @@ struct ReceiptCaptureView: View {
             return dateA != dateB ? dateA > dateB : a.offset < b.offset
         }.map(\.element)
     }
-    /// Selected participants in recent-use order for the assignment row's press-and-hold shortcut.
+    /// Selected participants in recent-use order for the assignment filter strip.
     private var recentAssignmentPeople: [UUID] {
         friendsByRecency.map(\.id).filter(selectedPeople.contains)
     }
@@ -289,11 +288,22 @@ struct ReceiptCaptureView: View {
     }
     private var splitScreen: some View {
         List {
-            Section("Name") {
-                TextField("What was this for?", text: $description).submitLabel(.done)
-                Picker("Category", selection: $category) {
-                    Text("None").tag(ExpenseCategory?.none)
-                    ForEach(ExpenseCategory.allCases) { Label($0.title, systemImage: $0.symbol).tag(Optional($0)) }
+            Section {
+                HStack(spacing: 12) {
+                    Menu {
+                        Button("None", systemImage: "circle.dashed") { category = nil }
+                        ForEach(ExpenseCategory.allCases) { value in
+                            Button(value.title, systemImage: value.symbol) { category = value }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: category?.symbol ?? "circle.dashed")
+                            Text(category?.title ?? "None")
+                            Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .fixedSize()
+                    }
+                    TextField("What was this for?", text: $description).submitLabel(.done)
                 }
             }
             Section {
@@ -307,16 +317,6 @@ struct ReceiptCaptureView: View {
             }
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
             if let error { Section { Text(error).foregroundStyle(.red) } }
-        }
-        .safeAreaInset(edge: .bottom) {
-            // Save keeps its natural width; the pair is centered together, so Save sits just left of center.
-            HStack(spacing: 12) {
-                Button { save() } label: { Text(isSaving ? "Saving…" : "Save expense").prominentLabel() }.buttonStyle(.borderedProminent)
-                Button { save(createNew: true) } label: { Image(systemName: "plus").fontWeight(.semibold) }
-                    .buttonStyle(.bordered).buttonBorderShape(.circle)
-                    .accessibilityLabel("Save and add another")
-            }
-            .controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(!isValidSplit || isSaving)
         }
     }
     private var contributionsScreen: some View {
@@ -384,6 +384,16 @@ struct ReceiptCaptureView: View {
             balancer = ContributionBalancer()
         })
     }
+    private func advanceFromReview() {
+        personSearch = ""
+        if layout == .assignItems {
+            prepareAssignments()
+            step = .assign
+        } else {
+            prepareFinalSplit()
+            step = .split
+        }
+    }
     private var layoutBinding: Binding<ExpenseLayout> {
         Binding(get: { layout }, set: { newLayout in
             guard newLayout != layout else { return }
@@ -394,20 +404,15 @@ struct ReceiptCaptureView: View {
             if step == .assign || step == .split || step == .contributions { step = .review }
         })
     }
-    /// Preserves valid prior assignments. Press-and-hold starts with reviewed rows shared by everyone; person-first
-    /// starts empty so tapping rows assigns them to the active participant.
+    /// Preserves valid prior assignments and starts with All as the active assignment target.
     private func prepareAssignments() {
         let validPeople = selectedPeople
         itemAssignments = itemAssignments.reduce(into: [UUID: Set<UUID>]()) { result, entry in
             let kept = entry.value.intersection(validPeople)
             if !kept.isEmpty { result[entry.key] = kept }
         }
-        if itemAssignments.isEmpty && assignItemsControl == .pressAndHold {
-            let selected = items.filter(\.isSelected)
-            for item in selected.isEmpty ? items : selected { itemAssignments[item.id] = validPeople }
-        }
-        if case let .person(personID) = activeAssignmentTarget, !validPeople.contains(personID) { activeAssignmentTarget = nil }
-        if activeAssignmentTarget == nil { activeAssignmentTarget = recentAssignmentPeople.first.map(AssignmentTarget.person) ?? .all }
+        activeAssignmentTarget = .all
+        assignmentsLocked = false
         shares = assignedShares()
         setDefaultPayer()
     }
@@ -426,6 +431,24 @@ struct ReceiptCaptureView: View {
         }
         shares = assignedShares()
         UISelectionFeedbackGenerator().selectionChanged()
+    }
+    /// The first confirmation visibly assigns every untouched row to the payer. A second press continues.
+    private func confirmAssignments() {
+        if assignmentsLocked {
+            shares = assignedShares()
+            step = .split
+            return
+        }
+        setDefaultPayer()
+        guard let payer else { return }
+        withAnimation(.snappy(duration: 0.2)) {
+            for item in items where itemAssignments[item.id, default: []].isEmpty {
+                itemAssignments[item.id] = [payer]
+            }
+            shares = assignedShares()
+            assignmentsLocked = true
+        }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
     private func assignedShares() -> [UUID: Int] {
         var result = Dictionary(uniqueKeysWithValues: orderedSelection.map { ($0, 0) })
@@ -466,8 +489,7 @@ struct ReceiptCaptureView: View {
         if !hasEveryPerson || allocationTotal != total { setEqualSplit() }
         else { setDefaultPayer() }
     }
-    /// With `createNew`, stays on this receipt afterwards so another expense can be split from it.
-    private func save(createNew: Bool = false) {
+    private func save() {
         guard let payer else { return }
         let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
         // Split Total saves the reviewed amount without line items; Assign Items saves only assigned rows.
@@ -476,8 +498,6 @@ struct ReceiptCaptureView: View {
         for index in savedItems.indices { savedItems[index].isSelected = savedItemIDs.contains(savedItems[index].id) }
         var expense = Expense(description: name.isEmpty ? (category?.suggestedName ?? "Shared Expense") : name, transactionDate: purchaseDate, payer: payer, items: savedItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category)
         if layout == .splitTotal { expense.recordedTotalCents = total }
-        // A receipt already saved with an earlier expense is attached again rather than uploaded twice.
-        if let receiptEvidenceID { expense.evidenceIDs = [receiptEvidenceID]; expense.receiptImageData = nil }
         isSaving = true
         error = nil
         Task {
@@ -486,19 +506,11 @@ struct ReceiptCaptureView: View {
                 store.stage(expense)
                 UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1)
                 withAnimation(.spring(duration: 0.3, bounce: 0.25)) { showSaveSuccess = true }
-                if createNew {
-                    let upload = Task { try await store.syncStaged(expense, accessToken: token) }
-                    try? await Task.sleep(for: .milliseconds(650))
-                    withAnimation(.easeOut(duration: 0.2)) { showSaveSuccess = false }
-                    let evidenceIDs = try await upload.value
-                    startNextExpense(receiptEvidenceID: evidenceIDs.first)
-                } else {
-                    Task { try? await store.syncStaged(expense, accessToken: token) }
-                    try? await Task.sleep(for: .milliseconds(650))
-                    withAnimation(.easeOut(duration: 0.2)) { showSaveSuccess = false }
-                    reset()
-                    finish()
-                }
+                Task { try? await store.syncStaged(expense, accessToken: token) }
+                try? await Task.sleep(for: .milliseconds(650))
+                withAnimation(.easeOut(duration: 0.2)) { showSaveSuccess = false }
+                reset()
+                finish()
             } catch {
                 self.error = error.localizedDescription
                 withAnimation(.easeOut(duration: 0.2)) { showSaveSuccess = false }
@@ -506,21 +518,10 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; receiptEvidenceID = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
-    /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it while clearing
-    /// participant and contribution choices.
-    private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
-        receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
-        for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentTarget = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil
-        layout = items.count <= 1 ? .splitTotal : .assignItems
-        reviewedTotalCents = receiptTotal
-        step = .review
-    }
-    /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
     private func back() {
         switch step {
-        case .review: receiptEvidenceID = nil; personSearch = ""; step = .capture
+        case .review: personSearch = ""; step = .capture
         case .assign: step = .review
         case .split: step = layout == .assignItems ? .assign : .review
         case .contributions: step = .split
@@ -596,59 +597,35 @@ private enum AssignmentTarget: Equatable {
     case person(UUID)
 }
 
-/// Compact assignment shortcut shown by pressing and holding an item row.
-private struct AssignmentPeoplePopover: View {
-    @Environment(ExpenseStore.self) private var store
-    let itemName: String
-    let people: [UUID]
-    @Binding var assignedPeople: Set<UUID>
+private struct AssignmentTargetPill<Icon: View>: View {
+    let title: String
+    let isActive: Bool
+    let width: CGFloat
+    let icon: Icon
+
+    init(title: String, isActive: Bool, width: CGFloat, @ViewBuilder icon: () -> Icon) {
+        self.title = title
+        self.isActive = isActive
+        self.width = width
+        self.icon = icon()
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(itemName).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .center).padding(.horizontal, 16).padding(.vertical, 12)
-            Divider()
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(people, id: \.self) { personID in
-                        let person = store.person(for: personID)
-                        let isAssigned = assignedPeople.contains(personID)
-                        Button {
-                            if isAssigned { assignedPeople.remove(personID) }
-                            else { assignedPeople.insert(personID) }
-                            UISelectionFeedbackGenerator().selectionChanged()
-                        } label: {
-                            HStack(spacing: 10) {
-                                AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 32)
-                                Text(person.firstName).foregroundStyle(.primary)
-                                Spacer()
-                                SelectionCircle(isSelected: isAssigned)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 9)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(isAssigned ? .isSelected : [])
-                    }
-                }
-            }
-            .frame(maxHeight: 280)
+        HStack(spacing: 6) {
+            icon
+            Text(title).lineLimit(1).minimumScaleFactor(0.6)
         }
-        .frame(width: 340)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(isActive ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(.primary))
+        .padding(.horizontal, 5)
+        .frame(width: width, height: 36)
+        .background(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.thinMaterial), in: Capsule())
+        .overlay(Capsule().stroke(.quaternary, lineWidth: 1))
     }
 }
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
-    func assignmentTargetPill(isActive: Bool, width: CGFloat) -> some View {
-        self
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
-            .frame(width: width)
-            .frame(minHeight: 28)
-            .background(isActive ? Color.black : Color(red: 0.16, green: 0.17, blue: 0.19), in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(isActive ? 0.55 : 0.12), lineWidth: 1))
-    }
 }
 
 /// The app tint is `.primary`, so a prominent button fills black in light mode and white in dark mode while the
