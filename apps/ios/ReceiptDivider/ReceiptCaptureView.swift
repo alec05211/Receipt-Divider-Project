@@ -36,7 +36,7 @@ struct ReceiptCaptureView: View {
     @State private var assignmentsLocked = false
     /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
     @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
-    /// Allows the fixed Review expense controls to grow with the system text size without clipping a section.
+    /// iOS 17 fallback heights for the fixed Review expense lists; newer releases measure their content instead.
     @ScaledMetric(relativeTo: .body) private var reviewControlRowHeight: CGFloat = 50
     @ScaledMetric(relativeTo: .footnote) private var reviewWarningHeight: CGFloat = 82
 
@@ -159,8 +159,7 @@ struct ReceiptCaptureView: View {
                 }
             }
             .reviewListStyle()
-            .scrollDisabled(true)
-            .frame(height: reviewControlRowHeight * 5 + 28)
+            .fixedReviewList(estimatedHeight: reviewControlRowHeight * 5 + 28)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -205,7 +204,7 @@ struct ReceiptCaptureView: View {
             }
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, 20)
+            .scenePadding(.horizontal)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
 
@@ -214,8 +213,7 @@ struct ReceiptCaptureView: View {
                     Section { Text(error).font(.footnote).foregroundStyle(.secondary) }
                 }
                 .reviewListStyle()
-                .scrollDisabled(true)
-                .frame(height: reviewWarningHeight)
+                .fixedReviewList(estimatedHeight: reviewWarningHeight)
             }
         }
         .padding(.vertical, 12)
@@ -701,6 +699,23 @@ private extension View {
             .scrollContentBackground(.hidden)
             .contentMargins(.vertical, 0, for: .scrollContent)
             .listSectionSpacing(12)
+    }
+    func fixedReviewList(estimatedHeight: CGFloat) -> some View { modifier(FixedReviewList(estimatedHeight: estimatedHeight)) }
+}
+
+/// A non-scrolling list framed to exactly its content, since row heights vary by iOS release and text size.
+private struct FixedReviewList: ViewModifier {
+    let estimatedHeight: CGFloat
+    @State private var contentHeight: CGFloat?
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .scrollDisabled(true)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in if height > 0 { contentHeight = height } }
+                .frame(height: contentHeight ?? estimatedHeight)
+        } else {
+            content.scrollDisabled(true).frame(height: estimatedHeight)
+        }
     }
 }
 
