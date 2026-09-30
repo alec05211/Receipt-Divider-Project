@@ -36,6 +36,8 @@ struct ReceiptCaptureView: View {
     @State private var isSaving = false
     @State private var showSaveSuccess = false
     @State private var assignmentPopoverItemID: UUID?
+    @State private var activeAssignmentPersonID: UUID?
+    @AppStorage(AssignItemsControlStyle.storageKey) private var assignItemsControl: AssignItemsControlStyle = .pressAndHold
 
     private var includedItemIDs: Set<UUID> {
         switch layout {
@@ -182,44 +184,56 @@ struct ReceiptCaptureView: View {
     private var assignmentScreen: some View {
         List {
             Section { Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } } }
-            Section {
-                ForEach(items) { item in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text(item.name.isEmpty ? "Unnamed item" : item.name).fontWeight(.medium)
-                            Spacer()
-                            Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(orderedSelection, id: \.self) { person in
-                                    let assigned = itemAssignments[item.id, default: []].contains(person)
-                                    Button {
-                                        if assigned { itemAssignments[item.id, default: []].remove(person) }
-                                        else { itemAssignments[item.id, default: []].insert(person) }
-                                        shares = assignedShares()
-                                    } label: {
-                                        Label(store.name(for: person), systemImage: assigned ? "checkmark.circle.fill" : "circle")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(assigned ? .accentColor : .secondary)
+            if assignItemsControl == .selectPersonFirst {
+                Section {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 8)], spacing: 8) {
+                        ForEach(recentAssignmentPeople, id: \.self) { personID in
+                            let person = store.person(for: personID)
+                            let isActive = activeAssignmentPersonID == personID
+                            Button { activeAssignmentPersonID = personID } label: {
+                                HStack(spacing: 7) {
+                                    AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 28)
+                                    Text(person.firstName).fontWeight(.medium).lineLimit(1)
                                 }
+                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .foregroundStyle(isActive ? Color.white : Color.primary)
+                                .background(isActive ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(isActive ? .isSelected : [])
                         }
                     }
-                    .padding(.vertical, 4)
+                }
+            }
+            Section {
+                ForEach(items) { item in
+                    HStack(spacing: 10) {
+                        Text(item.name.isEmpty ? "Unnamed item" : item.name).fontWeight(.medium)
+                        Spacer(minLength: 8)
+                        let assigned = recentAssignmentPeople.filter { itemAssignments[item.id, default: []].contains($0) }
+                        if !assigned.isEmpty { AvatarStack(people: assigned, size: 22) }
+                        Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
                     .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard assignItemsControl == .selectPersonFirst, let personID = activeAssignmentPersonID else { return }
+                        toggleAssignment(personID, for: item.id)
+                    }
                     .onLongPressGesture(minimumDuration: 0.45) {
+                        guard assignItemsControl == .pressAndHold else { return }
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         assignmentPopoverItemID = item.id
                     }
                     .popover(
                         isPresented: Binding(
-                            get: { assignmentPopoverItemID == item.id },
+                            get: { assignItemsControl == .pressAndHold && assignmentPopoverItemID == item.id },
                             set: { isPresented in if !isPresented && assignmentPopoverItemID == item.id { assignmentPopoverItemID = nil } }
                         ),
                         attachmentAnchor: .rect(.bounds),
-                        arrowEdge: .trailing
+                        arrowEdge: .top
                     ) {
                         AssignmentPeoplePopover(
                             itemName: item.name.isEmpty ? "Unnamed item" : item.name,
@@ -234,7 +248,10 @@ struct ReceiptCaptureView: View {
                         )
                         .presentationCompactAdaptation(.popover)
                     }
-                    .accessibilityAction(named: "Assign people") { assignmentPopoverItemID = item.id }
+                    .accessibilityAction(named: "Assign people") {
+                        if assignItemsControl == .pressAndHold { assignmentPopoverItemID = item.id }
+                        else if let personID = activeAssignmentPersonID { toggleAssignment(personID, for: item.id) }
+                    }
                 }
             }
         }
@@ -337,19 +354,27 @@ struct ReceiptCaptureView: View {
             if step == .assign || step == .split { step = .select }
         })
     }
-    /// Starts Assign Items from the existing selection when possible; otherwise every parsed row is shared initially.
+    /// Preserves valid prior assignments. Press-and-hold starts with reviewed rows shared by everyone; person-first
+    /// starts empty so tapping rows assigns them to the active participant.
     private func prepareAssignments() {
         let validPeople = selectedPeople
         itemAssignments = itemAssignments.reduce(into: [UUID: Set<UUID>]()) { result, entry in
             let kept = entry.value.intersection(validPeople)
             if !kept.isEmpty { result[entry.key] = kept }
         }
-        if itemAssignments.isEmpty {
+        if itemAssignments.isEmpty && assignItemsControl == .pressAndHold {
             let selected = items.filter(\.isSelected)
             for item in selected.isEmpty ? items : selected { itemAssignments[item.id] = validPeople }
         }
+        if activeAssignmentPersonID.map(validPeople.contains) != true { activeAssignmentPersonID = recentAssignmentPeople.first }
         shares = assignedShares()
         setDefaultPayer()
+    }
+    private func toggleAssignment(_ personID: UUID, for itemID: UUID) {
+        if itemAssignments[itemID, default: []].contains(personID) { itemAssignments[itemID, default: []].remove(personID) }
+        else { itemAssignments[itemID, default: []].insert(personID) }
+        shares = assignedShares()
+        UISelectionFeedbackGenerator().selectionChanged()
     }
     private func assignedShares() -> [UUID: Int] {
         var result = Dictionary(uniqueKeysWithValues: orderedSelection.map { ($0, 0) })
@@ -423,14 +448,14 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
+    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentPersonID = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date();recognizedText = nil; receiptEvidenceID = nil; claimedItemIDs = []; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems }
     /// Keeps the scanned receipt (image, items, date and recognized text) for another expense from it, marks the items just
     /// saved as claimed, and clears the item, people and contribution choices.
     private func startNextExpense(receiptEvidenceID savedEvidenceID: UUID?) {
         receiptEvidenceID = savedEvidenceID ?? receiptEvidenceID
         claimedItemIDs.formUnion(includedItemIDs)
         for index in items.indices { items[index].isSelected = false }
-        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
+        selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentPopoverItemID = nil; activeAssignmentPersonID = nil; balancer = ContributionBalancer(); personSearch = ""; error = nil; description = "Shared Expense"; category = nil; layout = .selectItems
         step = .select
     }
     /// Leaving the item list for a new photo or manual entry ends the link to the receipt saved earlier.
@@ -508,7 +533,7 @@ private struct AssignmentPeoplePopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(itemName).font(.headline).lineLimit(1).padding(.horizontal, 16).padding(.vertical, 12)
+            Text(itemName).font(.headline).lineLimit(1).frame(maxWidth: .infinity, alignment: .center).padding(.horizontal, 16).padding(.vertical, 12)
             Divider()
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -518,6 +543,7 @@ private struct AssignmentPeoplePopover: View {
                         Button {
                             if isAssigned { assignedPeople.remove(personID) }
                             else { assignedPeople.insert(personID) }
+                            UISelectionFeedbackGenerator().selectionChanged()
                         } label: {
                             HStack(spacing: 10) {
                                 AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 32)
@@ -536,7 +562,7 @@ private struct AssignmentPeoplePopover: View {
             }
             .frame(maxHeight: 280)
         }
-        .frame(width: 250)
+        .frame(width: 340)
     }
 }
 

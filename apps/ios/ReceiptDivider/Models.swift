@@ -92,6 +92,19 @@ enum ExpenseLayout: String, CaseIterable, Identifiable, Hashable, Codable, Senda
     }
 }
 
+/// Device-level preference for assigning participants to receipt rows.
+enum AssignItemsControlStyle: String, CaseIterable, Identifiable {
+    static let storageKey = "assign-items-control-style"
+    case pressAndHold, selectPersonFirst
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .pressAndHold: "Press and hold"
+        case .selectPersonFirst: "Select person first"
+        }
+    }
+}
+
 enum SelfReferenceMode: String, CaseIterable, Identifiable {
     static let storageKey = "self-reference-mode"
     case fullName, me, you
