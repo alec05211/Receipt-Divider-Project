@@ -32,18 +32,23 @@ struct ExpenseDetailView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(current.description).font(.title2.bold())
-                    HStack(spacing: 6) {
+                    HStack(spacing: 4) {
                         Text(current.total.usd).fontWeight(.semibold)
                         Text("paid by").foregroundStyle(.secondary)
                         let payer = store.person(for: current.payer)
-                        AvatarView(userID: current.payer, name: payer.name, etag: payer.avatarEtag, size: 24)
+                        AvatarView(userID: current.payer, name: payer.name, etag: payer.avatarEtag, size: 20)
                             .accessibilityHidden(false)
                             .accessibilityLabel("Paid by \(payer.name)")
                         Text(payer.firstName)
+                        Spacer(minLength: 2)
                         Text("on").foregroundStyle(.secondary)
                         Text(current.transactionDate, style: .date)
+                            .layoutPriority(1)
                     }
+                    .font(.subheadline)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .allowsTightening(true)
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)

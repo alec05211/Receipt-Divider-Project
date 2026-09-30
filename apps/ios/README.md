@@ -28,5 +28,6 @@ The app opens through a custom SwiftUI authentication gate. Email and password i
 - New account entry collects real first name, real last name, a unique username, and private authentication email. Profile editing groups the three identity fields and provides a draggable, pinch-to-zoom circular crop before a new profile photo uploads. Profile presents a system Liquid Glass Friends control on current iOS, with a bordered fallback on older supported releases.
 - Friends supports searching by name or username, invitations, incoming acceptance, pending requests, accepted lists with profile photos, and press-and-hold to remove a friend. The open screen refreshes every 5 seconds.
 - Settings keeps the device preference for participant self-reference. Assign Items uses fixed-height item rows and a bottom scrolling selector with All followed by an icon/first-name pill for every selected participant; five filters fit across before scrolling. The top-right confirmation fills untouched rows to the payer before continuing.
+- Review expense uses one fixed-height page with consistent card spacing; only its largest-possible friends region scrolls. On-device receipt cues suggest the category and an identifying merchant/item name before final review.
 
 Editing or voiding transactions, saved-group filters in the UI, and account deletion remain to be implemented.

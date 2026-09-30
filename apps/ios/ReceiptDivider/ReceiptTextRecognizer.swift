@@ -39,28 +39,30 @@ struct ExpenseSuggestion {
 /// Apple Intelligence model is unavailable and keeps a model suggestion from becoming accounting truth.
 enum ExpenseSuggester {
     static func suggest(from scan: ReceiptScan) -> ExpenseSuggestion {
-        let text = scan.recognizedText.lowercased()
+        let evidence = ([scan.recognizedText] + scan.items.map(\.name)).joined(separator: "\n")
+        let text = evidence.lowercased()
         let category: ExpenseCategory?
         if containsAny(text, ["ticketmaster", "live nation", "concert", "music venue", "eventbrite"]) {
             category = .concert
-        } else if containsAny(text, ["amc theatres", "amc theaters", "regal cinemas", "cinemark", "showtime", "auditorium"]) {
+        } else if containsAny(text, ["amc theatres", "amc theaters", "regal cinemas", "cinemark", "showtime", "auditorium", "movie", "cinema", "theatre", "theater", "matinee", "screen "]) {
             category = .movie
-        } else if containsAny(text, ["restaurant", "server", "table", "gratuity", "suggested tip", "dine in", "diner", "bistro", "cafe"]) {
+        } else if containsAny(text, ["restaurant", "server", "table", "gratuity", "suggested tip", "dine in", "diner", "bistro", "cafe", "pizzeria", "taqueria", "sushi", "bar & grill", "starbucks", "chipotle", "chick-fil-a", "mcdonald"]) {
             category = .restaurant
-        } else if containsAny(text, ["trader joe", "whole foods", "costco", "kroger", "publix", "wegmans", "safeway", "supermarket", "grocery", "produce"]) {
+        } else if containsAny(text, ["trader joe", "whole foods", "costco", "kroger", "publix", "wegmans", "safeway", "supermarket", "grocery", "produce", "aldi", "food lion", "sprouts", "shoprite", "harris teeter", "fresh market"]) {
             category = .groceries
         } else {
             category = nil
         }
         // A single recognized charge needs only a total split. Multiple rows benefit from explicit assignment.
         let layout: ExpenseLayout = scan.items.count <= 1 ? .splitTotal : .assignItems
-        let name = merchant(in: text).map { merchant in
+        let identifyingName = merchant(in: scan.recognizedText) ?? scan.items.first(where: { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }).map { displayName($0.name) }
+        let name = identifyingName.map { identifier in
             switch category {
-            case .groceries: "\(merchant) Groceries"
-            case .restaurant: "\(merchant) Meal"
-            case .movie: "\(merchant) Movie Tickets"
-            case .concert: "\(merchant) Tickets"
-            case nil: "\(merchant) Expense"
+            case .groceries: "\(identifier) Groceries"
+            case .restaurant: "\(identifier) Meal"
+            case .movie: "\(identifier) Movie Tickets"
+            case .concert: "\(identifier) Tickets"
+            case nil: "\(identifier) Expense"
             }
         } ?? category?.suggestedName ?? "Shared Expense"
         return ExpenseSuggestion(category: category, layout: layout, name: name)
@@ -68,14 +70,30 @@ enum ExpenseSuggester {
 
     private static func containsAny(_ text: String, _ terms: [String]) -> Bool { terms.contains(where: text.contains) }
     private static func merchant(in text: String) -> String? {
+        let lowercased = text.lowercased()
         let known: [(String, String)] = [
             ("trader joe", "Trader Joe's"), ("whole foods", "Whole Foods"), ("ticketmaster", "Ticketmaster"),
             ("live nation", "Live Nation"), ("amc", "AMC"), ("regal", "Regal"), ("cinemark", "Cinemark"),
             ("starbucks", "Starbucks"), ("chipotle", "Chipotle"), ("chick-fil-a", "Chick-fil-A"),
             ("mcdonald", "McDonald's"), ("costco", "Costco"), ("walmart", "Walmart"), ("target", "Target"),
-            ("kroger", "Kroger"), ("publix", "Publix"), ("wegmans", "Wegmans"), ("safeway", "Safeway")
+            ("kroger", "Kroger"), ("publix", "Publix"), ("wegmans", "Wegmans"), ("safeway", "Safeway"),
+            ("aldi", "ALDI"), ("food lion", "Food Lion"), ("sprouts", "Sprouts"), ("shoprite", "ShopRite")
         ]
-        return known.first(where: { text.contains($0.0) })?.1
+        if let knownName = known.first(where: { lowercased.contains($0.0) })?.1 { return knownName }
+        let boilerplate = ["full photo", "enhanced crop", "receipt", "welcome", "thank you", "subtotal", "total", "balance", "cashier", "register", "order", "transaction", "approved", "customer copy", "merchant copy", "sale"]
+        return text.components(separatedBy: .newlines).compactMap { rawLine -> String? in
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            let lower = line.lowercased()
+            guard (2...36).contains(line.count), line.contains(where: \.isLetter), line.split(whereSeparator: \.isWhitespace).count <= 5 else { return nil }
+            guard !boilerplate.contains(where: lower.contains), !lower.contains("www."), !lower.contains("http"), !lower.contains("@") else { return nil }
+            guard line.range(of: #"\$?\d+[.,]\d{2}|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b|\b\d{3}[-.) ]\d{3}"#, options: .regularExpression) == nil else { return nil }
+            return displayName(line)
+        }.first
+    }
+
+    private static func displayName(_ value: String) -> String {
+        let compact = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return compact == compact.uppercased() ? compact.localizedCapitalized : compact
     }
 }
 

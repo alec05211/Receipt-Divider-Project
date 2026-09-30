@@ -81,8 +81,11 @@ struct ReceiptCaptureView: View {
                     ToolbarItem(placement: .topBarLeading) { Button("Back") { back() } }
                 }
                 if step == .review {
+                    ToolbarItem(placement: .principal) {
+                        Text("Review expense").font(.headline)
+                    }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Split \(total.usd)") { advanceFromReview() }
+                        Button("Split") { advanceFromReview() }
                             .disabled(selectedPeople.isEmpty || total == 0)
                     }
                 }
@@ -126,49 +129,96 @@ struct ReceiptCaptureView: View {
     }
     /// Receipt details and participant selection share the first screen after recognition.
     private var reviewScreen: some View {
-        List {
-            Section {
+        VStack(spacing: 10) {
+            VStack(spacing: 0) {
                 if layout == .splitTotal {
                     LabeledContent("Expense total") { CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold) }
+                        .frame(height: 42)
                 } else {
                     LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
+                        .frame(height: 42)
                 }
+                Divider()
                 DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
+                    .frame(height: 42)
+                Divider()
                 Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
+                    .frame(height: 42)
+                Divider()
                 Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
+                    .frame(height: 42)
             }
-            Section {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search friends", text: $personSearch).submitLabel(.done)
-                    if !personSearch.isEmpty { Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }.labelStyle(.iconOnly).foregroundStyle(.secondary) }
+            .padding(.horizontal, 12)
+            .reviewCard()
+
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search friends", text: $personSearch).submitLabel(.done)
+                if !personSearch.isEmpty {
+                    Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
                 }
             }
-            Section {
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .reviewCard()
+
+            ScrollView {
                 if shownPeople.isEmpty {
                     ContentUnavailableView.search(text: personSearch)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
                 } else {
-                    ForEach(shownPeople) { person in
-                        let isSelected = selectedPeople.contains(person.id)
-                        Button { withAnimation(.snappy(duration: 0.15)) { if isSelected { selectedPeople.remove(person.id) } else { selectedPeople.insert(person.id) } } } label: {
-                            HStack(spacing: 12) {
-                                AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 34)
-                                Text(store.name(for: person.id))
-                                Spacer()
-                                SelectionCircle(isSelected: isSelected)
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(shownPeople.enumerated()), id: \.element.id) { index, person in
+                            let isSelected = selectedPeople.contains(person.id)
+                            Button {
+                                withAnimation(.snappy(duration: 0.15)) {
+                                    if isSelected { selectedPeople.remove(person.id) }
+                                    else { selectedPeople.insert(person.id) }
+                                }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 32)
+                                    Text(store.name(for: person.id))
+                                    Spacer()
+                                    SelectionCircle(isSelected: isSelected)
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(height: 48)
+                                .contentShape(Rectangle())
                             }
-                            .contentShape(Rectangle())
+                            .foregroundStyle(.primary)
+                            .sensoryFeedback(.selection, trigger: isSelected)
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
+                            if index < shownPeople.count - 1 { Divider().padding(.leading, 56) }
                         }
-                        .foregroundStyle(.primary)
-                        .sensoryFeedback(.selection, trigger: isSelected)
-                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                        if store.splitCandidates.count <= 1 {
+                            Text("Add friends in Settings.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        }
                     }
                 }
-            } footer: {
-                if store.splitCandidates.count <= 1 { Text("Add friends in Settings.") }
             }
-            if let error { Section { Text(error).font(.footnote).foregroundStyle(.secondary) } }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .reviewCard()
+
+            if let error {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .reviewCard()
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(.systemGroupedBackground))
         .onAppear {
             if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] }
             setDefaultPayer()
@@ -626,6 +676,9 @@ private struct AssignmentTargetPill<Icon: View>: View {
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
+    func reviewCard() -> some View {
+        background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
 }
 
 /// The app tint is `.primary`, so a prominent button fills black in light mode and white in dark mode while the
