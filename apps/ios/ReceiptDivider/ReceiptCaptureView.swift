@@ -401,8 +401,10 @@ struct ReceiptCaptureView: View {
         guard let image else { return }
         step = .reading
         Task { @MainActor in
-            let scan = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan()
-            let suggestion = ExpenseSuggester.suggest(from: scan)
+            let recognized = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan()
+            let analysis = await OnDeviceReceiptAnalyzer.analyze(recognized)
+            let scan = analysis.scan
+            let suggestion = analysis.suggestion
             items = scan.items
             recognizedText = scan.recognizedText
             category = suggestion.category

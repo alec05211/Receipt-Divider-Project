@@ -159,6 +159,7 @@ enum ReceiptTextRecognizer {
     /// so fragments are first regrouped into printed rows by vertical position.
     static func parse(_ fragments: [Fragment]) -> ReceiptScan {
         var scan = ReceiptScan()
+        var printedTotal: (cents: Int, priority: Int)?
         var pendingName: String?
         var lastItem: Int?
         var sawSubtotal = false
@@ -190,8 +191,8 @@ enum ReceiptTextRecognizer {
                 }
             } else if lowerName.range(of: #"\btax(es)?\d*\b"#, options: .regularExpression) != nil && !lowerName.contains("total") {
                 scan.taxCents += cents
-            } else if scan.printedTotalCents == nil, lowerName.contains("balance") || (lowerName.contains("total") && !lowerName.contains("sub")) {
-                scan.printedTotalCents = cents
+            } else if let priority = totalPriority(lowerName), priority >= (printedTotal?.priority ?? -1) {
+                printedTotal = (cents, priority)
             } else if isExcluded(lowerName) || cents == 0 {
                 // Totals, payment, and savings lines are not purchased items.
             } else {
@@ -199,10 +200,22 @@ enum ReceiptTextRecognizer {
                 lastItem = scan.items.count - 1
             }
         }
+        scan.printedTotalCents = printedTotal?.cents
         scan.items.spread(scan.taxCents - scan.discountCents)
         scan.purchaseDate = purchaseDate(in: fragments.map(\.text))
         scan.recognizedText = fragments.map(\.text).joined(separator: "\n")
         return scan
+    }
+
+    /// Favors an explicit final amount over incidental lines such as total savings or item-count totals.
+    private static func totalPriority(_ lowercased: String) -> Int? {
+        guard !lowercased.contains("subtotal"), !lowercased.contains("sub total"),
+              !["savings", "discount", "coupon", "tax", "items"].contains(where: lowercased.contains) else { return nil }
+        if lowercased.contains("grand total") || lowercased.contains("amount due") { return 4 }
+        if lowercased.contains("balance due") || lowercased.contains("balance") { return 3 }
+        if lowercased.range(of: #"\btotal\b"#, options: .regularExpression) != nil { return 2 }
+        if lowercased.range(of: #"\bdue\b"#, options: .regularExpression) != nil { return 1 }
+        return nil
     }
 
     /// Whole words only, so an item like "PRK TENDERLOIN" isn't mistaken for a "TEND" payment line.
