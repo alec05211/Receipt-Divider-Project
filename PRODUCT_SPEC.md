@@ -159,6 +159,7 @@ The saved entry appears in the group log at its transaction date, even when ente
 | R-06 | Proposed | Allow retries and manual correction without losing already entered work. |
 | R-07 | Confirmed | Specifically extract the receipt’s purchase date and use it as the expense transaction date, independently of when the receipt is uploaded or entered. |
 | R-08 | Proposed | Make the extracted transaction date editable and require explicit date selection or confirmation if extraction cannot determine it reliably. |
+| R-09 | Confirmed | Treat subtotal, tax, discount, total, and payment evidence as receipt summary data rather than purchasable items. Tolerate common OCR substitutions in these labels, and accept an unlabeled total only when it reconciles with the extracted items and adjustments. |
 
 ### Assignment and expense creation
 
@@ -433,6 +434,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-09-30 | Made Assign Items confirmation reversible: Back restores the exact manual assignment map from before the checkmark, removes payer autofill, and unlocks the item and filter controls; Back before confirmation keeps its original navigation behavior. | Confirmed by the product owner; native compilation and device interaction testing remain pending. |
 | 2026-09-30 | Separated Search friends into its own visible native rounded section and made the internally scrolling friends region consume all space above the receipt warning even when only a few rows are available. | Confirmed by the product owner; native compilation and device interaction testing remain pending. |
 | 2026-10-01 | Added an optional Apple Foundation Models semantic pass after Vision OCR. It normalizes receipt item names and suggests merchant, category, and a concise expense name; proposed totals and dates are accepted only when found in the OCR evidence. Improved deterministic final-total selection and retained it as the fallback on unsupported or unavailable devices. | Source implementation complete; Mac/Xcode compilation and representative on-device receipt validation remain pending. |
+| 2026-10-01 | Replaced unconditional double OCR with iOS 26 structured document recognition and an adaptive legacy fallback. Receipt summary classification now tolerates common OCR substitutions, prevents amounts after the summary boundary from becoming items, and uses alternate recognition candidates. Review no longer waits for generative cleanup, which may update only untouched extracted fields. | Parser regression tests cover explicit, misread, alternate-candidate, post-subtotal, and discounted totals. Mac/Xcode compilation and representative on-device performance validation remain pending. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 

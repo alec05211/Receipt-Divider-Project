@@ -42,3 +42,13 @@ targets:
         SUPABASE_URL: https://lurdfvsnscylvwvvepos.supabase.co
         SUPABASE_PUBLISHABLE_KEY: sb_publishable_ooNI0Eex792fD6MGp6XX_g_QofO07OY
         API_BASE_URL: https://lurdfvsnscylvwvvepos.supabase.co/functions/v1/ledger-api
+  ReceiptDividerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ReceiptDividerTests
+    dependencies:
+      - target: ReceiptDivider
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.receiptdivider.tests

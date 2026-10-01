@@ -34,6 +34,8 @@ struct ReceiptCaptureView: View {
     @State private var showSaveSuccess = false
     @State private var activeAssignmentTarget: AssignmentTarget?
     @State private var assignmentsLocked = false
+    /// Invalidates a slow semantic refinement when another receipt starts or the flow resets.
+    @State private var receiptAnalysisID: UUID?
     /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
     @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
     /// iOS 17 fallback heights for the fixed Review expense lists; newer releases measure their content instead.
@@ -400,11 +402,12 @@ struct ReceiptCaptureView: View {
     private func startReading() {
         guard let image else { return }
         step = .reading
+        let analysisID = UUID()
+        receiptAnalysisID = analysisID
         Task { @MainActor in
-            let recognized = (try? await Task.detached { try ReceiptTextRecognizer.scan(image) }.value) ?? ReceiptScan()
-            let analysis = await OnDeviceReceiptAnalyzer.analyze(recognized)
-            let scan = analysis.scan
-            let suggestion = analysis.suggestion
+            let scan = (try? await ReceiptTextRecognizer.scan(image)) ?? ReceiptScan()
+            guard receiptAnalysisID == analysisID else { return }
+            let suggestion = ExpenseSuggester.suggest(from: scan)
             items = scan.items
             recognizedText = scan.recognizedText
             category = suggestion.category
@@ -421,6 +424,28 @@ struct ReceiptCaptureView: View {
                 else { error = "No prices found." }
             }
             step = .review
+
+            // Semantic cleanup can take several seconds on-device. Review is usable immediately, and refinements
+            // apply only while the corresponding field still has its original extracted value.
+            let originalNames = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.name) })
+            let originalDescription = description
+            let originalCategory = category
+            let originalTotal = reviewedTotalCents
+            let originalDate = purchaseDate
+            let originalError = error
+            let analysis = await OnDeviceReceiptAnalyzer.analyze(scan)
+            guard receiptAnalysisID == analysisID, step == .review else { return }
+            for refined in analysis.scan.items {
+                guard let index = items.firstIndex(where: { $0.id == refined.id }),
+                      let originalName = originalNames[refined.id],
+                      items[index].name == originalName else { continue }
+                items[index].name = refined.name
+            }
+            if description == originalDescription { description = analysis.suggestion.name }
+            if category == originalCategory { category = analysis.suggestion.category }
+            if reviewedTotalCents == originalTotal { reviewedTotalCents = analysis.scan.printedTotalCents ?? originalTotal }
+            if purchaseDate == originalDate, let refinedDate = analysis.scan.purchaseDate { purchaseDate = refinedDate }
+            if error == originalError { error = analysis.scan.mismatchWarning }
         }
     }
     private var totalBinding: Binding<Int> {
@@ -580,7 +605,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
+    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
     private func back() {
         switch step {
         case .review: personSearch = ""; step = .capture

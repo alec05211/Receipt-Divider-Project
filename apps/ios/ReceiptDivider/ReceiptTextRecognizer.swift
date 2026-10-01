@@ -99,29 +99,59 @@ enum ExpenseSuggester {
 
 enum ReceiptTextRecognizer {
     /// One piece of recognized text with its Vision bounding box (normalized, origin bottom-left).
-    struct Fragment { var text: String; var box: CGRect }
+    struct Fragment {
+        var text: String
+        var box: CGRect
+        var alternatives: [String] = []
+        var confidence: Float = 1
+    }
 
     #if canImport(UIKit)
-    static func scan(_ image: UIImage) throws -> ReceiptScan {
+    static func scan(_ image: UIImage) async throws -> ReceiptScan {
         guard let cgImage = image.cgImage else { return ReceiptScan() }
-        return try scan(cgImage, orientation: image.cgImageOrientation)
+        let orientation = image.cgImageOrientation
+        if #available(iOS 26.0, *) {
+            if let structured = try? await documentScan(cgImage, orientation: orientation) {
+                if !needsRetry(structured) { return structured }
+                let fallback = try legacyScan(cgImage, orientation: orientation)
+                return score(structured) >= score(fallback) ? structured : fallback
+            }
+        }
+        return try legacyScan(cgImage, orientation: orientation)
     }
     #endif
 
-    /// Vision works at a limited resolution, so a receipt that fills only part of the photo loses
-    /// small printed digits. A first pass locates the receipt text; a second pass reads a
-    /// high-contrast crop of just that area, and whichever pass accounts for more of the receipt wins.
-    static func scan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) throws -> ReceiptScan {
+    /// iOS 26 document recognition preserves line structure before the receipt-specific parser classifies rows.
+    @available(iOS 26.0, *)
+    private static func documentScan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) async throws -> ReceiptScan {
+        let observations = try await RecognizeDocumentsRequest().perform(on: cgImage, orientation: orientation)
+        guard let document = observations.first?.document else { return ReceiptScan() }
+        let fragments = document.text.lines.compactMap { line -> Fragment? in
+            let candidates = line.topCandidates(3)
+            guard let first = candidates.first else { return nil }
+            return Fragment(
+                text: first.string,
+                box: line.boundingBox.cgRect,
+                alternatives: candidates.dropFirst().map(\.string),
+                confidence: first.confidence
+            )
+        }
+        return parse(fragments)
+    }
+
+    /// The already-cropped receipt gets one accurate pass. A second enhanced pass runs only when the
+    /// first result has no credible total, no items, or does not reconcile.
+    private static func legacyScan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) throws -> ReceiptScan {
         let image = CIImage(cgImage: cgImage).oriented(orientation)
         let firstFragments = try fragments(in: image)
         let first = parse(firstFragments)
-        guard let area = textArea(of: firstFragments) else { return first }
+        guard needsRetry(first), let area = textArea(of: firstFragments) else { return first }
         let extent = image.extent
         let crop = CGRect(x: extent.minX + area.minX * extent.width, y: extent.minY + area.minY * extent.height,
                           width: area.width * extent.width, height: area.height * extent.height)
         let enhanced = image.cropped(to: crop)
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0, kCIInputContrastKey: 1.6])
-        let second = parse(try fragments(in: enhanced))
+        let second = parse(try fragments(in: enhanced, languageCorrection: true))
         // The crop can cut off a date printed outside the item area, so either pass may supply it.
         var best = score(second) >= score(first) ? second : first
         best.purchaseDate = best.purchaseDate ?? first.purchaseDate ?? second.purchaseDate
@@ -129,14 +159,19 @@ enum ReceiptTextRecognizer {
         return best
     }
 
-    private static func fragments(in image: CIImage) throws -> [Fragment] {
+    private static func fragments(in image: CIImage, languageCorrection: Bool = false) throws -> [Fragment] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
+        request.usesLanguageCorrection = languageCorrection
+        request.customWords = ["SUBTOTAL", "TOTAL", "GRAND TOTAL", "AMOUNT DUE", "BALANCE DUE", "TAX"]
         request.recognitionLanguages = ["en-US"]
         try VNImageRequestHandler(ciImage: image).perform([request])
         return (request.results ?? []).compactMap { observation in
-            observation.topCandidates(1).first.map { Fragment(text: $0.string, box: observation.boundingBox) }
+            let candidates = observation.topCandidates(3)
+            return candidates.first.map {
+                Fragment(text: $0.string, box: observation.boundingBox,
+                         alternatives: candidates.dropFirst().map(\.string), confidence: $0.confidence)
+            }
         }
     }
 
@@ -155,66 +190,121 @@ enum ReceiptTextRecognizer {
         (scan.printedTotalCents != nil && scan.mismatchWarning == nil ? 1_000 : 0) + scan.items.count
     }
 
+    private static func needsRetry(_ scan: ReceiptScan) -> Bool {
+        scan.printedTotalCents == nil || scan.items.isEmpty || scan.mismatchWarning != nil
+    }
+
     /// Vision returns the name and price columns of a receipt as separate fragments,
     /// so fragments are first regrouped into printed rows by vertical position.
     static func parse(_ fragments: [Fragment]) -> ReceiptScan {
         var scan = ReceiptScan()
-        var printedTotal: (cents: Int, priority: Int)?
+        var printedTotal: (cents: Int, priority: Int, confidence: Float)?
         var pendingName: String?
+        var pendingRole: SummaryRole?
         var lastItem: Int?
-        var sawSubtotal = false
+        var inSummary = false
+        var summaryAmounts: [Int] = []
         for row in rows(from: fragments) {
-            let text = row.joined(separator: " ")
+            let text = row.map(\.text).joined(separator: " ")
+            let roleEvidence = ([text] + row.flatMap(\.alternatives)).joined(separator: " ")
+            let rowConfidence = row.map(\.confidence).min() ?? 0
             let lower = text.lowercased()
+            let rowRole = summaryRole(in: roleEvidence)
             // Quantity and weight detail lines ("2 @ 6.49", "1.04 lb @ 1.99 /lb") precede the priced line.
             if lower.contains("@") || lower.contains("/lb") { continue }
             guard let (rawName, cents) = priced(text) else {
-                pendingName = lower.contains(where: \.isLetter) && !isExcluded(lower) ? clean(text) : nil
+                pendingRole = rowRole
+                pendingName = rowRole == nil && lower.contains(where: \.isLetter) && !isExcluded(lower) ? clean(text) : nil
+                if rowRole?.beginsSummary == true { inSummary = true }
                 continue
             }
             // A price printed on its own row belongs to the name on the row above. That name goes through the
             // same checks, so a "TAX" label whose amount landed on the next row isn't read as an item.
             let cleaned = clean(rawName)
             let name = cleaned.contains(where: \.isLetter) ? cleaned : pendingName
+            let role = rowRole ?? pendingRole
             pendingName = nil
-            guard let name else { continue }
-            let lowerName = name.lowercased()
-            if lowerName.range(of: #"\bsub ?total\b"#, options: .regularExpression) != nil { sawSubtotal = true }
+            pendingRole = nil
+            let lowerName = name?.lowercased() ?? lower
             if cents < 0 {
-                // A negative line before the subtotal is a coupon for the item above it; after the subtotal it
-                // discounts the whole receipt. A negative "total savings" summary repeats those and is skipped.
-                guard !lowerName.contains("total") else { continue }
-                if !sawSubtotal, let lastItem {
+                if role?.rejectsNegativeAmount == true { continue }
+                if !inSummary, let lastItem {
                     scan.items[lastItem].offsetCents += cents
                 } else {
                     scan.discountCents -= cents
                 }
-            } else if lowerName.range(of: #"\btax(es)?\d*\b"#, options: .regularExpression) != nil && !lowerName.contains("total") {
+                continue
+            }
+            switch role {
+            case .subtotal:
+                inSummary = true
+            case .tax:
+                inSummary = true
                 scan.taxCents += cents
-            } else if let priority = totalPriority(lowerName), priority >= (printedTotal?.priority ?? -1) {
-                printedTotal = (cents, priority)
-            } else if isExcluded(lowerName) || cents == 0 {
-                // Totals, payment, and savings lines are not purchased items.
-            } else {
-                scan.items.append(ReceiptItem(name: name, cents: cents))
-                lastItem = scan.items.count - 1
+            case let .total(priority):
+                inSummary = true
+                let currentPriority = printedTotal?.priority ?? -1
+                if priority > currentPriority
+                    || (priority == currentPriority && rowConfidence >= (printedTotal?.confidence ?? 0)) {
+                    printedTotal = (cents, priority, rowConfidence)
+                }
+            case .payment:
+                inSummary = true
+                summaryAmounts.append(cents)
+            case .savings:
+                inSummary = true
+            case nil where !inSummary && !isExcluded(lowerName) && cents > 0:
+                if let name {
+                    scan.items.append(ReceiptItem(name: name, cents: cents))
+                    lastItem = scan.items.count - 1
+                }
+            case nil where inSummary && cents > 0:
+                summaryAmounts.append(cents)
+            default:
+                // Once summary rows begin, an unknown amount is never promoted to a purchased item.
+                break
             }
         }
-        scan.printedTotalCents = printedTotal?.cents
         scan.items.spread(scan.taxCents - scan.discountCents)
+        let reconciled = scan.items.reduce(0) { $0 + $1.totalCents }
+        scan.printedTotalCents = printedTotal?.cents ?? summaryAmounts.last(where: { $0 == reconciled })
         scan.purchaseDate = purchaseDate(in: fragments.map(\.text))
         scan.recognizedText = fragments.map(\.text).joined(separator: "\n")
         return scan
     }
 
-    /// Favors an explicit final amount over incidental lines such as total savings or item-count totals.
-    private static func totalPriority(_ lowercased: String) -> Int? {
-        guard !lowercased.contains("subtotal"), !lowercased.contains("sub total"),
-              !["savings", "discount", "coupon", "tax", "items"].contains(where: lowercased.contains) else { return nil }
-        if lowercased.contains("grand total") || lowercased.contains("amount due") { return 4 }
-        if lowercased.contains("balance due") || lowercased.contains("balance") { return 3 }
-        if lowercased.range(of: #"\btotal\b"#, options: .regularExpression) != nil { return 2 }
-        if lowercased.range(of: #"\bdue\b"#, options: .regularExpression) != nil { return 1 }
+    private enum SummaryRole: Equatable {
+        case subtotal, tax, total(priority: Int), payment, savings
+        var beginsSummary: Bool {
+            switch self { case .subtotal, .tax, .total(_), .payment: true; case .savings: false }
+        }
+        var rejectsNegativeAmount: Bool {
+            switch self { case .total(_), .subtotal, .payment: true; case .tax, .savings: false }
+        }
+    }
+
+    /// Normalizes common OCR substitutions before deciding whether a monetary row is receipt summary data.
+    private static func summaryRole(in text: String) -> SummaryRole? {
+        let folded = String(text.lowercased().map { character in
+            switch character {
+            default: character.isLetter || character.isNumber ? character : " "
+            }
+        })
+        let words = folded.split(whereSeparator: \.isWhitespace).map(String.init)
+        let compact = words.joined()
+        let fuzzy = String(compact.map { character in
+            switch character { case "0", "q": "o"; case "1", "|": "l"; case "5": "s"; default: character }
+        }).replacingOccurrences(of: "totai", with: "total")
+        if fuzzy.contains("subtotal") { return .subtotal }
+        if words.contains(where: { word in
+            word == "tax" || word == "taxes" || (word.hasPrefix("tax") && word.dropFirst(3).allSatisfy(\.isNumber))
+        }) { return .tax }
+        if ["saving", "savings", "discount", "coupon"].contains(where: words.contains) { return .savings }
+        if fuzzy.contains("grandtotal") || fuzzy.contains("amountdue") || fuzzy.contains("amtdue") { return .total(priority: 4) }
+        if fuzzy.contains("balancedue") || words.contains("balance") { return .total(priority: 3) }
+        if fuzzy.contains("total") { return .total(priority: 2) }
+        if ["cash", "credit", "debit", "card", "visa", "mastercard", "discover", "amex", "payment", "tend", "tendered", "change", "approved", "auth"].contains(where: words.contains) { return .payment }
+        if words.contains("due") { return .total(priority: 1) }
         return nil
     }
 
@@ -225,7 +315,7 @@ enum ReceiptTextRecognizer {
         excludedWords.firstMatch(in: lowercased, range: NSRange(lowercased.startIndex..., in: lowercased)) != nil
     }
 
-    private static func rows(from fragments: [Fragment]) -> [[String]] {
+    private static func rows(from fragments: [Fragment]) -> [[Fragment]] {
         // Where item names usually start, so margin flags can be told apart from brand prefixes like "WB",
         // and price-column pieces can be told apart from names.
         let nameStarts = group(fragments.filter { $0.text.count > 2 && $0.text.contains(where: \.isLetter) })
@@ -240,10 +330,17 @@ enum ReceiptTextRecognizer {
         // allowing for the drift measured on the row above it.
         var drift: CGFloat = 0
         for pieces in group(fragments.filter(isPricePiece)) {
-            let cluster = [Fragment(text: priceText(pieces), box: pieces[0].box)]
+            let cluster = [Fragment(text: priceText(pieces), box: pieces[0].box, confidence: pieces.map(\.confidence).min() ?? 0)]
             let midY = cluster[0].box.midY
-            let nearest = rows.indices.min { abs(rows[$0][0].box.midY + drift - midY) < abs(rows[$1][0].box.midY + drift - midY) }
-            if let index = nearest, abs(rows[index][0].box.midY + drift - midY) < rows[index][0].box.height * 0.75 {
+            let summaryRows = rows.indices.filter { index in
+                let evidence = rows[index].flatMap { [$0.text] + $0.alternatives }.joined(separator: " ")
+                return summaryRole(in: evidence) != nil
+                    && abs(rows[index][0].box.midY + drift - midY) < rows[index][0].box.height * 1.5
+            }
+            let candidates = summaryRows.isEmpty ? Array(rows.indices) : summaryRows
+            let nearest = candidates.min { abs(rows[$0][0].box.midY + drift - midY) < abs(rows[$1][0].box.midY + drift - midY) }
+            let tolerance: CGFloat = summaryRows.isEmpty ? 0.75 : 1.5
+            if let index = nearest, abs(rows[index][0].box.midY + drift - midY) < rows[index][0].box.height * tolerance {
                 drift = midY - rows[index][0].box.midY
                 rows[index] += cluster
             } else {
@@ -254,7 +351,7 @@ enum ReceiptTextRecognizer {
             var row = row.sorted { $0.box.minX < $1.box.minX }
             // Drop a standalone register flag in the left margin, like "WT" (weighed) or "SC".
             if row.count > 1, row[0].box.maxX < nameColumn, row[0].text.range(of: #"^[A-Z]{1,2}$"#, options: .regularExpression) != nil { row.removeFirst() }
-            return row.map(\.text)
+            return row
         }
     }
 
