@@ -100,18 +100,6 @@ enum ExpenseCategory: String, CaseIterable, Identifiable, Hashable, Codable, Sen
     }
 }
 
-/// The receipt-review interaction used to turn evidence into one expense. Recognized row count recommends a layout.
-enum ExpenseLayout: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
-    case splitTotal, assignItems
-    var id: Self { self }
-    var title: String {
-        switch self {
-        case .splitTotal: "Split Total"
-        case .assignItems: "Assign Items"
-        }
-    }
-}
-
 enum SelfReferenceMode: String, CaseIterable, Identifiable {
     static let storageKey = "self-reference-mode"
     case fullName, me, you

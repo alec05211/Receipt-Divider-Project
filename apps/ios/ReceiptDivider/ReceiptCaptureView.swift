@@ -13,20 +13,18 @@ struct ReceiptCaptureView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showCamera = false
     @State private var items: [ReceiptItem] = []
-    @State private var reviewedTotalCents: Int?
     @State private var purchaseDate = Date()
     @State private var recognizedText: String?
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
-    /// Item-to-person choices used by Assign Items. An empty set excludes the row from this expense.
+    /// Who owns each row. An unassigned row belongs to the payer.
     @State private var itemAssignments: [UUID: Set<UUID>] = [:]
     /// Tracks whose contribution the user has fixed, so edits only move everyone else.
     @State private var balancer = ContributionBalancer()
     @State private var description = "Shared Expense"
     @State private var payer: UUID?
     @State private var category: ExpenseCategory?
-    @State private var layout: ExpenseLayout = .splitTotal
     @State private var error: String?
     @State private var editingItemID: UUID?
     @State private var personSearch = ""
@@ -42,40 +40,18 @@ struct ReceiptCaptureView: View {
     @ScaledMetric(relativeTo: .body) private var reviewControlRowHeight: CGFloat = 50
     @ScaledMetric(relativeTo: .footnote) private var reviewWarningHeight: CGFloat = 82
 
-    private var assignedItemIDs: Set<UUID> { Set(itemAssignments.compactMap { $0.value.isEmpty ? nil : $0.key }) }
+    /// A receipt with at most one item skips assignment: its item goes to everyone and its total is edited directly.
+    private var hasSingleItem: Bool { items.count <= 1 }
     private var receiptTotal: Int { max(0, items.reduce(0) { $0 + $1.totalCents }) }
-    /// Before assignments exist, Assign Items reviews the whole receipt; afterwards its total follows assigned rows.
-    private var total: Int {
-        switch layout {
-        case .splitTotal: return max(0, reviewedTotalCents ?? receiptTotal)
-        case .assignItems:
-            guard !itemAssignments.isEmpty || step == .review else { return 0 }
-            if itemAssignments.isEmpty { return receiptTotal }
-            return max(0, items.filter { assignedItemIDs.contains($0.id) }.reduce(0) { $0 + $1.totalCents })
-        }
-    }
-    /// The expense's items with their owners, as saved. Split Total gives every priced item to everyone and covers any
-    /// gap between the items and the reviewed total. Assign Items uses the assignments, unassigned rows going to the payer.
+    private var total: Int { max(0, expenseItems.reduce(0) { $0 + $1.totalCents }) }
+    /// The expense's priced items with their owners, as saved. Unassigned rows belong to the payer.
     private var expenseItems: [ReceiptItem] {
-        var result: [ReceiptItem]
-        switch layout {
-        case .splitTotal:
-            result = items.filter { $0.cents > 0 }
-            let gap = total - result.reduce(0) { $0 + $1.totalCents }
-            if result.isEmpty { result = [ReceiptItem(name: savedDescription, cents: total)] }
-            else if gap > 0 { result.append(ReceiptItem(name: "Adjustment", cents: gap)) }
-            else if gap < 0 { result.spread(gap) }
-            for index in result.indices { result[index].ownerIDs = selectedPeople }
-        case .assignItems:
-            result = items.filter { $0.cents > 0 }
-            for index in result.indices {
-                let owners = itemAssignments[result[index].id, default: []].intersection(selectedPeople)
-                result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
-            }
-        }
+        var result = items.filter { $0.cents > 0 }
         for index in result.indices {
+            let owners = itemAssignments[result[index].id, default: []].intersection(selectedPeople)
+            result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
             result[index].isSelected = true
-            if result[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[index].name = "Item" }
+            if result[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[index].name = result.count == 1 ? savedDescription : "Item" }
         }
         return result
     }
@@ -152,7 +128,7 @@ struct ReceiptCaptureView: View {
         } description: { EmptyView() } actions: {
             Button { showCamera = true } label: { Label("Scan receipt", systemImage: "doc.viewfinder").prominentLabel() }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
-            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; reviewedTotalCents = 0; layout = .splitTotal; step = .review }.padding(.top, 12)
+            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; step = .review }.padding(.top, 12)
         }
     }
     private var readingScreen: some View {
@@ -163,13 +139,12 @@ struct ReceiptCaptureView: View {
         VStack(spacing: 12) {
             List {
                 Section {
-                    if layout == .splitTotal {
+                    if hasSingleItem {
                         LabeledContent("Expense total") { CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold) }
                     } else {
-                        LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
+                        LabeledContent("Expense total", value: receiptTotal.usd).fontWeight(.semibold)
                     }
                     DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
-                    Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
                     Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
                 }
                 Section {
@@ -185,7 +160,7 @@ struct ReceiptCaptureView: View {
                 }
             }
             .reviewListStyle()
-            .fixedReviewList(estimatedHeight: reviewControlRowHeight * 5 + 28)
+            .fixedReviewList(estimatedHeight: reviewControlRowHeight * 4 + 28)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -290,6 +265,8 @@ struct ReceiptCaptureView: View {
                 }
                 if !assignmentsLocked {
                     Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0); items.append(item); editingItemID = item.id }
+                    Button("Split all evenly", systemImage: "person.3.fill") { splitUnassignedEvenly() }
+                        .disabled(items.allSatisfy { !itemAssignments[$0.id, default: []].isEmpty })
                 }
             }
         }
@@ -384,7 +361,6 @@ struct ReceiptCaptureView: View {
             Section {
                 Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
                 DatePicker("Date of expense", selection: $purchaseDate, displayedComponents: .date)
-                Picker("Split by", selection: layoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
                 LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
             }
             Section {
@@ -436,17 +412,16 @@ struct ReceiptCaptureView: View {
             items = scan.items
             recognizedText = scan.recognizedText
             category = suggestion.category
-            layout = suggestion.layout
             description = suggestion.name
             for index in items.indices { items[index].isSelected = true }
-            reviewedTotalCents = scan.printedTotalCents ?? receiptTotal
             if let date = scan.purchaseDate { purchaseDate = date }
             error = scan.mismatchWarning
             if items.isEmpty {
-                items = [ReceiptItem(name: "", cents: 0, isSelected: true)]
-                reviewedTotalCents = scan.printedTotalCents ?? 0
-                if scan.printedTotalCents != nil { error = nil }
-                else { error = "No prices found." }
+                items = [ReceiptItem(name: "", cents: scan.printedTotalCents ?? 0, isSelected: true)]
+                error = scan.printedTotalCents == nil ? "No prices found." : nil
+            } else if items.count == 1, let printed = scan.printedTotalCents {
+                matchPrintedTotal(printed)
+                error = nil
             }
             step = .review
 
@@ -455,7 +430,7 @@ struct ReceiptCaptureView: View {
             let originalNames = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.name) })
             let originalDescription = description
             let originalCategory = category
-            let originalTotal = reviewedTotalCents
+            let originalTotal = receiptTotal
             let originalDate = purchaseDate
             let originalError = error
             let analysis = await OnDeviceReceiptAnalyzer.analyze(scan)
@@ -468,42 +443,37 @@ struct ReceiptCaptureView: View {
             }
             if description == originalDescription { description = analysis.suggestion.name }
             if category == originalCategory { category = analysis.suggestion.category }
-            if reviewedTotalCents == originalTotal { reviewedTotalCents = analysis.scan.printedTotalCents ?? originalTotal }
+            if items.count == 1, receiptTotal == originalTotal, let printed = analysis.scan.printedTotalCents { matchPrintedTotal(printed) }
             if purchaseDate == originalDate, let refinedDate = analysis.scan.purchaseDate { purchaseDate = refinedDate }
             if error == originalError { error = analysis.scan.mismatchWarning }
         }
     }
+    /// A single item's total, typed directly; it replaces the item's price and drops any tax or discount.
     private var totalBinding: Binding<Int> {
-        Binding(get: { total }, set: { reviewedTotalCents = max(0, $0) })
-    }
-    private var reviewLayoutBinding: Binding<ExpenseLayout> {
-        Binding(get: { layout }, set: { newLayout in
-            guard newLayout != layout else { return }
-            layout = newLayout
-            if newLayout == .splitTotal, reviewedTotalCents == nil { reviewedTotalCents = receiptTotal }
-            shares = [:]
-            balancer = ContributionBalancer()
+        Binding(get: { receiptTotal }, set: { cents in
+            guard !items.isEmpty else { return }
+            items[0].cents = max(0, cents)
+            items[0].offsetCents = 0
         })
+    }
+    /// Makes a lone scanned item cost the printed total, keeping its price and treating the difference as its tax and
+    /// discounts.
+    private func matchPrintedTotal(_ printed: Int) {
+        guard items.count == 1, items[0].cents > 0 else { return }
+        items[0].offsetCents = printed - items[0].cents
     }
     private func advanceFromReview() {
         personSearch = ""
-        if layout == .assignItems {
-            prepareAssignments()
-            step = .assign
-        } else {
+        if hasSingleItem {
+            itemAssignments = Dictionary(uniqueKeysWithValues: items.map { ($0.id, selectedPeople) })
+            assignmentsLocked = false
+            assignmentsBeforeLock = nil
             prepareFinalSplit()
             step = .split
+        } else {
+            prepareAssignments()
+            step = .assign
         }
-    }
-    private var layoutBinding: Binding<ExpenseLayout> {
-        Binding(get: { layout }, set: { newLayout in
-            guard newLayout != layout else { return }
-            layout = newLayout
-            if newLayout == .splitTotal, reviewedTotalCents == nil { reviewedTotalCents = receiptTotal }
-            shares = [:]
-            balancer = ContributionBalancer()
-            if step == .assign || step == .split || step == .contributions { step = .review }
-        })
     }
     /// Preserves valid prior assignments and starts with All as the active assignment target.
     private func prepareAssignments() {
@@ -534,6 +504,14 @@ struct ReceiptCaptureView: View {
         shares = assignedShares()
         UISelectionFeedbackGenerator().selectionChanged()
     }
+    /// Gives every unassigned row to everyone splitting the expense.
+    private func splitUnassignedEvenly() {
+        withAnimation(.snappy(duration: 0.2)) {
+            for item in items where itemAssignments[item.id, default: []].isEmpty { itemAssignments[item.id] = selectedPeople }
+            shares = assignedShares()
+        }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
     /// The first confirmation visibly assigns every untouched row to the payer. A second press continues.
     private func confirmAssignments() {
         if assignmentsLocked {
@@ -556,7 +534,7 @@ struct ReceiptCaptureView: View {
     /// Moves the rows confirmation gave the payer to a newly chosen payer, then recalculates contributions from the
     /// items, discarding any edited contributions. Rows assigned by hand keep their people.
     private func reassignPayerRows(to newPayer: UUID?) {
-        guard layout == .assignItems, assignmentsLocked, let newPayer, let assignmentsBeforeLock else { return }
+        guard assignmentsLocked, let newPayer, let assignmentsBeforeLock else { return }
         for item in items where assignmentsBeforeLock[item.id, default: []].isEmpty {
             itemAssignments[item.id] = [newPayer]
         }
@@ -627,7 +605,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
+    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil }
     private func back() {
         switch step {
         case .review: personSearch = ""; step = .capture
@@ -635,9 +613,10 @@ struct ReceiptCaptureView: View {
             if assignmentsLocked { undoAssignmentConfirmation() }
             else { step = .review }
         case .split:
-            if layout == .assignItems {
+            // Only the assignment screen locks assignments, so a lock means final review was reached through it.
+            if assignmentsLocked {
                 step = .assign
-                if assignmentsLocked { undoAssignmentConfirmation() }
+                undoAssignmentConfirmation()
             } else {
                 step = .review
             }
