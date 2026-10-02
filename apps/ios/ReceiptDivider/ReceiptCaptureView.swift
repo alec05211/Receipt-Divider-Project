@@ -276,7 +276,7 @@ struct ReceiptCaptureView: View {
                     }
                 }
                 if !assignmentsLocked {
-                    Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0); items.append(item); editingItemID = item.id }
+                    Button("Add item", systemImage: "plus") { addItem() }
                     Button("Split all evenly", systemImage: "person.3.fill") { splitAllEvenly() }
                 }
             }
@@ -525,6 +525,13 @@ struct ReceiptCaptureView: View {
         }
         shares = assignedShares()
         UISelectionFeedbackGenerator().selectionChanged()
+    }
+    /// Adds a blank row to edit. During an even split it goes to everyone, since the printed total already covers it.
+    private func addItem() {
+        let item = ReceiptItem(name: "", cents: 0)
+        items.append(item)
+        if splitsPrintedTotal { itemAssignments[item.id] = selectedPeople }
+        editingItemID = item.id
     }
     /// Puts everyone on every row and splits the printed total evenly, or the items' sum when no total was found.
     private func splitAllEvenly() {
