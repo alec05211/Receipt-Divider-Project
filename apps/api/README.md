@@ -9,7 +9,7 @@ This is the stateless transaction-ledger backend. It uses Hono, Supabase Auth ac
 - Shared transactions: an expense is visible to its creator, its payer, and everyone allocated a share; a repayment is visible to its sender and recipient. Removing a friend keeps shared history, and you can still record repayments with anyone you've shared an expense with.
 - Pairwise balances from the caller's side: everyone on an expense owes their share to its payer, and repayments reduce what the sender owes. `netBalance` is the sum.
 - Saved people filters (called groups in the UI) that have no membership, invitation, permission, or balance semantics.
-- General expenses with an explicit total, payer, date, and exact allocations. Item rows are optional.
+- General expenses with an explicit total, payer, date, and exact allocations. Every saved expense has at least one item, and each item records who owns it (`ownerIds`); ownership never sets amounts, the allocations do.
 - Optional evidence assets for receipts, restaurant checks, ticket confirmations, and other image paper trails, visible to everyone on the expense they're attached to.
 - Database-backed profile and evidence images (`bytea`), capped at 5 MB and 15 MB respectively.
 - Atomic expenses, repayments, audit events, exact-cent validation, idempotent retries, and server-derived balances.
@@ -84,7 +84,7 @@ Example manual expense (no image and no itemization):
 }
 ```
 
-For receipt-assisted entry, upload evidence first, then add its ID in `evidenceIds` and optionally add reviewed `items`. To split one receipt into several expenses, upload it once and put the same evidence ID on each; the uploaded evidence is the receipt record (image and recognized text), and expenses sharing an ID came from the same receipt. When items exist, their adjusted sum must equal `totalCents`; allocations must always equal `totalCents`.
+For receipt-assisted entry, upload evidence first, then add its ID in `evidenceIds` and optionally add reviewed `items`. To split one receipt into several expenses, upload it once and put the same evidence ID on each; the uploaded evidence is the receipt record (image and recognized text), and expenses sharing an ID came from the same receipt. Items record what was bought and need not add up to `totalCents` (an evenly split receipt uses its printed total even when recognition missed a line); allocations must always equal `totalCents`. Each item may list `ownerIds`, who must be the payer or have an allocation; an item without owners belongs to the payer, and an expense sent without items is saved as one item for its total owned by everyone allocated.
 
 ## Verification
 

@@ -60,7 +60,6 @@ enum OnDeviceReceiptAnalyzer {
             scan: scan,
             suggestion: ExpenseSuggestion(
                 category: category,
-                layout: scan.items.count <= 1 ? .splitTotal : .assignItems,
                 name: name
             )
         )

@@ -25,13 +25,12 @@ struct ReceiptScan {
         guard let printed = printedTotalCents else { return nil }
         let found = items.reduce(0) { $0 + $1.totalCents }
         guard found != printed else { return nil }
-        return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Review the total and item prices."
+        return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the item prices."
     }
 }
 
 struct ExpenseSuggestion {
     var category: ExpenseCategory?
-    var layout: ExpenseLayout
     var name: String
 }
 
@@ -53,8 +52,6 @@ enum ExpenseSuggester {
         } else {
             category = nil
         }
-        // A single recognized charge needs only a total split. Multiple rows benefit from explicit assignment.
-        let layout: ExpenseLayout = scan.items.count <= 1 ? .splitTotal : .assignItems
         let identifyingName = merchant(in: scan.recognizedText) ?? scan.items.first(where: { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }).map { displayName($0.name) }
         let name = identifyingName.map { identifier in
             switch category {
@@ -65,7 +62,7 @@ enum ExpenseSuggester {
             case nil: "\(identifier) Expense"
             }
         } ?? category?.suggestedName ?? "Shared Expense"
-        return ExpenseSuggestion(category: category, layout: layout, name: name)
+        return ExpenseSuggestion(category: category, name: name)
     }
 
     private static func containsAny(_ text: String, _ terms: [String]) -> Bool { terms.contains(where: text.contains) }
