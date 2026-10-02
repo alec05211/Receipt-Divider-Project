@@ -393,6 +393,7 @@ struct ReceiptCaptureView: View {
             if !isValidSplit { Section { Text("Contributions must total \(total.usd). Currently \(allocationTotal.usd).") .foregroundStyle(.red) } }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }
+        .onChange(of: payer) { _, newPayer in reassignPayerRows(to: newPayer) }
     }
     private var contributionsScreen: some View {
         List {
@@ -551,6 +552,16 @@ struct ReceiptCaptureView: View {
             assignmentsLocked = true
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+    /// Moves the rows confirmation gave the payer to a newly chosen payer, then recalculates contributions from the
+    /// items, discarding any edited contributions. Rows assigned by hand keep their people.
+    private func reassignPayerRows(to newPayer: UUID?) {
+        guard layout == .assignItems, assignmentsLocked, let newPayer, let assignmentsBeforeLock else { return }
+        for item in items where assignmentsBeforeLock[item.id, default: []].isEmpty {
+            itemAssignments[item.id] = [newPayer]
+        }
+        shares = assignedShares()
+        balancer = ContributionBalancer()
     }
     private func undoAssignmentConfirmation() {
         withAnimation(.snappy(duration: 0.2)) {
