@@ -8,6 +8,8 @@ struct ReceiptItem: Identifiable, Hashable, Codable {
     /// Negative when discounts outweigh tax.
     var offsetCents = 0
     var isSelected = false
+    /// User IDs of the people who had this item. Ownership only says who had what; `Expense.shares` holds what each owes.
+    var ownerIDs: Set<UUID> = []
     var totalCents: Int { cents + offsetCents }
 }
 extension ReceiptItem {
@@ -16,6 +18,7 @@ extension ReceiptItem {
         id = try container.decode(UUID.self, forKey: .id); name = try container.decode(String.self, forKey: .name); cents = try container.decode(Int.self, forKey: .cents)
         offsetCents = try container.decodeIfPresent(Int.self, forKey: .offsetCents) ?? 0
         isSelected = try container.decodeIfPresent(Bool.self, forKey: .isSelected) ?? false
+        ownerIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .ownerIDs) ?? []
     }
 }
 extension Array where Element == ReceiptItem {
@@ -30,6 +33,31 @@ extension Array where Element == ReceiptItem {
         let remainder = amount - exact.reduce(0) { $0 + Int($1.value.rounded(.towardZero)) }
         let byFraction = exact.sorted { abs($0.value.truncatingRemainder(dividingBy: 1)) > abs($1.value.truncatingRemainder(dividingBy: 1)) }
         for share in byFraction.prefix(abs(remainder)) { self[share.index].offsetCents += remainder.signum() }
+    }
+
+    /// What each of `people` owes for the items they own: every item is divided equally among its owners among
+    /// `people`. Exact shares are rounded down and the leftover cents go to the largest fractions, earlier `people`
+    /// winning ties, so the shares add up to the owned items' total and everyone owning everything is an even split.
+    func ownerShares(for people: [UUID]) -> [UUID: Int] {
+        var exact = Dictionary(uniqueKeysWithValues: people.map { ($0, 0.0) })
+        var total = 0
+        for item in self {
+            let owners = people.filter(item.ownerIDs.contains)
+            guard !owners.isEmpty else { continue }
+            total += item.totalCents
+            for owner in owners { exact[owner, default: 0] += Double(item.totalCents) / Double(owners.count) }
+        }
+        // The small allowance keeps a share like 2.9999999 from rounding down to 2.
+        let whole = exact.mapValues { Int(($0 + 1e-9).rounded(.down)) }
+        let fraction = { (person: UUID) in exact[person, default: 0] - Double(whole[person, default: 0]) }
+        let remainder = total - whole.values.reduce(0, +)
+        let byFraction = people.enumerated().sorted { a, b in
+            let (fractionA, fractionB) = (fraction(a.element), fraction(b.element))
+            return abs(fractionA - fractionB) > 1e-9 ? fractionA > fractionB : a.offset < b.offset
+        }
+        var result = whole
+        for (_, person) in byFraction.prefix(Swift.max(0, remainder)) { result[person, default: 0] += 1 }
+        return result
     }
 }
 /// `payer` and the keys of `shares` are user IDs. `receiptImageData` and `recognizedText` are only set before saving;
@@ -334,7 +362,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             throw LedgerAPIClientError.configurationMissing
         }
         do {
-            let allocations = expense.shares.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
+            // Sorted so a retry after relaunch sends the same request.
+            let allocations = expense.shares.sorted { $0.key.uuidString < $1.key.uuidString }.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
             var evidenceIDs = expense.evidenceIDs
             if evidenceIDs.isEmpty, let image = expense.receiptImageData {
                 if let pending = pendingEvidenceIDs[expense.id] { evidenceIDs = [pending] }
@@ -348,7 +377,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 }
             }
             let selectedItems = expense.items.filter(\.isSelected).map {
-                APIExpenseItem(name: $0.name, amountCents: $0.cents, offsetCents: $0.offsetCents)
+                APIExpenseItem(name: $0.name, amountCents: $0.cents, offsetCents: $0.offsetCents, ownerIds: $0.ownerIDs.sorted { $0.uuidString < $1.uuidString })
             }
             let request = CreateAPIExpense(
                 clientRequestId: expense.id,
@@ -499,7 +528,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 description: remote.description,
                 transactionDate: Self.dayFormatter.date(from: remote.transactionDate) ?? .now,
                 payer: remote.payerId,
-                items: remote.items.map { ReceiptItem(name: $0.name, cents: $0.amountCents, offsetCents: $0.offsetCents ?? 0, isSelected: true) },
+                items: remote.items.map { ReceiptItem(name: $0.name, cents: $0.amountCents, offsetCents: $0.offsetCents ?? 0, isSelected: true, ownerIDs: Set($0.ownerIds ?? [])) },
                 shares: Dictionary(remote.allocations.map { ($0.userId, $0.amountCents) }, uniquingKeysWith: +),
                 receiptImageData: nil,
                 createdAt: Self.isoDate(remote.createdAt),

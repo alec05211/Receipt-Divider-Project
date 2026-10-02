@@ -25,7 +25,7 @@ Everyone in a transaction is an app user: you split expenses with yourself and y
 5. Review the suggested category and identifying name together, followed by payer, date, layout, and total. Receipt text and merchant cues suggest Restaurant, Movie, Groceries, or Concert when possible. Open **Edit Contributions** only when the suggested shares need adjustment; percentages are the default input unit and the equivalent dollar amount appears beside them in parentheses.
 6. Save from the top-right action to see the expense in Summary immediately while its evidence and canonical database row finish uploading.
 
-Opening an expense shows its name followed by one continuous fit-to-width reading of the amount, payer avatar, payer first name, and purchase date (the payer can press and hold the card to edit the name or date), then the split, the receipt image and selected items, followed by recent expenses involving the same people. The Balances screen uses first-name-only relationship sentences and every row opens Settle Up for that person. Settings can label the signed-in participant by full name, “Me,” or “You.”
+Opening an expense shows its name followed by one continuous fit-to-width reading of the amount, payer avatar, payer first name, and purchase date (the payer can press and hold the card to edit the name or date), then the split, the receipt image and its items with the avatars of who had each, followed by recent expenses involving the same people. The Balances screen uses first-name-only relationship sentences and every row opens Settle Up for that person. Settings can label the signed-in participant by full name, “Me,” or “You.”
 
 ## Project layout
 

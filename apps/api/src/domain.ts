@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseCategory, ExpenseChanges, Payment, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseCategory, ExpenseChanges, ExpenseItem, Payment, UUID } from "./types.ts";
 import { ApiError, expenseCategories } from "./types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -100,6 +100,15 @@ export function validateExpense(input: CreateExpenseInput): void {
   if (allocationTotal !== input.totalCents) {
     throw new ApiError(422, `allocations total ${allocationTotal} does not equal expense total ${input.totalCents}`, "allocation_mismatch");
   }
+  for (const item of items) {
+    if (item.ownerIds === undefined) continue;
+    if (!Array.isArray(item.ownerIds) || item.ownerIds.length > 100) throw new ApiError(400, "item ownerIds must be a list of at most 100 people", "invalid_input");
+    item.ownerIds = item.ownerIds.map((id) => requireUuid(id, "item ownerId"));
+    if (new Set(item.ownerIds).size !== item.ownerIds.length) throw new ApiError(400, "item ownerIds must be unique", "invalid_input");
+  }
+  for (const item of expenseItems(input)) {
+    if (item.ownerIds.some((id) => id !== input.payerId && !memberIds.has(id))) throw new ApiError(422, "every item owner must be the payer or have an allocation", "invalid_owner");
+  }
   const evidenceIds = input.evidenceIds ?? [];
   if (!Array.isArray(evidenceIds) || evidenceIds.length > 10) throw new ApiError(400, "an expense may have at most 10 evidence images", "invalid_input");
   const uniqueEvidence = new Set<string>();
@@ -108,6 +117,20 @@ export function validateExpense(input: CreateExpenseInput): void {
     if (uniqueEvidence.has(evidenceId)) throw new ApiError(400, "evidenceIds must be unique", "invalid_input");
     uniqueEvidence.add(evidenceId);
   }
+}
+
+/**
+ * The items an expense is saved with: an expense without items becomes one item for its total owned by everyone
+ * allocated, and an item without owners belongs to the payer. Leaves `input` unchanged so its fingerprint doesn't.
+ */
+export function expenseItems(input: CreateExpenseInput): ExpenseItem[] {
+  if (!input.items?.length) {
+    return [{ name: input.description.trim(), amountCents: input.totalCents, offsetCents: 0, ownerIds: input.allocations.map((allocation) => allocation.userId) }];
+  }
+  return input.items.map((item) => ({
+    name: item.name.trim(), amountCents: item.amountCents, offsetCents: item.offsetCents ?? 0,
+    ownerIds: item.ownerIds?.length ? [...item.ownerIds] : [input.payerId],
+  }));
 }
 
 /** Validates `input` and lowercases its IDs in place. */

@@ -160,6 +160,37 @@ test("idempotency and exact totals protect canonical expenses", async () => {
   assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", { ...input, clientRequestId: "40000000-0000-4000-8000-000000000002", totalCents: 3999 })).status, 422);
 });
 
+test("items record who had them while allocations set what each person owes", async () => {
+  const { app } = await setupFriends();
+  type Item = { name: string; amountCents: number; ownerIds: string[] };
+  // Three people share the juice; the slider then moves most of it onto Jamie.
+  const juice = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000001", alex, [[alex, 50], [jamie, 200], [morgan, 50]], {
+    items: [{ name: "Orange juice", amountCents: 300, ownerIds: [alex, jamie.toUpperCase(), morgan] }],
+  }));
+  assert.equal(juice.status, 201);
+  assert.deepEqual((await juice.json() as { items: Item[] }).items, [{ name: "Orange juice", amountCents: 300, offsetCents: 0, ownerIds: [alex, jamie, morgan] }]);
+
+  // An unowned item belongs to the payer, and an expense without items becomes one item owned by everyone on it.
+  const unowned = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000002", jamie, [[alex, 100], [jamie, 100]], {
+    items: [{ name: "Bread", amountCents: 100, ownerIds: [alex] }, { name: "Milk", amountCents: 100 }],
+  }));
+  assert.deepEqual((await unowned.json() as { items: Item[] }).items.map((item) => item.ownerIds), [[alex], [jamie]]);
+  const whole = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000003", alex, [[alex, 600], [jamie, 600]], { description: "Movie" }));
+  assert.deepEqual((await whole.json() as { items: Item[] }).items, [{ name: "Movie", amountCents: 1200, offsetCents: 0, ownerIds: [alex, jamie] }]);
+
+  const shared = (await snapshot(app, jamie)).expenses as unknown as Array<{ items: Item[] }>;
+  assert.ok(shared.some((entry) => entry.items[0]?.name === "Orange juice" && entry.items[0].ownerIds.length === 3));
+
+  // Owners must be on the expense, listed once.
+  for (const ownerIds of [[stranger], [alex, alex], ["not-a-uuid"]]) {
+    const status = (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000004", alex, [[alex, 300]], { items: [{ name: "Juice", amountCents: 300, ownerIds }] }))).status;
+    assert.ok(status === 400 || status === 422, `${ownerIds} gave ${status}`);
+  }
+  // The payer may own items without owing anything.
+  const treat = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000005", alex, [[jamie, 300]], { items: [{ name: "Juice", amountCents: 300 }] }));
+  assert.deepEqual((await treat.json() as { items: Item[] }).items[0]!.ownerIds, [alex]);
+});
+
 test("an expense may carry one of the known categories", async () => {
   const { app } = await setupFriends();
   const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("41000000-0000-4000-8000-000000000001", alex, [[alex, 1000], [jamie, 1000]], { category: "concert" }));

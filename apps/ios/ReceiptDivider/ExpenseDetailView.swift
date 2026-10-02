@@ -74,7 +74,14 @@ struct ExpenseDetailView: View {
                     ContentUnavailableView("No receipt", systemImage: "doc.text.image")
                 }
                 ForEach(current.items.filter(\.isSelected)) { item in
-                    LabeledContent(item.name, value: item.cents.usd)
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            if !item.ownerIDs.isEmpty { AvatarStack(people: Array(item.ownerIDs)) }
+                            Text(item.cents.usd)
+                        }
+                    } label: {
+                        Text(item.name)
+                    }
                 }
                 if current.offsetTotal != 0 { LabeledContent("Tax and discounts", value: current.offsetTotal < 0 ? "−\((-current.offsetTotal).usd)" : current.offsetTotal.usd) }
             }

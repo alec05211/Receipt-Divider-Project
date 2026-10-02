@@ -27,7 +27,12 @@ export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: stri
 export const expenseCategories = ["groceries", "restaurant", "movie", "concert"] as const;
 export type ExpenseCategory = typeof expenseCategories[number];
 
-export interface ExpenseItemInput { name: string; amountCents: number; offsetCents?: number; }
+/**
+ * `ownerIds` are the people who had the item; each must be the payer or have an allocation on the expense. An item with no owners
+ * belongs to the payer. Owners record who had what; the allocations alone set what each person owes.
+ */
+export interface ExpenseItemInput { name: string; amountCents: number; offsetCents?: number; ownerIds?: UUID[]; }
+export interface ExpenseItem extends ExpenseItemInput { ownerIds: UUID[]; }
 /** The fields of an existing expense that can be edited; omitted fields are left as they are. */
 export interface ExpenseChanges { description?: string; transactionDate?: string; }
 export interface AllocationInput { userId: UUID; amountCents: number; }
@@ -43,6 +48,7 @@ export interface CreateExpenseInput {
   currency: string;
   totalCents: number;
   evidenceIds?: UUID[];
+  /** Omitted or empty: the expense is saved as one item for the whole total, owned by everyone allocated. */
   items?: ExpenseItemInput[];
   allocations: AllocationInput[];
 }
@@ -51,7 +57,7 @@ export interface Expense extends Omit<CreateExpenseInput, "items" | "evidenceIds
   id: UUID;
   category: ExpenseCategory | null;
   creatorId: UUID;
-  items: ExpenseItemInput[];
+  items: ExpenseItem[];
   evidenceIds: UUID[];
   createdAt: string;
 }

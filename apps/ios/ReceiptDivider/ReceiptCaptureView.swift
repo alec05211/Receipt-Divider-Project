@@ -42,12 +42,7 @@ struct ReceiptCaptureView: View {
     @ScaledMetric(relativeTo: .body) private var reviewControlRowHeight: CGFloat = 50
     @ScaledMetric(relativeTo: .footnote) private var reviewWarningHeight: CGFloat = 82
 
-    private var includedItemIDs: Set<UUID> {
-        switch layout {
-        case .splitTotal: Set(items.filter { $0.totalCents > 0 }.map(\.id))
-        case .assignItems: Set(itemAssignments.compactMap { $0.value.isEmpty ? nil : $0.key })
-        }
-    }
+    private var assignedItemIDs: Set<UUID> { Set(itemAssignments.compactMap { $0.value.isEmpty ? nil : $0.key }) }
     private var receiptTotal: Int { max(0, items.reduce(0) { $0 + $1.totalCents }) }
     /// Before assignments exist, Assign Items reviews the whole receipt; afterwards its total follows assigned rows.
     private var total: Int {
@@ -56,8 +51,37 @@ struct ReceiptCaptureView: View {
         case .assignItems:
             guard !itemAssignments.isEmpty || step == .review else { return 0 }
             if itemAssignments.isEmpty { return receiptTotal }
-            return max(0, items.filter { includedItemIDs.contains($0.id) }.reduce(0) { $0 + $1.totalCents })
+            return max(0, items.filter { assignedItemIDs.contains($0.id) }.reduce(0) { $0 + $1.totalCents })
         }
+    }
+    /// The expense's items with their owners, as saved. Split Total gives every priced item to everyone and covers any
+    /// gap between the items and the reviewed total. Assign Items uses the assignments, unassigned rows going to the payer.
+    private var expenseItems: [ReceiptItem] {
+        var result: [ReceiptItem]
+        switch layout {
+        case .splitTotal:
+            result = items.filter { $0.cents > 0 }
+            let gap = total - result.reduce(0) { $0 + $1.totalCents }
+            if result.isEmpty { result = [ReceiptItem(name: savedDescription, cents: total)] }
+            else if gap > 0 { result.append(ReceiptItem(name: "Adjustment", cents: gap)) }
+            else if gap < 0 { result.spread(gap) }
+            for index in result.indices { result[index].ownerIDs = selectedPeople }
+        case .assignItems:
+            result = items.filter { $0.cents > 0 }
+            for index in result.indices {
+                let owners = itemAssignments[result[index].id, default: []].intersection(selectedPeople)
+                result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
+            }
+        }
+        for index in result.indices {
+            result[index].isSelected = true
+            if result[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[index].name = "Item" }
+        }
+        return result
+    }
+    private var savedDescription: String {
+        let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? (category?.suggestedName ?? "Shared Expense") : name
     }
     private var allocationTotal: Int { selectedPeople.reduce(0) { $0 + (shares[$1] ?? 0) } }
     private var isValidSplit: Bool { !selectedPeople.isEmpty && allocationTotal == total && payer.map(selectedPeople.contains) == true }
@@ -380,7 +404,7 @@ struct ReceiptCaptureView: View {
                             Spacer()
                             ContributionAmountField(name: store.name(for: person), cents: shareBinding(for: person), total: total)
                         }
-                        if selectedPeople.count > 1 { ContributionSlider(name: store.name(for: person), cents: shareBinding(for: person), total: total, detent: equalShare(for: person)) }
+                        if selectedPeople.count > 1 { ContributionSlider(name: store.name(for: person), cents: shareBinding(for: person), total: total, detent: itemShare(for: person)) }
                     }
                 }
             }
@@ -537,15 +561,13 @@ struct ReceiptCaptureView: View {
         }
         UISelectionFeedbackGenerator().selectionChanged()
     }
+    /// Contributions from the rows assigned so far; unassigned rows count toward no one until confirmation.
     private func assignedShares() -> [UUID: Int] {
-        var result = Dictionary(uniqueKeysWithValues: orderedSelection.map { ($0, 0) })
-        for item in items {
-            let people = orderedSelection.filter { itemAssignments[item.id, default: []].contains($0) }
-            guard !people.isEmpty else { continue }
-            let base = item.totalCents / people.count, remainder = item.totalCents % people.count
-            for (index, person) in people.enumerated() { result[person, default: 0] += base + (index < remainder ? 1 : 0) }
-        }
-        return result
+        items.map { item in
+            var item = item
+            item.ownerIDs = itemAssignments[item.id, default: []]
+            return item
+        }.ownerShares(for: orderedSelection)
     }
     private func setDefaultPayer() {
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : orderedSelection.first }
@@ -556,35 +578,24 @@ struct ReceiptCaptureView: View {
             shares = balancer.set(person, to: cents, in: shares, total: total, people: orderedSelection)
         })
     }
-    /// The share `setEqualSplit` gives `person`: an equal part, plus one of the leftover cents for the first people.
-    private func equalShare(for person: UUID) -> Int {
-        let people = orderedSelection
-        guard let index = people.firstIndex(of: person) else { return 0 }
-        return total / people.count + (index < total % people.count ? 1 : 0)
+    /// What `person` owes for the items they own, before any contribution is edited.
+    private func itemShare(for person: UUID) -> Int {
+        expenseItems.ownerShares(for: orderedSelection)[person] ?? 0
     }
-    /// Splits the total evenly; extra cents go to the first people in `orderedSelection`. Defaults the payer to you.
-    private func setEqualSplit() {
-        let people = orderedSelection
-        guard !people.isEmpty else { return }
-        let base = total / people.count, remainder = total % people.count
-        shares = Dictionary(uniqueKeysWithValues: people.enumerated().map { index, person in (person, base + (index < remainder ? 1 : 0)) })
-        balancer = ContributionBalancer()
+    /// Sets contributions from the items each person owns. Defaults the payer to you.
+    private func setItemSplit() {
         setDefaultPayer()
+        shares = expenseItems.ownerShares(for: orderedSelection)
+        balancer = ContributionBalancer()
     }
     private func prepareFinalSplit() {
         let hasEveryPerson = Set(shares.keys) == selectedPeople
-        if !hasEveryPerson || allocationTotal != total { setEqualSplit() }
+        if !hasEveryPerson || allocationTotal != total { setItemSplit() }
         else { setDefaultPayer() }
     }
     private func save() {
         guard let payer else { return }
-        let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Split Total saves the reviewed amount without line items; Assign Items saves only assigned rows.
-        let savedItemIDs: Set<UUID> = layout == .splitTotal ? [] : includedItemIDs
-        var savedItems = items
-        for index in savedItems.indices { savedItems[index].isSelected = savedItemIDs.contains(savedItems[index].id) }
-        var expense = Expense(description: name.isEmpty ? (category?.suggestedName ?? "Shared Expense") : name, transactionDate: purchaseDate, payer: payer, items: savedItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category)
-        if layout == .splitTotal { expense.recordedTotalCents = total }
+        let expense = Expense(description: savedDescription, transactionDate: purchaseDate, payer: payer, items: expenseItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category)
         isSaving = true
         error = nil
         Task {
