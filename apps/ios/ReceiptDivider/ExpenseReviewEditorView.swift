@@ -17,6 +17,8 @@ struct ExpenseReviewEditorView: View {
     @Binding private var externalPurchaseDate: Date
     @Binding private var externalLayout: ExpenseLayout
     @Binding private var externalShares: [UUID: Int]
+    @Binding private var externalItems: [ReceiptItem]
+    @Binding private var externalItemAssignments: [UUID: Set<UUID>]
 
     @State private var internalCategory: ExpenseCategory?
     @State private var internalDescription: String = ""
@@ -25,6 +27,8 @@ struct ExpenseReviewEditorView: View {
     @State private var internalPurchaseDate: Date = Date()
     @State private var internalLayout: ExpenseLayout = .splitTotal
     @State private var internalShares: [UUID: Int] = [:]
+    @State private var internalItems: [ReceiptItem] = []
+    @State private var internalItemAssignments: [UUID: Set<UUID>] = [:]
 
     let participants: [UUID]
     let isEditable: Bool
@@ -32,6 +36,7 @@ struct ExpenseReviewEditorView: View {
     let externalIsSaving: Bool
     let externalCanSave: Bool
     let externalOnSave: (() -> Void)?
+    let onOpenAssignItems: (() -> Void)?
 
     @State private var internalIsSaving = false
     @State private var internalSaveError: String?
@@ -58,6 +63,12 @@ struct ExpenseReviewEditorView: View {
     }
     private var sharesBinding: Binding<[UUID: Int]> {
         mode == .draft ? $externalShares : $internalShares
+    }
+    private var itemsBinding: Binding<[ReceiptItem]> {
+        mode == .draft ? $externalItems : $internalItems
+    }
+    private var itemAssignmentsBinding: Binding<[UUID: Set<UUID>]> {
+        mode == .draft ? $externalItemAssignments : $internalItemAssignments
     }
 
     private var isSaving: Bool {
@@ -87,11 +98,14 @@ struct ExpenseReviewEditorView: View {
         layout: Binding<ExpenseLayout>,
         shares: Binding<[UUID: Int]>,
         participants: [UUID],
+        items: Binding<[ReceiptItem]> = .constant([]),
+        itemAssignments: Binding<[UUID: Set<UUID>]> = .constant([:]),
         isEditable: Bool = true,
         showsToolbarSave: Bool = false,
         isSaving: Bool = false,
         canSave: Bool = true,
-        onSave: @escaping () -> Void
+        onSave: @escaping () -> Void,
+        onOpenAssignItems: (() -> Void)? = nil
     ) {
         self.mode = .draft
         self._externalCategory = category
@@ -101,12 +115,15 @@ struct ExpenseReviewEditorView: View {
         self._externalPurchaseDate = purchaseDate
         self._externalLayout = layout
         self._externalShares = shares
+        self._externalItems = items
+        self._externalItemAssignments = itemAssignments
         self.participants = participants
         self.isEditable = isEditable
         self.showsToolbarSave = showsToolbarSave
         self.externalIsSaving = isSaving
         self.externalCanSave = canSave
         self.externalOnSave = onSave
+        self.onOpenAssignItems = onOpenAssignItems
         self.existingExpenseID = nil
     }
 
@@ -120,6 +137,8 @@ struct ExpenseReviewEditorView: View {
         self._externalPurchaseDate = .constant(Date())
         self._externalLayout = .constant(.splitTotal)
         self._externalShares = .constant([:])
+        self._externalItems = .constant([])
+        self._externalItemAssignments = .constant([:])
 
         self._internalCategory = State(initialValue: expense.category)
         self._internalDescription = State(initialValue: expense.description)
@@ -128,6 +147,8 @@ struct ExpenseReviewEditorView: View {
         self._internalPurchaseDate = State(initialValue: expense.transactionDate)
         self._internalLayout = State(initialValue: expense.items.filter(\.isSelected).isEmpty ? .splitTotal : .assignItems)
         self._internalShares = State(initialValue: expense.shares)
+        self._internalItems = State(initialValue: expense.items)
+        self._internalItemAssignments = State(initialValue: [:])
 
         self.participants = expense.participants
         self.isEditable = isEditable
@@ -135,6 +156,7 @@ struct ExpenseReviewEditorView: View {
         self.externalIsSaving = false
         self.externalCanSave = true
         self.externalOnSave = nil
+        self.onOpenAssignItems = nil
         self.existingExpenseID = expense.id
     }
 
@@ -189,7 +211,42 @@ struct ExpenseReviewEditorView: View {
                 .disabled(!isEditable)
             }
 
-            Section("Contributions") {
+            if layoutBinding.wrappedValue == .assignItems {
+                Section {
+                    if let onOpenAssignItems {
+                        Button {
+                            onOpenAssignItems()
+                        } label: {
+                            HStack {
+                                Text("Assign items")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .foregroundStyle(.primary)
+                    } else {
+                        NavigationLink {
+                            AssignItemsView(
+                                items: itemsBinding,
+                                itemAssignments: itemAssignmentsBinding,
+                                participants: participants,
+                                isEditable: isEditable,
+                                onAssignmentsChanged: {
+                                    recomputeAssignedShares()
+                                }
+                            )
+                        } label: {
+                            Text("Assign items")
+                        }
+                        .disabled(!isEditable)
+                    }
+                }
+            }
+
+            Section {
                 ForEach(participants, id: \.self) { person in
                     VStack(spacing: 4) {
                         HStack(alignment: .firstTextBaseline) {
@@ -290,6 +347,24 @@ struct ExpenseReviewEditorView: View {
                 }
                 internalIsSaving = false
             }
+        }
+    }
+
+    private func recomputeAssignedShares() {
+        guard !participants.isEmpty else { return }
+        var result = Dictionary(uniqueKeysWithValues: participants.map { ($0, 0) })
+        for item in itemsBinding.wrappedValue {
+            let people = participants.filter { itemAssignmentsBinding.wrappedValue[item.id, default: []].contains($0) }
+            guard !people.isEmpty else { continue }
+            let base = item.totalCents / people.count, remainder = item.totalCents % people.count
+            for (index, person) in people.enumerated() { result[person, default: 0] += base + (index < remainder ? 1 : 0) }
+        }
+        sharesBinding.wrappedValue = result
+        let newTotal = itemsBinding.wrappedValue.filter {
+            !(itemAssignmentsBinding.wrappedValue[$0.id]?.isEmpty ?? true)
+        }.reduce(0) { $0 + $1.totalCents }
+        if newTotal > 0 {
+            totalBinding.wrappedValue = newTotal
         }
     }
 }

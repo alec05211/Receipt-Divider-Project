@@ -28,11 +28,9 @@ struct ReceiptCaptureView: View {
     @State private var category: ExpenseCategory?
     @State private var layout: ExpenseLayout = .splitTotal
     @State private var error: String?
-    @State private var editingItemID: UUID?
     @State private var personSearch = ""
     @State private var isSaving = false
     @State private var showSaveSuccess = false
-    @State private var activeAssignmentTarget: AssignmentTarget?
     @State private var assignmentsLocked = false
     /// Invalidates a slow semantic refinement when another receipt starts or the flow resets.
     @State private var receiptAnalysisID: UUID?
@@ -226,93 +224,16 @@ struct ReceiptCaptureView: View {
         .layoutPriority(1)
     }
     private var assignmentScreen: some View {
-        List {
-            Section {
-                ForEach(items) { item in
-                    HStack(spacing: 10) {
-                        Text(item.name.isEmpty ? "Unnamed item" : item.name)
-                            .fontWeight(.medium)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .layoutPriority(1)
-                            .mask {
-                                LinearGradient(
-                                    stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.58), .init(color: .clear, location: 0.95)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            }
-                        let assigned = recentAssignmentPeople.filter { itemAssignments[item.id, default: []].contains($0) }
-                        if !assigned.isEmpty { AvatarStack(people: assigned, size: 22) }
-                        Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
-                    }
-                    .frame(height: 26)
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard !assignmentsLocked, let target = activeAssignmentTarget else { return }
-                        toggleAssignment(target, for: item.id)
-                    }
-                    .accessibilityAction(named: "Assign people") {
-                        if !assignmentsLocked, let target = activeAssignmentTarget { toggleAssignment(target, for: item.id) }
-                    }
-                    .swipeActions {
-                        if !assignmentsLocked {
-                            Button("Edit", systemImage: "pencil") { editingItemID = item.id }
-                            Button("Delete", systemImage: "trash", role: .destructive) { items.removeAll { $0.id == item.id }; itemAssignments[item.id] = nil; shares = assignedShares() }
-                        }
-                    }
-                }
-                if !assignmentsLocked {
-                    Button("Add item", systemImage: "plus") { let item = ReceiptItem(name: "", cents: 0); items.append(item); editingItemID = item.id }
-                }
+        AssignItemsView(
+            items: $items,
+            itemAssignments: $itemAssignments,
+            participants: orderedSelection,
+            isEditable: true,
+            assignmentsLocked: $assignmentsLocked,
+            onAssignmentsChanged: {
+                shares = assignedShares()
             }
-        }
-        .sheet(item: $editingItemID) { id in
-            if let index = items.firstIndex(where: { $0.id == id }) { ItemEditor(item: $items[index]) }
-        }
-        .onChange(of: items) { _, _ in shares = assignedShares() }
-        .safeAreaInset(edge: .bottom) {
-            assignmentFilters
-        }
-    }
-
-    private var assignmentFilters: some View {
-        GeometryReader { geometry in
-            let spacing: CGFloat = 6
-            let horizontalPadding: CGFloat = 16
-            let pillWidth = (geometry.size.width - horizontalPadding * 2 - spacing * 4) / 5
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: spacing) {
-                    let allIsActive = activeAssignmentTarget == .all
-                    Button { selectAssignmentTarget(.all) } label: {
-                        AssignmentTargetPill(title: "All", isActive: allIsActive, width: pillWidth) {
-                            Image(systemName: "person.3.fill").font(.caption)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(assignmentsLocked)
-                    .accessibilityAddTraits(allIsActive ? .isSelected : [])
-
-                    ForEach(recentAssignmentPeople, id: \.self) { personID in
-                        let person = store.person(for: personID)
-                        let isActive = activeAssignmentTarget == .person(personID)
-                        Button { selectAssignmentTarget(.person(personID)) } label: {
-                            AssignmentTargetPill(title: person.firstName, isActive: isActive, width: pillWidth) {
-                                AvatarView(userID: personID, name: person.name, etag: person.avatarEtag, size: 20)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(assignmentsLocked)
-                        .accessibilityAddTraits(isActive ? .isSelected : [])
-                    }
-                }
-                .padding(.horizontal, horizontalPadding)
-                .padding(.vertical, 10)
-            }
-        }
-        .frame(height: 56)
-        .background(.bar)
+        )
     }
     /// You first, then friends ordered by their latest shared transaction; friends never shared with are alphabetical.
     private var friendsByRecency: [LedgerPerson] {
@@ -324,10 +245,6 @@ struct ReceiptCaptureView: View {
             let (dateA, dateB) = (latest[a.element.id] ?? .distantPast, latest[b.element.id] ?? .distantPast)
             return dateA != dateB ? dateA > dateB : a.offset < b.offset
         }.map(\.element)
-    }
-    /// Selected participants in recent-use order for the assignment filter strip.
-    private var recentAssignmentPeople: [UUID] {
-        friendsByRecency.map(\.id).filter(selectedPeople.contains)
     }
     /// You first, then every friend by recency; searching narrows the same complete list.
     private var shownPeople: [LedgerPerson] {
@@ -346,11 +263,17 @@ struct ReceiptCaptureView: View {
             layout: layoutBinding,
             shares: $shares,
             participants: orderedSelection,
+            items: $items,
+            itemAssignments: $itemAssignments,
             isEditable: true,
             showsToolbarSave: false,
             isSaving: isSaving,
             canSave: isValidSplit,
-            onSave: { save() }
+            onSave: { save() },
+            onOpenAssignItems: {
+                assignmentsLocked = false
+                step = .assign
+            }
         )
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
@@ -434,34 +357,17 @@ struct ReceiptCaptureView: View {
             if step == .assign || step == .split || step == .contributions { step = .review }
         })
     }
-    /// Preserves valid prior assignments and starts with All as the active assignment target.
+    /// Preserves valid prior assignments.
     private func prepareAssignments() {
         let validPeople = selectedPeople
         itemAssignments = itemAssignments.reduce(into: [UUID: Set<UUID>]()) { result, entry in
             let kept = entry.value.intersection(validPeople)
             if !kept.isEmpty { result[entry.key] = kept }
         }
-        activeAssignmentTarget = .all
         assignmentsLocked = false
         assignmentsBeforeLock = nil
         shares = assignedShares()
         setDefaultPayer()
-    }
-    private func selectAssignmentTarget(_ target: AssignmentTarget) {
-        activeAssignmentTarget = target
-        UISelectionFeedbackGenerator().selectionChanged()
-    }
-    private func toggleAssignment(_ target: AssignmentTarget, for itemID: UUID) {
-        switch target {
-        case .all:
-            if selectedPeople.isSubset(of: itemAssignments[itemID, default: []]) { itemAssignments[itemID, default: []].subtract(selectedPeople) }
-            else { itemAssignments[itemID, default: []].formUnion(selectedPeople) }
-        case let .person(personID):
-            if itemAssignments[itemID, default: []].contains(personID) { itemAssignments[itemID, default: []].remove(personID) }
-            else { itemAssignments[itemID, default: []].insert(personID) }
-        }
-        shares = assignedShares()
-        UISelectionFeedbackGenerator().selectionChanged()
     }
     /// The first confirmation visibly assigns every untouched row to the payer. A second press continues.
     private func confirmAssignments() {
@@ -559,7 +465,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
+    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
     private func back() {
         switch step {
         case .review: personSearch = ""; step = .capture
@@ -638,37 +544,7 @@ private struct SaveSuccessView: View {
     }
 }
 
-private enum AssignmentTarget: Equatable {
-    case all
-    case person(UUID)
-}
 
-private struct AssignmentTargetPill<Icon: View>: View {
-    let title: String
-    let isActive: Bool
-    let width: CGFloat
-    let icon: Icon
-
-    init(title: String, isActive: Bool, width: CGFloat, @ViewBuilder icon: () -> Icon) {
-        self.title = title
-        self.isActive = isActive
-        self.width = width
-        self.icon = icon()
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            icon
-            Text(title).lineLimit(1).minimumScaleFactor(0.6)
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(isActive ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(.primary))
-        .padding(.horizontal, 5)
-        .frame(width: width, height: 36)
-        .background(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.thinMaterial), in: Capsule())
-        .overlay(Capsule().stroke(.quaternary, lineWidth: 1))
-    }
-}
 
 private extension View {
     func prominentLabel() -> some View { modifier(ProminentLabel()) }
@@ -694,21 +570,6 @@ private struct SelectionCircle: View {
     }
 }
 
-private struct ItemEditor: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var item: ReceiptItem
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("Item name", text: $item.name).submitLabel(.done)
-                LabeledContent("Price") { CentsField(title: "0.00", cents: $item.cents) }
-            }
-            .navigationTitle("Edit item")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
-        .presentationDetents([.medium])
-    }
-}
+
 
 extension UUID: @retroactive Identifiable { public var id: UUID { self } }
