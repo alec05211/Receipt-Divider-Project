@@ -38,8 +38,7 @@ struct ReceiptCaptureView: View {
     @State private var receiptAnalysisID: UUID?
     /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
     @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
-    /// iOS 17 fallback heights for the fixed Review expense lists; newer releases measure their content instead.
-    @ScaledMetric(relativeTo: .body) private var reviewControlRowHeight: CGFloat = 50
+    @State private var activeEditSheet: ReviewEditSheet?
     @ScaledMetric(relativeTo: .footnote) private var reviewWarningHeight: CGFloat = 82
 
     private var includedItemIDs: Set<UUID> {
@@ -137,31 +136,188 @@ struct ReceiptCaptureView: View {
     /// Receipt details and participant selection share the first screen after recognition.
     private var reviewScreen: some View {
         VStack(spacing: 12) {
-            List {
-                Section {
-                    if layout == .splitTotal {
-                        LabeledContent("Expense total") { CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold) }
-                    } else {
-                        LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
-                    }
-                    DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
-                    Picker("Split by", selection: reviewLayoutBinding) { ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) } }
-                    Picker("Paid by", selection: $payer) { ForEach(orderedSelection, id: \.self) { Text(store.name(for: $0)).tag(Optional($0)) } }
+            reviewSummaryCard
+            combinedFriendsCard
+
+            if let error {
+                List {
+                    Section { Text(error).font(.footnote).foregroundStyle(.secondary) }
                 }
+                .reviewListStyle()
+                .fixedReviewList(estimatedHeight: reviewWarningHeight)
+            }
+        }
+        .padding(.vertical, 12)
+        .background(Color(.systemGroupedBackground))
+        .sheet(item: $activeEditSheet) { sheet in
+            switch sheet {
+            case .total:
+                NavigationStack {
+                    Form {
+                        Section {
+                            Picker("Split by", selection: reviewLayoutBinding) {
+                                ForEach(ExpenseLayout.allCases) { Text($0.title).tag($0) }
+                            }
+                        }
+                        Section {
+                            if layout == .splitTotal {
+                                LabeledContent("Expense total") {
+                                    CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold)
+                                }
+                            } else {
+                                LabeledContent("Expense total", value: total.usd).fontWeight(.semibold)
+                            }
+                        }
+                    }
+                    .navigationTitle("Expense total")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { activeEditSheet = nil }
+                        }
+                    }
+                }
+                .presentationDetents([.fraction(0.38), .medium])
+            case .date:
+                NavigationStack {
+                    DatePicker("Purchase date", selection: $purchaseDate, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .padding(.horizontal)
+                        .navigationTitle("Purchase date")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { activeEditSheet = nil }
+                            }
+                        }
+                }
+                .presentationDetents([.medium, .large])
+            }
+        }
+        .onAppear {
+            if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] }
+            setDefaultPayer()
+        }
+        .onChange(of: selectedPeople) { _, _ in setDefaultPayer() }
+    }
+
+    private var reviewSummaryCard: some View {
+        HStack {
+            ViewThatFits(in: .horizontal) {
+                reviewMetadataLine(font: .subheadline, avatarSize: 20)
+                reviewMetadataLine(font: .caption, avatarSize: 18)
+                reviewMetadataLine(font: .caption2, avatarSize: 16)
+                reviewMetadataLine(font: .system(size: 9), avatarSize: 14)
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .scenePadding(.horizontal)
+        .contextMenu {
+            Menu("Paid by", systemImage: "person") {
                 Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search friends", text: $personSearch).submitLabel(.done)
-                        if !personSearch.isEmpty {
-                            Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }
-                                .labelStyle(.iconOnly)
-                                .foregroundStyle(.secondary)
+                    ForEach(orderedSelection, id: \.self) { personID in
+                        Button {
+                            payer = personID
+                        } label: {
+                            if payer == personID {
+                                Label(store.name(for: personID), systemImage: "checkmark")
+                            } else {
+                                Text(store.name(for: personID))
+                            }
+                        }
+                    }
+                }
+                let otherFriends = friendsByRecency.filter { !selectedPeople.contains($0.id) }
+                if !otherFriends.isEmpty {
+                    Menu("Other friends") {
+                        ForEach(otherFriends, id: \.id) { person in
+                            Button {
+                                selectedPeople.insert(person.id)
+                                payer = person.id
+                            } label: {
+                                Text(store.name(for: person.id))
+                            }
                         }
                     }
                 }
             }
-            .reviewListStyle()
-            .fixedReviewList(estimatedHeight: reviewControlRowHeight * 5 + 28)
+
+            Button("Edit total", systemImage: "dollarsign.circle") {
+                activeEditSheet = .total
+            }
+
+            Button("Edit date", systemImage: "calendar") {
+                activeEditSheet = .date
+            }
+
+            Menu("Split by", systemImage: "rectangle.split.2x1") {
+                ForEach(ExpenseLayout.allCases) { layoutCase in
+                    Button {
+                        reviewLayoutBinding.wrappedValue = layoutCase
+                    } label: {
+                        if layout == layoutCase {
+                            Label(layoutCase.title, systemImage: "checkmark")
+                        } else {
+                            Text(layoutCase.title)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func reviewMetadataLine(font: Font, avatarSize: CGFloat) -> some View {
+        let payerID = payer ?? store.activeUserID ?? orderedSelection.first
+        let payerPerson = payerID.map { store.person(for: $0) }
+        return HStack(spacing: 4) {
+            Text(total.usd).fontWeight(.semibold)
+            Text("paid by").foregroundStyle(.secondary)
+            if let payerID, let payerPerson {
+                AvatarView(userID: payerID, name: payerPerson.name, etag: payerPerson.avatarEtag, size: avatarSize)
+                    .accessibilityHidden(true)
+                Text(payerPerson.firstName)
+            } else {
+                Image(systemName: "person.circle.fill")
+                    .font(.system(size: avatarSize))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("Someone")
+            }
+            Text("on").foregroundStyle(.secondary)
+            Text(purchaseDate.formatted(date: .abbreviated, time: .omitted))
+        }
+        .font(font)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var combinedFriendsCard: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search friends", text: $personSearch)
+                    .submitLabel(.done)
+                if !personSearch.isEmpty {
+                    Button("Clear", systemImage: "xmark.circle.fill") { personSearch = "" }
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            Divider().padding(.horizontal, 16)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -204,27 +360,12 @@ struct ReceiptCaptureView: View {
                     }
                 }
             }
-            .background(Color(.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .scenePadding(.horizontal)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .layoutPriority(1)
-
-            if let error {
-                List {
-                    Section { Text(error).font(.footnote).foregroundStyle(.secondary) }
-                }
-                .reviewListStyle()
-                .fixedReviewList(estimatedHeight: reviewWarningHeight)
-            }
         }
-        .padding(.vertical, 12)
-        .background(Color(.systemGroupedBackground))
-        .onAppear {
-            if selectedPeople.isEmpty, let me = store.activeUserID { selectedPeople = [me] }
-            setDefaultPayer()
-        }
-        .onChange(of: selectedPeople) { _, _ in setDefaultPayer() }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .scenePadding(.horizontal)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .layoutPriority(1)
     }
     private var assignmentScreen: some View {
         List {
@@ -605,8 +746,9 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal }
+    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; reviewedTotalCents = nil; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; activeAssignmentTarget = nil; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil; layout = .splitTotal; activeEditSheet = nil }
     private func back() {
+        activeEditSheet = nil
         switch step {
         case .review: personSearch = ""; step = .capture
         case .assign:
@@ -686,6 +828,13 @@ private struct SaveSuccessView: View {
 }
 
 private struct ContinueButton: View { let title: String; let disabled: Bool; let action: () -> Void; var body: some View { Button(action: action) { Text(title).prominentLabel() }.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity).padding(.horizontal).padding(.vertical, 10).disabled(disabled) } }
+
+private enum ReviewEditSheet: Identifiable {
+    case total
+    case date
+
+    var id: Self { self }
+}
 
 private enum AssignmentTarget: Equatable {
     case all
