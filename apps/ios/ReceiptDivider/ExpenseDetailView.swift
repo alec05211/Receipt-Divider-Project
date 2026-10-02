@@ -30,18 +30,23 @@ struct ExpenseDetailView: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(current.description).font(.title2.bold())
-                    ViewThatFits(in: .horizontal) {
-                        metadataLine(font: .subheadline, avatarSize: 20)
-                        metadataLine(font: .caption, avatarSize: 18)
-                        metadataLine(font: .caption2, avatarSize: 16)
-                        metadataLine(font: .system(size: 9), avatarSize: 14)
+                NavigationLink {
+                    ExpenseReviewEditorView(expense: current, isEditable: canEdit)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(current.description).font(.title2.bold())
+                        ViewThatFits(in: .horizontal) {
+                            metadataLine(font: .subheadline, avatarSize: 20)
+                            metadataLine(font: .caption, avatarSize: 18)
+                            metadataLine(font: .caption2, avatarSize: 16)
+                            metadataLine(font: .system(size: 9), avatarSize: 14)
+                        }
+                        .accessibilityElement(children: .combine)
                     }
-                    .accessibilityElement(children: .combine)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(.primary)
                 }
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 // Press and hold to edit. An empty menu builder disables the menu, so only the payer gets one.
                 .contextMenu {
