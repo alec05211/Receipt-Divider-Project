@@ -535,7 +535,8 @@ struct ReceiptCaptureView: View {
         }
         UISelectionFeedbackGenerator().selectionChanged()
     }
-    /// The first confirmation visibly assigns every untouched row to the payer. A second press continues.
+    /// Confirmation locks the assignments and continues. When rows are untouched, it first visibly assigns them to the
+    /// payer and waits for a second press, so the autofill can be seen before continuing.
     private func confirmAssignments() {
         if assignmentsLocked {
             shares = assignedShares()
@@ -545,10 +546,15 @@ struct ReceiptCaptureView: View {
         setDefaultPayer()
         guard let payer else { return }
         assignmentsBeforeLock = itemAssignments
+        let untouched = items.filter { itemAssignments[$0.id, default: []].isEmpty }
+        guard !untouched.isEmpty else {
+            assignmentsLocked = true
+            shares = assignedShares()
+            step = .split
+            return
+        }
         withAnimation(.snappy(duration: 0.2)) {
-            for item in items where itemAssignments[item.id, default: []].isEmpty {
-                itemAssignments[item.id] = [payer]
-            }
+            for item in untouched { itemAssignments[item.id] = [payer] }
             shares = assignedShares()
             assignmentsLocked = true
         }
