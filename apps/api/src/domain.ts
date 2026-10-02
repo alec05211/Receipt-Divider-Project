@@ -77,15 +77,11 @@ export function validateExpense(input: CreateExpenseInput): void {
     throw new ApiError(400, "an expense must have 1–100 allocations", "invalid_input");
   }
 
-  let total = 0;
+  // Items need not add up to the total: a receipt split evenly uses its printed total even when recognition missed a line.
   for (const item of items) {
     if (!item.name?.trim() || item.name.length > 300) throw new ApiError(400, "each item needs a name", "invalid_input");
     requireCents(item.amountCents, "item amountCents", false);
     requireCents(item.offsetCents ?? 0, "item offsetCents", true);
-    total += item.amountCents + (item.offsetCents ?? 0);
-  }
-  if (items.length && total !== input.totalCents) {
-    throw new ApiError(422, `items total ${total} does not equal expense total ${input.totalCents}`, "item_total_mismatch");
   }
 
   const memberIds = new Set<string>();

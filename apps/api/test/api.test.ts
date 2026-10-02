@@ -186,6 +186,11 @@ test("items record who had them while allocations set what each person owes", as
     const status = (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000004", alex, [[alex, 300]], { items: [{ name: "Juice", amountCents: 300, ownerIds }] }))).status;
     assert.ok(status === 400 || status === 422, `${ownerIds} gave ${status}`);
   }
+  // Items need not add up to the total, as when an evenly split receipt uses its printed total.
+  const printed = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000006", alex, [[alex, 550], [jamie, 550]], { items: [{ name: "Pasta", amountCents: 900, ownerIds: [alex, jamie] }] }));
+  assert.equal(printed.status, 201);
+  assert.equal((await printed.json() as { totalCents: number }).totalCents, 1100);
+
   // The payer may own items without owing anything.
   const treat = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000005", alex, [[jamie, 300]], { items: [{ name: "Juice", amountCents: 300 }] }));
   assert.deepEqual((await treat.json() as { items: Item[] }).items[0]!.ownerIds, [alex]);
