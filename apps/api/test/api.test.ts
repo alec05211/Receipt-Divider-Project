@@ -148,6 +148,9 @@ test("only the uploader can store the text recognized in their receipt", async (
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S\n09/27/26 5:41 PM" })).status, 204);
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, jamie, "PUT", { text: "not mine" })).status, 404);
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: 42 })).status, 400);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S", diagnostics: { reader: "model", attempts: [] } })).status, 204);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S", diagnostics: ["not", "an", "object"] })).status, 400);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S", diagnostics: { lines: "x".repeat(500_001) } })).status, 400);
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "x".repeat(100_001) })).status, 400);
 });
 

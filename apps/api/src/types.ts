@@ -154,8 +154,11 @@ export interface LedgerRepository {
    * to several expenses split from it, so expenses sharing an evidence ID came from the same receipt.
    */
   getEvidence(requesterId: UUID, evidenceId: UUID): Promise<StoredImage | null>;
-  /** Stores the text the uploader's device recognized in their evidence image; returns false if it isn't theirs. */
-  putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean>;
+  /**
+   * Stores the text the uploader's device recognized in their evidence image, with optional diagnostics describing how
+   * it was read; returns false if it isn't theirs.
+   */
+  putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics?: object | null): Promise<boolean>;
   createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
   /**
    * Edits an active expense's name and/or transaction date. Only its payer may edit it (403 for anyone else on it); to

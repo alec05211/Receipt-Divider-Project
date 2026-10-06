@@ -3,7 +3,7 @@ import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
-interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; }
+interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; diagnostics?: object | null; }
 interface FriendRequest { id: UUID; requesterId: UUID; addresseeId: UUID; status: "pending" | "accepted"; }
 
 /** Test/local adapter. It deliberately has no persistence and is never selected when DATABASE_URL is set. */
@@ -127,10 +127,10 @@ export class MemoryRepository implements LedgerRepository {
     const visible = image.ownerId === requesterId || this.visibleExpenses(requesterId).some((expense) => expense.evidenceIds.includes(evidenceId));
     return visible ? image : null;
   }
-  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean> {
+  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics: object | null = null): Promise<boolean> {
     const image = this.evidence.get(evidenceId);
     if (image?.ownerId !== uploaderId) return false;
-    image.text = text; return true;
+    image.text = text; image.diagnostics = diagnostics; return true;
   }
 
   async createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense> {

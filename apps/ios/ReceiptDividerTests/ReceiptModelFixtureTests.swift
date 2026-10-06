@@ -58,10 +58,39 @@ final class ReceiptModelFixtureTests: XCTestCase {
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
     }
 
+    /// A barbecue receipt with quantity lines, an automatic gratuity, and separate cash and card totals.
+    func testRestaurantWithGratuityAndCashAndCardTotals() async throws {
+        let extraction = try await read("""
+            CENTER STREET SMOKEHOUSE
+            Oct 5, 2026 at 7:12 PM
+            Order #22038
+            Hot Tea  2 x $3.25  6.50
+            Brisket  2 x $18.00  36.00
+            Coke Cherry  3.85
+            Pulled Pork Sandwich  19.00
+            Subtotal  65.35
+            Tax  5.23
+            Gratuity  13.07
+            Total (Cash)  83.65
+            Total (Non-Cash)  87.00
+            Suggested tip amounts are provided for your convenience.
+            18%: $11.76  20%: $13.07  25%: $16.34
+            """)
+        XCTAssertEqual(extraction.items.filter { $0.name.localizedCaseInsensitiveContains("brisket") }.map(\.cents), [1_800, 1_800])
+        XCTAssertEqual(extraction.items.first { $0.kind == .tip }?.cents, 1_307)
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
+        XCTAssertEqual(extraction.printedTotalCents, 8_700)
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
     private func read(_ text: String) async throws -> ReceiptExtraction {
         try XCTSkipUnless(SystemLanguageModel.default.isAvailable, "Apple Intelligence isn't available here.")
-        let lines = text.split(separator: "\n").map { ReceiptTextRecognizer.Fragment(text: String($0), box: .zero) }
+        // One printed row per line, top to bottom.
+        let lines = text.split(separator: "\n").enumerated().map { index, line in
+            ReceiptTextRecognizer.Fragment(text: String(line), box: CGRect(x: 0.05, y: 0.95 - Double(index) * 0.03, width: 0.9, height: 0.02))
+        }
         let extraction = await ReceiptReader.extract(RecognizedReceipt(image: UIImage(), lines: lines))
+        print("Reader:", extraction.diagnostics?.reader ?? "?", extraction.diagnostics?.attempts.map(\.seconds) ?? [])
         print("Reading:", extraction.name, extraction.items.map { "\($0.name) \($0.cents) \($0.localOffsetCents) \($0.taxed)" }, extraction.adjustments.map { "\($0.kind) \($0.amountCents)" }, extraction.issues)
         return extraction
     }

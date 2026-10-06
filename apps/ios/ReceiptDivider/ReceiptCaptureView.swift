@@ -21,6 +21,9 @@ struct ReceiptCaptureView: View {
     @State private var splitsPrintedTotal = false
     @State private var purchaseDate = Date()
     @State private var recognizedText: String?
+    @State private var diagnostics: ReceiptDiagnostics?
+    /// Which reader handled the last scan and how long it took, shown in Settings for developers.
+    @AppStorage(ReceiptDiagnostics.lastScanKey) private var lastScan = ""
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -362,11 +365,15 @@ struct ReceiptCaptureView: View {
         }
         adjustments = extraction.adjustments
         recognizedText = extraction.recognizedText
+        diagnostics = extraction.diagnostics
+        if let diagnostics = extraction.diagnostics {
+            lastScan = "\(diagnostics.reader == "model" ? "Model" : "Parser"), \(diagnostics.totalSeconds.formatted(.number.precision(.fractionLength(1)))) s"
+        }
         printedTotalCents = extraction.printedTotalCents
         category = extraction.category
         description = extraction.name
         if let date = extraction.purchaseDate { purchaseDate = date }
-        error = extraction.mismatchWarning
+        error = extraction.warning
         if !items.contains(where: { $0.kind == .item }) {
             items = [ReceiptItem(name: "", cents: extraction.printedTotalCents ?? 0, isSelected: true)]
             adjustments = []
@@ -528,6 +535,12 @@ struct ReceiptCaptureView: View {
     private func save() {
         guard let payer else { return }
         var expense = Expense(description: savedDescription, transactionDate: purchaseDate, payer: payer, items: expenseItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category, adjustments: adjustments)
+        expense.receiptDiagnostics = diagnostics.map { diagnostics in
+            var diagnostics = diagnostics
+            diagnostics.saved = ReceiptDiagnostics.Summary(name: savedDescription, category: category, purchaseDate: purchaseDate, items: expense.items,
+                                                           adjustments: adjustments, subtotalCents: nil, totalCents: total)
+            return diagnostics
+        }
         expense.recordedTotalCents = total
         isSaving = true
         error = nil
@@ -549,12 +562,12 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func reset() { receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
     private func back() {
         switch step {
         case .review:
             // Going back abandons this receipt, so a reading still in progress can't fill in a later manual entry.
-            personSearch = ""; receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; step = .capture
+            personSearch = ""; receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; diagnostics = nil; step = .capture
         case .assign:
             if assignmentsLocked { undoAssignmentConfirmation() }
             else { step = .review }

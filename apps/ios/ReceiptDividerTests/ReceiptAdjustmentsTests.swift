@@ -96,6 +96,52 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertTrue(extraction.issues.isEmpty)
     }
 
+    func testMissingTotalIsAWarningAndAnIssue() {
+        let extraction = ReceiptExtraction(items: [ReceiptItem(name: "A", cents: 1_000)])
+        XCTAssertNil(extraction.mismatchWarning)
+        XCTAssertNotNil(extraction.warning)
+        XCTAssertEqual(extraction.issues, ["No total was found."])
+    }
+
+    /// Text recognition returned the names and the prices as two columns; rows are rebuilt from their positions.
+    func testColumnsAreRebuiltIntoPrintedRows() {
+        let names = ["Brisket", "Coke Cherry", "Subtotal", "Total"], prices = ["36.00", "3.85", "39.85", "39.85"]
+        let fragments = names.enumerated().map { ReceiptTextRecognizer.Fragment(text: $0.element, box: CGRect(x: 0.05, y: 0.9 - Double($0.offset) * 0.05, width: 0.3, height: 0.02)) }
+            + prices.enumerated().map { ReceiptTextRecognizer.Fragment(text: $0.element, box: CGRect(x: 0.75, y: 0.9 - Double($0.offset) * 0.05, width: 0.15, height: 0.02)) }
+        XCTAssertEqual(ReceiptTextRecognizer.layoutText(fragments).components(separatedBy: "\n"),
+                       ["Brisket  36.00", "Coke Cherry  3.85", "Subtotal  39.85", "Total  39.85"])
+    }
+
+    /// Separate cash and card totals make the difference a final surcharge; an automatic gratuity is the tip.
+    func testCardTotalAddsTheDifferenceAsASurcharge() {
+        let reading = ReceiptReading(
+            merchant: "Smokehouse", category: .restaurant, purchaseDate: "2026-10-05",
+            lines: [.init(name: "Brisket", price: "18.00", unitPrice: "18.00", quantity: 2, discount: "", taxed: true),
+                    .init(name: "Coke", price: "4.00", unitPrice: "", quantity: 1, discount: "", taxed: true)],
+            subtotal: "40.00",
+            adjustments: [.init(kind: .tax, amount: "3.20", percent: "8"), .init(kind: .tip, amount: "8.00", percent: "20")],
+            cashTotal: "51.20", total: "53.25", expenseName: "")
+        let extraction = ReceiptExtraction(reading, text: "")
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
+        XCTAssertEqual(extraction.adjustments.last?.amountCents, 205)
+        XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400, 800])
+        XCTAssertEqual(extraction.printedTotalCents, 5_325)
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
+    /// A unit price given as the price, or the price repeated as a discount, is corrected by matching the subtotal.
+    func testMisplacedLineFieldsAreSettledByTheSubtotal() {
+        let reading = ReceiptReading(
+            merchant: "", category: .restaurant, purchaseDate: "",
+            lines: [.init(name: "Hot Tea", price: "3.25", unitPrice: "3.25", quantity: 2, discount: "6.50", taxed: true),
+                    .init(name: "Coke", price: "3.85", unitPrice: "", quantity: 1, discount: "3.85", taxed: true)],
+            subtotal: "10.35", adjustments: [], cashTotal: "", total: "10.35", expenseName: "")
+        let extraction = ReceiptExtraction(reading, text: "")
+        XCTAssertEqual(extraction.items.map(\.cents), [325, 325, 385])
+        XCTAssertEqual(extraction.items.map(\.localOffsetCents), [0, 0, 0])
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
     func testParserReadingBecomesAdjustments() {
         var scan = ReceiptScan(items: [ReceiptItem(name: "Item", cents: 1_000, localOffsetCents: -100)], taxCents: 54, discountCents: 0)
         scan.printedTotalCents = 954

@@ -8,6 +8,8 @@ const avatarLimit = 5 * 1024 * 1024;
 const evidenceLimit = 15 * 1024 * 1024;
 /** Recognized receipt text; generous for a long itemized receipt. */
 const evidenceTextLimit = 100_000;
+/** How the device read the receipt, including every recognized line's position and the model's raw output. */
+const evidenceDiagnosticsLimit = 500_000;
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/heic", "image/heif", "image/webp"]);
 const evidenceKinds = new Set<EvidenceKind>(["receipt", "restaurant_check", "ticket_confirmation", "other"]);
 
@@ -86,9 +88,13 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
   app.get("/v1/evidence/:evidenceId/image", async (context) => imageResponse(context,
     await repository.getEvidence(userId(context), requireUuid(context.req.param("evidenceId"), "evidenceId"))));
   app.put("/v1/evidence/:evidenceId/text", async (context) => {
-    const text = stringField(await jsonBody(context), "text");
+    const body = await jsonBody(context);
+    const text = stringField(body, "text");
     if (text.length > evidenceTextLimit) throw new ApiError(400, `text must be at most ${evidenceTextLimit} characters`, "invalid_input");
-    if (!await repository.putEvidenceText(userId(context), requireUuid(context.req.param("evidenceId"), "evidenceId"), text)) throw new ApiError(404, "evidence not found", "not_found");
+    const diagnostics = body.diagnostics ?? null;
+    if (diagnostics !== null && (typeof diagnostics !== "object" || Array.isArray(diagnostics))) throw new ApiError(400, "diagnostics must be an object", "invalid_input");
+    if (diagnostics !== null && JSON.stringify(diagnostics).length > evidenceDiagnosticsLimit) throw new ApiError(400, `diagnostics must be at most ${evidenceDiagnosticsLimit} characters`, "invalid_input");
+    if (!await repository.putEvidenceText(userId(context), requireUuid(context.req.param("evidenceId"), "evidenceId"), text, diagnostics)) throw new ApiError(404, "evidence not found", "not_found");
     return context.body(null, 204);
   });
 

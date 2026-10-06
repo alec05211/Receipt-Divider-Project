@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var showResetConfirmation = false
     @State private var showServerReset = false
     @AppStorage(ContributionSliderUnit.storageKey) private var sliderUnit: ContributionSliderUnit = .percent
+    @AppStorage(ReceiptDiagnostics.lastScanKey) private var lastScan = ""
 
     var body: some View {
         NavigationStack {
@@ -46,7 +47,11 @@ struct SettingsView: View {
                 }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
                 if store.isDeveloper {
-                    Section("Developer") { Button("Delete all expenses and payments", role: .destructive) { showServerReset = true } }
+                    Section("Developer") {
+                        LabeledContent("Build", value: ReceiptDiagnostics.buildCommit ?? "Local")
+                        LabeledContent("Last scan", value: lastScan.isEmpty ? "None" : lastScan)
+                        Button("Delete all expenses and payments", role: .destructive) { showServerReset = true }
+                    }
                 }
             }
             .navigationTitle("Settings")

@@ -306,6 +306,12 @@ enum ReceiptTextRecognizer {
         excludedWords.firstMatch(in: lowercased, range: NSRange(lowercased.startIndex..., in: lowercased)) != nil
     }
 
+    /// The receipt as printed rows, top to bottom. Text recognition can return a receipt's names and prices as separate
+    /// columns, so pieces are regrouped by their position on the page and joined left to right.
+    static func layoutText(_ fragments: [Fragment]) -> String {
+        rows(from: fragments).map { $0.map(\.text).joined(separator: "  ") }.joined(separator: "\n")
+    }
+
     private static func rows(from fragments: [Fragment]) -> [[Fragment]] {
         // Where item names usually start, so margin flags can be told apart from brand prefixes like "WB",
         // and price-column pieces can be told apart from names.

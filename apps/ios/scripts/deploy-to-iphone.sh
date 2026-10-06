@@ -75,6 +75,7 @@ if ! xcodebuild \
   -xcconfig "$SIGNING_CONFIG" \
   -allowProvisioningUpdates \
   -allowProvisioningDeviceRegistration \
+  GIT_COMMIT="$(git -C "$IOS_DIR" rev-parse --short HEAD)" \
   build 2>&1 | tee "$BUILD_LOG"; then
   error="$(grep -m 1 -E '(^| )error: ' "$BUILD_LOG" | sed -E 's/^.*error: //' | cut -c1-200 || true)"
   rm -f "$BUILD_LOG"

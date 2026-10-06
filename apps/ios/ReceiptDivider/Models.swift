@@ -70,6 +70,8 @@ struct Expense: Identifiable, Hashable, Codable {
     var category: ExpenseCategory? = nil
     /// Receipt-wide discounts, taxes, tip and surcharges, in the order the receipt applies them.
     var adjustments: [ReceiptAdjustment] = []
+    /// How the receipt was read; like `recognizedText`, only set before saving.
+    var receiptDiagnostics: ReceiptDiagnostics? = nil
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     /// The selected items' own discounts.
     var itemDiscountTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.localOffsetCents } }
@@ -342,6 +344,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     func stage(_ expense: Expense) {
         var preview = expense
         preview.recognizedText = nil
+        preview.receiptDiagnostics = nil
         pendingExpenses[expense.id] = preview
         pendingExpenseIDs.insert(expense.id)
         if !expenses.contains(where: { $0.id == expense.id }) { expenses.append(preview) }
@@ -369,7 +372,9 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                     receiptImages[evidence.id] = UIImage(data: image)
                     evidenceIDs = [evidence.id]
                     // Only for troubleshooting a misread, so a failure here shouldn't block saving.
-                    if let text = expense.recognizedText, !text.isEmpty { try? await api.putEvidenceText(text, evidenceID: evidence.id, token: accessToken) }
+                    if let text = expense.recognizedText, !text.isEmpty {
+                        try? await api.putEvidenceText(text, diagnostics: expense.receiptDiagnostics, evidenceID: evidence.id, token: accessToken)
+                    }
                 }
             }
             let selectedItems = expense.items.filter(\.isSelected).map {
