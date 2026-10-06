@@ -15,17 +15,16 @@ struct ExpenseReviewEditorView: View {
     @Binding private var externalTotal: Int
     @Binding private var externalPayer: UUID?
     @Binding private var externalPurchaseDate: Date
-    @Binding private var externalLayout: ExpenseLayout
     @Binding private var externalShares: [UUID: Int]
     @Binding private var externalItems: [ReceiptItem]
     @Binding private var externalItemAssignments: [UUID: Set<UUID>]
+    private let externalContributionDetents: [UUID: Int]
 
     @State private var internalCategory: ExpenseCategory?
     @State private var internalDescription: String = ""
     @State private var internalTotal: Int = 0
     @State private var internalPayer: UUID?
     @State private var internalPurchaseDate: Date = Date()
-    @State private var internalLayout: ExpenseLayout = .splitTotal
     @State private var internalShares: [UUID: Int] = [:]
     @State private var internalItems: [ReceiptItem] = []
     @State private var internalItemAssignments: [UUID: Set<UUID>] = [:]
@@ -37,6 +36,7 @@ struct ExpenseReviewEditorView: View {
     let externalCanSave: Bool
     let externalOnSave: (() -> Void)?
     let onOpenAssignItems: (() -> Void)?
+    let onPayerChanged: ((UUID?) -> Void)?
 
     @State private var internalIsSaving = false
     @State private var internalSaveError: String?
@@ -58,9 +58,6 @@ struct ExpenseReviewEditorView: View {
     private var dateBinding: Binding<Date> {
         mode == .draft ? $externalPurchaseDate : $internalPurchaseDate
     }
-    private var layoutBinding: Binding<ExpenseLayout> {
-        mode == .draft ? $externalLayout : $internalLayout
-    }
     private var sharesBinding: Binding<[UUID: Int]> {
         mode == .draft ? $externalShares : $internalShares
     }
@@ -73,6 +70,20 @@ struct ExpenseReviewEditorView: View {
 
     private var isSaving: Bool {
         mode == .draft ? externalIsSaving : internalIsSaving
+    }
+
+    private var contributionDetents: [UUID: Int] {
+        if mode == .draft { return externalContributionDetents }
+        var ownedItems = itemsBinding.wrappedValue
+        for index in ownedItems.indices {
+            let existingOwners = ownedItems[index].ownerIDs
+            ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id] ?? existingOwners
+        }
+        return ownedItems.ownerShares(for: participants)
+    }
+
+    private var showsAssignmentSection: Bool {
+        itemsBinding.wrappedValue.filter(\.isSelected).count > 1
     }
 
     private var allocationTotal: Int {
@@ -95,8 +106,8 @@ struct ExpenseReviewEditorView: View {
         total: Binding<Int>,
         payer: Binding<UUID?>,
         purchaseDate: Binding<Date>,
-        layout: Binding<ExpenseLayout>,
         shares: Binding<[UUID: Int]>,
+        contributionDetents: [UUID: Int],
         participants: [UUID],
         items: Binding<[ReceiptItem]> = .constant([]),
         itemAssignments: Binding<[UUID: Set<UUID>]> = .constant([:]),
@@ -105,7 +116,8 @@ struct ExpenseReviewEditorView: View {
         isSaving: Bool = false,
         canSave: Bool = true,
         onSave: @escaping () -> Void,
-        onOpenAssignItems: (() -> Void)? = nil
+        onOpenAssignItems: (() -> Void)? = nil,
+        onPayerChanged: ((UUID?) -> Void)? = nil
     ) {
         self.mode = .draft
         self._externalCategory = category
@@ -113,10 +125,10 @@ struct ExpenseReviewEditorView: View {
         self._externalTotal = total
         self._externalPayer = payer
         self._externalPurchaseDate = purchaseDate
-        self._externalLayout = layout
         self._externalShares = shares
         self._externalItems = items
         self._externalItemAssignments = itemAssignments
+        self.externalContributionDetents = contributionDetents
         self.participants = participants
         self.isEditable = isEditable
         self.showsToolbarSave = showsToolbarSave
@@ -124,6 +136,7 @@ struct ExpenseReviewEditorView: View {
         self.externalCanSave = canSave
         self.externalOnSave = onSave
         self.onOpenAssignItems = onOpenAssignItems
+        self.onPayerChanged = onPayerChanged
         self.existingExpenseID = nil
     }
 
@@ -135,20 +148,19 @@ struct ExpenseReviewEditorView: View {
         self._externalTotal = .constant(0)
         self._externalPayer = .constant(nil)
         self._externalPurchaseDate = .constant(Date())
-        self._externalLayout = .constant(.splitTotal)
         self._externalShares = .constant([:])
         self._externalItems = .constant([])
         self._externalItemAssignments = .constant([:])
+        self.externalContributionDetents = [:]
 
         self._internalCategory = State(initialValue: expense.category)
         self._internalDescription = State(initialValue: expense.description)
         self._internalTotal = State(initialValue: expense.total)
         self._internalPayer = State(initialValue: expense.payer)
         self._internalPurchaseDate = State(initialValue: expense.transactionDate)
-        self._internalLayout = State(initialValue: expense.items.filter(\.isSelected).isEmpty ? .splitTotal : .assignItems)
         self._internalShares = State(initialValue: expense.shares)
         self._internalItems = State(initialValue: expense.items)
-        self._internalItemAssignments = State(initialValue: [:])
+        self._internalItemAssignments = State(initialValue: Dictionary(uniqueKeysWithValues: expense.items.map { ($0.id, $0.ownerIDs) }))
 
         self.participants = expense.participants
         self.isEditable = isEditable
@@ -157,6 +169,7 @@ struct ExpenseReviewEditorView: View {
         self.externalCanSave = true
         self.externalOnSave = nil
         self.onOpenAssignItems = nil
+        self.onPayerChanged = nil
         self.existingExpenseID = expense.id
     }
 
@@ -186,7 +199,7 @@ struct ExpenseReviewEditorView: View {
 
             Section {
                 LabeledContent("Expense total") {
-                    if isEditable {
+                    if isEditable && itemsBinding.wrappedValue.count <= 1 {
                         CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold)
                     } else {
                         Text(totalBinding.wrappedValue.usd).fontWeight(.semibold)
@@ -202,16 +215,9 @@ struct ExpenseReviewEditorView: View {
 
                 DatePicker("Date of expense", selection: dateBinding, displayedComponents: .date)
                     .disabled(!isEditable)
-
-                Picker("Split by", selection: layoutBinding) {
-                    ForEach(ExpenseLayout.allCases) { layoutCase in
-                        Text(layoutCase.title).tag(layoutCase)
-                    }
-                }
-                .disabled(!isEditable)
             }
 
-            if layoutBinding.wrappedValue == .assignItems {
+            if showsAssignmentSection {
                 Section {
                     if let onOpenAssignItems {
                         Button {
@@ -236,7 +242,8 @@ struct ExpenseReviewEditorView: View {
                                 isEditable: isEditable,
                                 onAssignmentsChanged: {
                                     recomputeAssignedShares()
-                                }
+                                },
+                                onItemsChanged: { recomputeAssignedShares() }
                             )
                         } label: {
                             Text("Assign items")
@@ -263,7 +270,7 @@ struct ExpenseReviewEditorView: View {
                                 name: store.name(for: person),
                                 cents: shareBinding(for: person),
                                 total: totalBinding.wrappedValue,
-                                detent: equalShare(for: person)
+                                detent: contributionDetents[person] ?? 0
                             )
                             .disabled(!isEditable)
                         }
@@ -295,13 +302,16 @@ struct ExpenseReviewEditorView: View {
             Text(internalSaveError ?? "")
         }
         .onChange(of: totalBinding.wrappedValue) { oldTotal, newTotal in
-            guard newTotal > 0, !participants.isEmpty, newTotal != oldTotal else { return }
+            guard itemsBinding.wrappedValue.count <= 1, newTotal > 0, !participants.isEmpty, newTotal != oldTotal else { return }
             let base = newTotal / participants.count
             let remainder = newTotal % participants.count
             sharesBinding.wrappedValue = Dictionary(uniqueKeysWithValues: participants.enumerated().map { index, person in
                 (person, base + (index < remainder ? 1 : 0))
             })
             balancer = ContributionBalancer()
+        }
+        .onChange(of: payerBinding.wrappedValue) { _, newPayer in
+            onPayerChanged?(newPayer)
         }
     }
 
@@ -319,12 +329,6 @@ struct ExpenseReviewEditorView: View {
                 )
             }
         )
-    }
-
-    private func equalShare(for person: UUID) -> Int {
-        guard let index = participants.firstIndex(of: person), !participants.isEmpty else { return 0 }
-        let total = totalBinding.wrappedValue
-        return total / participants.count + (index < total % participants.count ? 1 : 0)
     }
 
     private func handleSave() {
@@ -352,14 +356,11 @@ struct ExpenseReviewEditorView: View {
 
     private func recomputeAssignedShares() {
         guard !participants.isEmpty else { return }
-        var result = Dictionary(uniqueKeysWithValues: participants.map { ($0, 0) })
-        for item in itemsBinding.wrappedValue {
-            let people = participants.filter { itemAssignmentsBinding.wrappedValue[item.id, default: []].contains($0) }
-            guard !people.isEmpty else { continue }
-            let base = item.totalCents / people.count, remainder = item.totalCents % people.count
-            for (index, person) in people.enumerated() { result[person, default: 0] += base + (index < remainder ? 1 : 0) }
+        var ownedItems = itemsBinding.wrappedValue
+        for index in ownedItems.indices {
+            ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id, default: []]
         }
-        sharesBinding.wrappedValue = result
+        sharesBinding.wrappedValue = ownedItems.ownerShares(for: participants)
         let newTotal = itemsBinding.wrappedValue.filter {
             !(itemAssignmentsBinding.wrappedValue[$0.id]?.isEmpty ?? true)
         }.reduce(0) { $0 + $1.totalCents }

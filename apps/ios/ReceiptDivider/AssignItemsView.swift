@@ -9,7 +9,9 @@ struct AssignItemsView: View {
     let participants: [UUID]
     let isEditable: Bool
     @Binding var assignmentsLocked: Bool
+    let assignsNewItemsToAll: Bool
     var onAssignmentsChanged: (() -> Void)?
+    var onItemsChanged: (() -> Void)?
 
     @State private var activeAssignmentTarget: AssignmentTarget? = .all
     @State private var editingItemID: UUID?
@@ -20,14 +22,18 @@ struct AssignItemsView: View {
         participants: [UUID],
         isEditable: Bool = true,
         assignmentsLocked: Binding<Bool> = .constant(false),
-        onAssignmentsChanged: (() -> Void)? = nil
+        assignsNewItemsToAll: Bool = false,
+        onAssignmentsChanged: (() -> Void)? = nil,
+        onItemsChanged: (() -> Void)? = nil
     ) {
         self._items = items
         self._itemAssignments = itemAssignments
         self.participants = participants
         self.isEditable = isEditable
         self._assignmentsLocked = assignmentsLocked
+        self.assignsNewItemsToAll = assignsNewItemsToAll
         self.onAssignmentsChanged = onAssignmentsChanged
+        self.onItemsChanged = onItemsChanged
     }
 
     /// Selected participants sorted by recent shared transactions, signed-in user first.
@@ -81,7 +87,6 @@ struct AssignItemsView: View {
                             Button("Delete", systemImage: "trash", role: .destructive) {
                                 items.removeAll { $0.id == item.id }
                                 itemAssignments[item.id] = nil
-                                onAssignmentsChanged?()
                             }
                         }
                     }
@@ -90,6 +95,7 @@ struct AssignItemsView: View {
                     Button("Add item", systemImage: "plus") {
                         let item = ReceiptItem(name: "", cents: 0)
                         items.append(item)
+                        if assignsNewItemsToAll { itemAssignments[item.id] = Set(participants) }
                         editingItemID = item.id
                     }
                 }
@@ -104,7 +110,7 @@ struct AssignItemsView: View {
                 ItemEditor(item: $items[index])
             }
         }
-        .onChange(of: items) { _, _ in onAssignmentsChanged?() }
+        .onChange(of: items) { _, _ in onItemsChanged?() }
         .safeAreaInset(edge: .bottom) {
             assignmentFilters
         }
