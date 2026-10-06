@@ -44,6 +44,20 @@ final class ReceiptReplayTests: XCTestCase {
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
     }
 
+    /// A card slip with the tip and final total written in by hand below the printed total. Both OCR passes read the
+    /// handwritten 75.76 as 75.16, so the tip is kept and the mismatch is shown rather than hidden.
+    func testHandwrittenTipBelowThePrintedTotal() async throws {
+        XCTAssertTrue(try layout("handwritten-tip").contains { $0.hasPrefix("Tip:") && $0.hasSuffix("6.00") })
+        let extraction = try await read("handwritten-tip")
+        XCTAssertEqual(extraction.items.map(\.cents), [6_400])
+        XCTAssertEqual(extraction.items.map(\.name), ["16oz Ribeye"])
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip])
+        XCTAssertEqual(extraction.adjustments.tipCents, 600)
+        XCTAssertEqual(extraction.items.reduce(0) { $0 + $1.totalCents } + extraction.adjustments.tipCents, 7_576)
+        XCTAssertEqual(extraction.printedTotalCents, 7_516)
+        XCTAssertNotNil(extraction.mismatchWarning)
+    }
+
     private func layout(_ name: String) throws -> [String] {
         let merged = ReceiptTextRecognizer.merge(document: try lines("\(name)-lines"), accurate: try lines("\(name)-accurate-lines"))
         return ReceiptTextRecognizer.layoutText(merged).components(separatedBy: "\n")

@@ -126,6 +126,7 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertEqual(ReceiptRow("Total (Non-Cash)  427,12").amountCents, 42_712)
         XCTAssertEqual(ReceiptRow("TAX 7.000% 0.80").percent, 7)
         XCTAssertEqual(ReceiptRow("2 Iced Tea  7.00").quantity, 2)
+        XCTAssertEqual(ReceiptRow("1 16oz Ribeye  64.00").name, "16oz Ribeye")
         XCTAssertEqual(ReceiptRow("1 Milk Shake  $6. 19").amountCents, 619)
         XCTAssertTrue(ReceiptRow("2 @ 3.49").isQuantityDetail)
         XCTAssertFalse(ReceiptRow("2 Iced Tea  7.00").isQuantityDetail)
@@ -159,6 +160,27 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertEqual(extraction.printedTotalCents, 5_212)
         XCTAssertEqual(extraction.name, "Smokehouse Meal")
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
+    /// Two totals without a cash total are a printed total and a final one written in after the tip, not cash and card.
+    func testLaterTotalIsFinalAndNotASurcharge() {
+        let rows = ["Ribeye  64.00", "Subtotal  64.00", "Tax  5.76", "Total  69.76", "Tip:  6.00", "Total:  75.76"].map(ReceiptRow.init)
+        let labels = ReceiptLabels(merchant: "", category: .restaurant, purchaseDate: "", rows: [
+            .init(row: 0, kind: .item, taxed: true), .init(row: 1, kind: .subtotal, taxed: true), .init(row: 2, kind: .tax, taxed: true),
+            .init(row: 3, kind: .total, taxed: true), .init(row: 4, kind: .tip, taxed: true), .init(row: 5, kind: .total, taxed: true),
+        ], expenseName: "")
+        let extraction = ReceiptExtraction(rows: rows, labels: labels, text: "")
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip])
+        XCTAssertEqual(extraction.printedTotalCents, 7_576)
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
+    func testUnlabeledSummaryRowsAreAnIssue() {
+        let rows = ["Ribeye  64.00", "Subtotal  64.00", "Total  64.00", "Tip:  6.00"].map(ReceiptRow.init)
+        let labels = ReceiptLabels(merchant: "", category: .restaurant, purchaseDate: "", rows: [
+            .init(row: 1, kind: .subtotal, taxed: true), .init(row: 2, kind: .total, taxed: true),
+        ], expenseName: "")
+        XCTAssertEqual(ReceiptExtraction(rows: rows, labels: labels, text: "").unlabeledRows, [3])
     }
 
     func testParserReadingBecomesAdjustments() {
