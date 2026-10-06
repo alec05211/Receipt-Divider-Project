@@ -88,8 +88,11 @@ struct RateField: View {
         .keyboardDoneButton($isFocused)
     }
 
+    /// A rate worked out from printed amounts is rarely exact, such as 8.001% for an 8% tax, so one within a
+    /// two-hundredth of a percent of a whole number shows as that number.
     static func format(_ rate: Double) -> String {
-        (rate * 100).formatted(.number.precision(.fractionLength(0...3)).grouping(.never))
+        let percent = rate * 100, whole = percent.rounded()
+        return (abs(percent - whole) < 0.005 ? whole : percent).formatted(.number.precision(.fractionLength(0...3)).grouping(.never))
     }
 }
 

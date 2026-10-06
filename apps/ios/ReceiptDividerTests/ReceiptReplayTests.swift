@@ -38,7 +38,7 @@ final class ReceiptReplayTests: XCTestCase {
         let items = extraction.items.filter { $0.kind == .item }
         XCTAssertEqual(items.reduce(0) { $0 + $1.cents }, 32_085)
         XCTAssertEqual(items.first { $0.name.localizedCaseInsensitiveContains("house special") }?.cents, 3_200)
-        XCTAssertEqual(extraction.items.first { $0.kind == .tip }?.cents, 6_417)
+        XCTAssertEqual(extraction.adjustments.first { $0.kind == .tip }?.amountCents, 6_417)
         XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
         XCTAssertEqual(extraction.printedTotalCents, 42_712)
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))

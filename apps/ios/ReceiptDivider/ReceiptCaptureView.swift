@@ -53,7 +53,12 @@ struct ReceiptCaptureView: View {
     private var receiptTotal: Int { max(0, items.reduce(0) { $0 + $1.totalCents }) }
     private var total: Int {
         if splitsPrintedTotal, let printedTotalCents { return printedTotalCents }
-        return max(0, expenseItems.reduce(0) { $0 + $1.totalCents })
+        return max(0, expenseItems.reduce(0) { $0 + $1.totalCents } + adjustments.tipCents)
+    }
+    /// What each person owes from ownership: their items, plus an equal part of the tip.
+    private func ownershipShares(_ items: [ReceiptItem]) -> [UUID: Int] {
+        let tip = adjustments.tipCents
+        return (items + (tip > 0 ? [ReceiptItem(name: "Tip", cents: tip, ownerIDs: selectedPeople)] : [])).ownerShares(for: orderedSelection)
     }
     /// An even split of the printed total, used only after Split All.
     private var printedTotalShares: [UUID: Int]? {
@@ -64,7 +69,7 @@ struct ReceiptCaptureView: View {
     private var expenseItems: [ReceiptItem] {
         var result = items.filter { $0.cents > 0 }
         for index in result.indices {
-            let owners = result[index].kind == .tip ? selectedPeople : itemAssignments[result[index].id, default: []].intersection(selectedPeople)
+            let owners = itemAssignments[result[index].id, default: []].intersection(selectedPeople)
             result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
             result[index].isSelected = true
             if result[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -309,7 +314,7 @@ struct ReceiptCaptureView: View {
             purchaseDate: $purchaseDate,
             shares: $shares,
             adjustments: $adjustments,
-            contributionDetents: printedTotalShares ?? expenseItems.ownerShares(for: orderedSelection),
+            contributionDetents: printedTotalShares ?? ownershipShares(expenseItems),
             participants: orderedSelection,
             items: $items,
             itemAssignments: $itemAssignments,
@@ -387,9 +392,7 @@ struct ReceiptCaptureView: View {
     /// A tip adjustment goes when its row is deleted. On final review, contributions follow the new amounts.
     private func applyAdjustments() {
         var updated = items
-        var current = adjustments
-        if !updated.contains(where: { $0.kind == .tip }) { current.removeAll { $0.kind == .tip } }
-        let applied = updated.applyAdjustments(current)
+        let applied = updated.applyAdjustments(adjustments)
         let changed = updated != items || applied != adjustments
         if updated != items { items = updated }
         if applied != adjustments { adjustments = applied }
@@ -444,7 +447,6 @@ struct ReceiptCaptureView: View {
                 let kept = entry.value.intersection(validPeople)
                 if !kept.isEmpty { result[entry.key] = kept }
             }
-            for item in items where item.kind == .tip { itemAssignments[item.id] = validPeople }
         }
         assignmentsLocked = false
         assignmentsBeforeLock = nil
@@ -506,11 +508,11 @@ struct ReceiptCaptureView: View {
     /// Contributions from current ownership; Split All uses the printed total when one was recognized.
     private func assignedShares() -> [UUID: Int] {
         if let printedTotalShares { return printedTotalShares }
-        return items.map { item in
+        return ownershipShares(items.map { item in
             var item = item
-            item.ownerIDs = item.kind == .tip ? selectedPeople : itemAssignments[item.id, default: []]
+            item.ownerIDs = itemAssignments[item.id, default: []]
             return item
-        }.ownerShares(for: orderedSelection)
+        })
     }
     private func setDefaultPayer() {
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : orderedSelection.first }
@@ -523,7 +525,7 @@ struct ReceiptCaptureView: View {
     }
     /// Sets contributions from item ownership and defaults the payer to the signed-in participant.
     private func setItemSplit() {
-        shares = printedTotalShares ?? expenseItems.ownerShares(for: orderedSelection)
+        shares = printedTotalShares ?? ownershipShares(expenseItems)
         balancer = ContributionBalancer()
         setDefaultPayer()
     }

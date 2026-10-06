@@ -17,29 +17,29 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         var rows = [
             ReceiptItem(name: "Burger", cents: 1_000, localOffsetCents: -100),
             ReceiptItem(name: "Salad", cents: 500, taxed: false),
-            ReceiptItem(name: "Tip", cents: 400, kind: .tip),
         ]
         let adjustments = rows.resolveAdjustments([
             ReceiptAdjustment(kind: .tax, amountCents: 54),
-            ReceiptAdjustment(kind: .tip),
+            ReceiptAdjustment(kind: .tip, amountCents: 400),
             ReceiptAdjustment(kind: .surcharge, amountCents: 56),
         ])
 
         XCTAssertEqual(adjustments.map(\.amountCents), [54, 400, 56])
         XCTAssertEqual(adjustments[0].rate, 0.06, accuracy: 1e-9)
         XCTAssertEqual(adjustments[2].rate, 56.0 / 1_854, accuracy: 1e-9)
-        // Only the burger is taxed; the surcharge reaches every row, the tip included.
+        // Only the burger is taxed; the surcharge reaches every item and the tip, which keeps its share apart.
         XCTAssertEqual(rows[0].globalOffsetCents, 54 + 29)
         XCTAssertEqual(rows[1].globalOffsetCents, 15)
-        XCTAssertEqual(rows[2].globalOffsetCents, 12)
-        XCTAssertEqual(rows.reduce(0) { $0 + $1.totalCents }, 1_910)
+        XCTAssertEqual(adjustments[1].chargesCents, 12)
+        XCTAssertEqual(adjustments.tipCents, 412)
+        XCTAssertEqual(rows.reduce(0) { $0 + $1.totalCents } + adjustments.tipCents, 1_910)
     }
 
     func testSurchargePrintedBeforeTheTipIsNotChargedOnIt() {
-        var rows = [ReceiptItem(name: "Pasta", cents: 2_000), ReceiptItem(name: "Tip", cents: 400, kind: .tip)]
-        rows.resolveAdjustments([ReceiptAdjustment(kind: .surcharge, amountCents: 60), ReceiptAdjustment(kind: .tip)])
-        XCTAssertEqual(rows.map(\.globalOffsetCents), [60, 0])
-        XCTAssertEqual(rows.reduce(0) { $0 + $1.totalCents }, 2_460)
+        var rows = [ReceiptItem(name: "Pasta", cents: 2_000)]
+        let adjustments = rows.resolveAdjustments([ReceiptAdjustment(kind: .surcharge, amountCents: 60), ReceiptAdjustment(kind: .tip, amountCents: 400)])
+        XCTAssertEqual(rows.map(\.globalOffsetCents), [60])
+        XCTAssertEqual(adjustments.tipCents, 400)
     }
 
     func testDiscountAndTaxReproduceTheirPrintedAmountsInEitherOrder() {
@@ -77,15 +77,18 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertEqual(rows[0].totalCents, 2_700)
     }
 
+    /// Contributions add the tip, plus its surcharge, as a share everyone owns, so it's split evenly whatever each ordered.
     func testTipIsSplitEvenlyWhateverEachPersonOrdered() {
         let (ben, alec) = (UUID(), UUID())
-        var rows = [
-            ReceiptItem(name: "Steak", cents: 3_000, ownerIDs: [ben]),
-            ReceiptItem(name: "Soup", cents: 1_000, ownerIDs: [alec]),
-            ReceiptItem(name: "Tip", cents: 800, kind: .tip, ownerIDs: [ben, alec]),
-        ]
-        rows.resolveAdjustments([ReceiptAdjustment(kind: .tip)])
-        XCTAssertEqual(rows.ownerShares(for: [ben, alec]), [ben: 3_400, alec: 1_400])
+        let items = [ReceiptItem(name: "Steak", cents: 3_000, ownerIDs: [ben]), ReceiptItem(name: "Soup", cents: 1_000, ownerIDs: [alec])]
+        let tip = [ReceiptAdjustment(kind: .tip, amountCents: 800)].tipCents
+        XCTAssertEqual((items + [ReceiptItem(name: "Tip", cents: tip, ownerIDs: [ben, alec])]).ownerShares(for: [ben, alec]), [ben: 3_400, alec: 1_400])
+    }
+
+    func testRatesCloseToAWholePercentShowAsWhole() {
+        XCTAssertEqual(RateField.format(0.08001), "8")
+        XCTAssertEqual(RateField.format(0.0400099), "4")
+        XCTAssertEqual(RateField.format(0.06625), "6.625")
     }
 
     func testMismatchesAreReportedNotFixed() {
@@ -143,8 +146,11 @@ final class ReceiptAdjustmentsTests: XCTestCase {
             .init(row: 8, kind: .other, taxed: true),
         ], expenseName: "")
         let extraction = ReceiptExtraction(rows: rows, labels: labels, text: "")
-        XCTAssertEqual(extraction.items.map(\.name), ["Brisket", "Brisket", "Coke", "Tip"])
-        XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400, 800])
+        XCTAssertEqual(extraction.items.map(\.name), ["Brisket", "Brisket", "Coke"])
+        XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400])
+        // The tip comes before the card total's surcharge, so it carries its share of that too.
+        XCTAssertEqual(extraction.adjustments.first { $0.kind == .tip }?.amountCents, 800)
+        XCTAssertEqual(extraction.adjustments.tipCents, 832)
         XCTAssertEqual(extraction.items[2].localOffsetCents, -100)
         XCTAssertTrue(extraction.items.allSatisfy(\.taxed))
         XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])

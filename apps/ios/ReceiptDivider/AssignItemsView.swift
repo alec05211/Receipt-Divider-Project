@@ -68,7 +68,8 @@ struct AssignItemsView: View {
                             }
                         let assigned = filterPeople.filter { itemAssignments[item.id, default: []].contains($0) }
                         if !assigned.isEmpty { AvatarStack(people: assigned, size: 22) }
-                        Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+                        // The receipt's price after the item's own discount; receipt-wide tax and fees come later.
+                        Text(item.netCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                     }
                     .frame(height: 26)
                     .padding(.vertical, 2)

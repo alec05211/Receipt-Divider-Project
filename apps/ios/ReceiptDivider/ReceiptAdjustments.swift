@@ -16,20 +16,26 @@ struct ReceiptAdjustment: Identifiable, Hashable, Codable, Sendable {
     }
     var id = UUID()
     var kind: Kind
-    /// For a discount, tax or surcharge, the fraction of the running cost of the rows it applies to (0.06 for 6%).
-    /// Unused for a tip, which is the price of the tip rows.
+    /// For a discount, tax or surcharge, the fraction of the running cost it applies to (0.06 for 6%). Unused for a tip.
     var rate: Double = 0
-    /// What the adjustment came to, set by `applyAdjustments`.
+    /// For a tip, the tip itself. For anything else, what the adjustment came to, set by `applyAdjustments`.
     var amountCents = 0
+    /// For a tip, its share of surcharges printed after it, set by `applyAdjustments`; split evenly along with the tip.
+    var chargesCents = 0
+}
+
+extension Array where Element == ReceiptAdjustment {
+    /// What the tip costs everyone together: the tip plus any surcharge charged on it.
+    var tipCents: Int { filter { $0.kind == .tip }.reduce(0) { $0 + $1.amountCents + $1.chargesCents } }
 }
 
 extension Array where Element == ReceiptItem {
-    /// Sets every row's global offset by applying `adjustments` in order, and returns them with the amounts they came to.
+    /// Sets every item's global offset by applying `adjustments` in order, and returns them with the amounts they came to.
     ///
-    /// Each row has a running cost. An item starts at its price after its own offset; a tip row starts at nothing and
-    /// gains its price at the tip step. A discount then applies to items, tax to taxed items, and a surcharge to every
-    /// row with a cost by then, so a surcharge printed after the tip is charged on the tip too. Each step's amount is
-    /// shared in proportion to the running costs, rounded so the shares add up to it exactly.
+    /// Each item has a running cost, starting at its price after its own offset. A discount then applies to items, tax
+    /// to taxed items, and a surcharge to every item and to any tip printed before it. The tip isn't an item: it adds its
+    /// own amount at its step and keeps its share of later surcharges as `chargesCents`. Each step's amount is shared in
+    /// proportion to the running costs, rounded so the shares add up to it exactly.
     @discardableResult
     mutating func applyAdjustments(_ adjustments: [ReceiptAdjustment]) -> [ReceiptAdjustment] {
         walk(adjustments) { adjustment, _ in adjustment.rate }
@@ -37,7 +43,7 @@ extension Array where Element == ReceiptItem {
 
     /// The adjustments printed on a receipt, with each rate worked out from its printed amount and the running cost
     /// it applied to, so applying them reproduces the printed amounts exactly. An adjustment printed with only a
-    /// percent carries it as `rate` and `amountCents` of zero. Also applies them to these rows.
+    /// percent carries it as `rate` and `amountCents` of zero. Also applies them to these items.
     mutating func resolveAdjustments(_ printed: [ReceiptAdjustment]) -> [ReceiptAdjustment] {
         walk(printed) { adjustment, base in
             adjustment.amountCents > 0 && base > 0 ? Double(adjustment.amountCents) / Double(base) : adjustment.rate
@@ -45,34 +51,34 @@ extension Array where Element == ReceiptItem {
     }
 
     private mutating func walk(_ adjustments: [ReceiptAdjustment], rate: (ReceiptAdjustment, Int) -> Double) -> [ReceiptAdjustment] {
-        var running = map { $0.kind == .tip ? 0 : $0.netCents }
-        let tipRows = indices.filter { self[$0].kind == .tip }
-        var tipAdded = false
+        var running = map(\.netCents)
+        // The tips' running cost, which surcharges after them apply to like an item's.
+        var tips = 0
         var applied = adjustments
         for index in applied.indices {
             let kind = applied[index].kind
             if kind == .tip {
-                applied[index].amountCents = tipAdded ? 0 : tipRows.reduce(0) { $0 + self[$1].cents }
-                if !tipAdded { for row in tipRows { running[row] = self[row].cents } }
-                tipAdded = true
+                applied[index].chargesCents = 0
+                tips += applied[index].amountCents
                 continue
             }
             let targets = indices.filter { row in
                 running[row] > 0 && (kind == .surcharge || (self[row].kind == .item && (kind != .tax || self[row].taxed)))
             }
-            let base = targets.reduce(0) { $0 + running[$1] }
+            let weights = targets.map { running[$0] } + (kind == .surcharge && tips > 0 ? [tips] : [])
+            let base = weights.reduce(0, +)
             // A discount can at most take a row's cost to zero.
             applied[index].rate = Swift.min(Swift.max(0, rate(applied[index], base)), kind == .discount ? 1 : .infinity)
             let amount = Int((applied[index].rate * Double(base)).rounded())
             applied[index].amountCents = amount
-            for (row, share) in zip(targets, ReceiptMath.distribute(amount, over: targets.map { running[$0] })) {
-                running[row] += kind == .discount ? -share : share
+            let shares = ReceiptMath.distribute(amount, over: weights)
+            for (row, share) in zip(targets, shares) { running[row] += kind == .discount ? -share : share }
+            if shares.count > targets.count, let tipIndex = applied.firstIndex(where: { $0.kind == .tip }) {
+                applied[tipIndex].chargesCents += shares[targets.count]
+                tips += shares[targets.count]
             }
         }
-        if !tipAdded { for row in tipRows { running[row] = self[row].cents } }
-        for row in indices {
-            self[row].globalOffsetCents = running[row] - (self[row].kind == .tip ? self[row].cents : self[row].netCents)
-        }
+        for row in indices { self[row].globalOffsetCents = running[row] - self[row].netCents }
         return applied
     }
 }

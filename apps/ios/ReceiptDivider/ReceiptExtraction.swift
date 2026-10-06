@@ -2,7 +2,7 @@ import Foundation
 import FoundationModels
 import UIKit
 
-/// Everything read from one receipt: its rows (with the tip as a row), its adjustments in receipt order, and what the
+/// Everything read from one receipt: its items, its adjustments in receipt order (the tip among them), and what the
 /// receipt printed. The model only proposes these values; every amount is worked out by `applyAdjustments`.
 struct ReceiptExtraction: Sendable {
     var category: ExpenseCategory?
@@ -31,7 +31,7 @@ struct ReceiptExtraction: Sendable {
     /// Nil when the rows add up to the printed total, or when no total was found.
     var mismatchWarning: String? {
         guard let printed = printedTotalCents else { return nil }
-        let found = items.reduce(0) { $0 + $1.totalCents }
+        let found = items.reduce(0) { $0 + $1.totalCents } + adjustments.tipCents
         guard found != printed else { return nil }
         return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the item prices."
     }
@@ -255,6 +255,7 @@ extension ReceiptExtraction {
             case .tip:
                 tipCents += cents
                 if !printed.contains(where: { $0.kind == .tip }) { printed.append(ReceiptAdjustment(kind: .tip)) }
+                if let index = printed.firstIndex(where: { $0.kind == .tip }) { printed[index].amountCents = tipCents }
             case .subtotal: subtotal = subtotal ?? cents
             case .total: totals.append(cents)
             case .cashTotal: cashTotal = cents
@@ -263,7 +264,6 @@ extension ReceiptExtraction {
         }
         // Marking every item untaxed would leave a printed tax with nothing to apply to; then tax applies to them all.
         if !rows.contains(where: \.taxed) { for index in rows.indices { rows[index].taxed = true } }
-        if tipCents > 0 { rows.append(ReceiptItem(name: "Tip", cents: tipCents, kind: .tip)) }
         // Separate cash and card totals mean paying by card adds the difference as a final surcharge.
         let allTotals = totals + (cashTotal.map { [$0] } ?? [])
         let total = allTotals.max()

@@ -48,8 +48,8 @@ final class ReceiptModelFixtureTests: XCTestCase {
             Total 45.42
             Suggested tip: 18% 6.30  20% 7.00  22% 7.70
             """)
-        XCTAssertEqual(extraction.items.filter { $0.kind == .item }.count, 4)
-        XCTAssertEqual(extraction.items.first { $0.kind == .tip }?.cents, 700)
+        XCTAssertEqual(extraction.items.count, 4)
+        XCTAssertEqual(extraction.adjustments.first { $0.kind == .tip }?.amountCents, 700)
         XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
     }
@@ -73,7 +73,7 @@ final class ReceiptModelFixtureTests: XCTestCase {
             18%: $11.76  20%: $13.07  25%: $16.34
             """)
         XCTAssertEqual(extraction.items.filter { $0.name.localizedCaseInsensitiveContains("brisket") }.map(\.cents), [1_800, 1_800])
-        XCTAssertEqual(extraction.items.first { $0.kind == .tip }?.cents, 1_307)
+        XCTAssertEqual(extraction.adjustments.first { $0.kind == .tip }?.amountCents, 1_307)
         XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
         XCTAssertEqual(extraction.printedTotalCents, 8_700)
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
