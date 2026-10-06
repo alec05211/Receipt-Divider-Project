@@ -112,33 +112,46 @@ final class ReceiptAdjustmentsTests: XCTestCase {
                        ["Brisket  36.00", "Coke Cherry  3.85", "Subtotal  39.85", "Total  39.85"])
     }
 
-    /// Separate cash and card totals make the difference a final surcharge; an automatic gratuity is the tip.
-    func testCardTotalAddsTheDifferenceAsASurcharge() {
-        let reading = ReceiptReading(
-            merchant: "Smokehouse", category: .restaurant, purchaseDate: "2026-10-05",
-            lines: [.init(name: "Brisket", price: "18.00", unitPrice: "18.00", quantity: 2, discount: "", taxed: true),
-                    .init(name: "Coke", price: "4.00", unitPrice: "", quantity: 1, discount: "", taxed: true)],
-            subtotal: "40.00",
-            adjustments: [.init(kind: .tax, amount: "3.20", percent: "8"), .init(kind: .tip, amount: "8.00", percent: "20")],
-            cashTotal: "51.20", total: "53.25", expenseName: "")
-        let extraction = ReceiptExtraction(reading, text: "")
-        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
-        XCTAssertEqual(extraction.adjustments.last?.amountCents, 205)
-        XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400, 800])
-        XCTAssertEqual(extraction.printedTotalCents, 5_325)
-        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    func testRowsTakeTheirPriceFromTheRightEnd() {
+        let row = ReceiptRow("Hot Tea  2 x $3.25  6.50")
+        XCTAssertEqual(row.amountCents, 650)
+        XCTAssertEqual(row.quantity, 2)
+        XCTAssertEqual(row.name, "Hot Tea")
+        XCTAssertEqual(ReceiptRow("1 Cheeseburger  $11.69").name, "Cheeseburger")
+        XCTAssertEqual(ReceiptRow("SALE -1.00").amountCents, -100)
+        XCTAssertEqual(ReceiptRow("GREEK YOGURT 6.98 F").amountCents, 698)
+        XCTAssertEqual(ReceiptRow("Total (Non-Cash)  427,12").amountCents, 42_712)
+        XCTAssertEqual(ReceiptRow("TAX 7.000% 0.80").percent, 7)
+        XCTAssertEqual(ReceiptRow("2 Iced Tea  7.00").quantity, 2)
+        XCTAssertEqual(ReceiptRow("1 Milk Shake  $6. 19").amountCents, 619)
+        XCTAssertTrue(ReceiptRow("2 @ 3.49").isQuantityDetail)
+        XCTAssertFalse(ReceiptRow("2 Iced Tea  7.00").isQuantityDetail)
+        XCTAssertNil(ReceiptRow("Order #22038:1").amountCents)
+        XCTAssertNil(ReceiptRow("Platter (Pick 2 Sides)").amountCents)
     }
 
-    /// A unit price given as the price, or the price repeated as a discount, is corrected by matching the subtotal.
-    func testMisplacedLineFieldsAreSettledByTheSubtotal() {
-        let reading = ReceiptReading(
-            merchant: "", category: .restaurant, purchaseDate: "",
-            lines: [.init(name: "Hot Tea", price: "3.25", unitPrice: "3.25", quantity: 2, discount: "6.50", taxed: true),
-                    .init(name: "Coke", price: "3.85", unitPrice: "", quantity: 1, discount: "3.85", taxed: true)],
-            subtotal: "10.35", adjustments: [], cashTotal: "", total: "10.35", expenseName: "")
-        let extraction = ReceiptExtraction(reading, text: "")
-        XCTAssertEqual(extraction.items.map(\.cents), [325, 325, 385])
-        XCTAssertEqual(extraction.items.map(\.localOffsetCents), [0, 0, 0])
+    /// Prices come from the rows; the labels only say what each priced row is. Separate cash and card totals make the
+    /// difference a final surcharge, and an automatic gratuity is the tip.
+    func testLabelsTurnRowsIntoItemsAndAdjustments() {
+        let rows = ["Brisket  2 x $18.00  36.00", "     Platter (Pick 2 Sides)", "Coke  4.00", "COUPON  -1.00", "Subtotal  39.00",
+                    "Tax 8%  3.12", "Gratuity  8.00", "Total (Cash)  50.12", "Total (Non-Cash)  52.12", "18%: $7.20: $59.32"].map(ReceiptRow.init)
+        let labels = ReceiptLabels(merchant: "Smokehouse", category: .restaurant, purchaseDate: "2026-10-05", rows: [
+            .init(row: 0, kind: .item, taxed: false), .init(row: 1, kind: .item, taxed: false),
+            .init(row: 2, kind: .itemDiscount, taxed: true), .init(row: 3, kind: .subtotal, taxed: true),
+            .init(row: 4, kind: .tax, taxed: true), .init(row: 5, kind: .tip, taxed: true),
+            .init(row: 6, kind: .cashTotal, taxed: true), .init(row: 7, kind: .total, taxed: true),
+            .init(row: 8, kind: .other, taxed: true),
+        ], expenseName: "")
+        let extraction = ReceiptExtraction(rows: rows, labels: labels, text: "")
+        XCTAssertEqual(extraction.items.map(\.name), ["Brisket", "Brisket", "Coke", "Tip"])
+        XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400, 800])
+        XCTAssertEqual(extraction.items[2].localOffsetCents, -100)
+        XCTAssertTrue(extraction.items.allSatisfy(\.taxed))
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
+        XCTAssertEqual(extraction.adjustments.last?.amountCents, 200)
+        XCTAssertEqual(extraction.adjustments.first?.rate ?? 0, 0.08, accuracy: 1e-9)
+        XCTAssertEqual(extraction.printedTotalCents, 5_212)
+        XCTAssertEqual(extraction.name, "Smokehouse Meal")
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
     }
 

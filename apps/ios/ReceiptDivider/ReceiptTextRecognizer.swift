@@ -306,10 +306,60 @@ enum ReceiptTextRecognizer {
         excludedWords.firstMatch(in: lowercased, range: NSRange(lowercased.startIndex..., in: lowercased)) != nil
     }
 
-    /// The receipt as printed rows, top to bottom. Text recognition can return a receipt's names and prices as separate
-    /// columns, so pieces are regrouped by their position on the page and joined left to right.
+    /// The receipt as printed rows, top to bottom, which is what the on-device model reads. Text recognition can return
+    /// a receipt's names and prices as separate columns, so pieces sharing a printed line are joined left to right.
+    /// Unlike the parser's grouping, this keeps every piece's text as recognized and pairs only by position.
     static func layoutText(_ fragments: [Fragment]) -> String {
-        rows(from: fragments).map { $0.map(\.text).joined(separator: "  ") }.joined(separator: "\n")
+        layoutRows(fragments).joined(separator: "\n")
+    }
+
+    /// The printed rows of `layoutText`.
+    static func layoutRows(_ fragments: [Fragment]) -> [String] {
+        var rows: [[Fragment]] = []
+        for fragment in fragments.sorted(by: { $0.box.midY > $1.box.midY }) {
+            // A piece joins the nearest row it shares a line with and doesn't overlap horizontally.
+            let candidates = rows.indices.filter { index in
+                let anchor = rows[index][0].box
+                return abs(anchor.midY - fragment.box.midY) < min(anchor.height, fragment.box.height) * 0.6
+                    && !rows[index].contains { $0.box.minX < fragment.box.maxX && fragment.box.minX < $0.box.maxX }
+            }
+            if let index = candidates.min(by: { abs(rows[$0][0].box.midY - fragment.box.midY) < abs(rows[$1][0].box.midY - fragment.box.midY) }) {
+                rows[index].append(fragment)
+            } else {
+                rows.append([fragment])
+            }
+        }
+        return rows.sorted { $0[0].box.midY > $1[0].box.midY }
+            .map { $0.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: "  ") }
+    }
+
+    /// The accurate OCR pass's lines, which fill in what document recognition misses.
+    static func accurateLines(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) throws -> [Fragment] {
+        try fragments(in: CIImage(cgImage: cgImage).oriented(orientation))
+    }
+
+    /// Document recognition's lines completed with the accurate pass's. Document recognition can drop a short line,
+    /// such as a price, or merge two stacked prices into one tall line. Accurate lines are added where no document line
+    /// covers them, and a document line spanning several of them is replaced by them.
+    static func merge(document: [Fragment], accurate: [Fragment]) -> [Fragment] {
+        let heights = document.map(\.box.height).sorted()
+        guard !heights.isEmpty else { return accurate }
+        let lineHeight = heights[heights.count / 2]
+        var result: [Fragment] = []
+        for line in document {
+            let inside = accurate.filter { overlap(line.box, $0.box) > 0.5 && $0.box.height < lineHeight * 1.3 }
+            let stacked = Set(inside.map { Int(($0.box.midY / lineHeight).rounded()) }).count > 1
+            if line.box.height > lineHeight * 1.6, stacked { result += inside } else { result.append(line) }
+        }
+        result += accurate.filter { candidate in !result.contains { overlap($0.box, candidate.box) > 0.3 } }
+        return result
+    }
+
+    /// The share of the smaller box covered by the other.
+    private static func overlap(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        let shared = a.intersection(b)
+        guard !shared.isNull, min(a.width * a.height, b.width * b.height) > 0 else { return 0 }
+        return shared.width * shared.height / min(a.width * a.height, b.width * b.height)
     }
 
     private static func rows(from fragments: [Fragment]) -> [[Fragment]] {

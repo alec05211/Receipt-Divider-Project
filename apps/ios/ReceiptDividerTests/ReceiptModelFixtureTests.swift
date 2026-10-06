@@ -24,16 +24,12 @@ final class ReceiptModelFixtureTests: XCTestCase {
             YOU SAVED 1.00
             """)
         XCTAssertEqual(extraction.items.first { $0.name.localizedCaseInsensitiveContains("towel") }?.localOffsetCents, -100)
-        // Known gaps in the model's reading, logged without failing the run until they're addressed.
-        XCTExpectFailure("The quantity line isn't applied to its item", strict: false) {
-            XCTAssertEqual(extraction.items.filter { $0.name.localizedCaseInsensitiveContains("yogurt") }.map(\.cents), [349, 349])
-        }
+        // A known gap in the model's reading, logged without failing the run until it's addressed.
+        XCTAssertEqual(extraction.items.filter { $0.name.localizedCaseInsensitiveContains("yogurt") }.map(\.cents), [349, 349])
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax])
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
         XCTExpectFailure("Tax letters aren't read as untaxed items", strict: false) {
             XCTAssertEqual(extraction.items.filter { !$0.taxed }.count, 3)
-        }
-        XCTExpectFailure("The \"you saved\" summary is read as an order discount", strict: false) {
-            XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax])
-            XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
         }
     }
 

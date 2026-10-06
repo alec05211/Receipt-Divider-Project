@@ -70,7 +70,9 @@ struct ReceiptDiagnostics: Codable, Hashable, Sendable {
     /// Why the parser was used instead of the model.
     var fallbackReason: String?
     var recognitionSeconds: Double
+    /// Recognized lines; those after the first `documentLineCount` came from the accurate pass.
     var lines: [Line]
+    var documentLineCount: Int
     /// The rows the model was given.
     var modelText: String
     var attempts: [Attempt] = []
@@ -79,6 +81,7 @@ struct ReceiptDiagnostics: Codable, Hashable, Sendable {
 
     init(_ receipt: RecognizedReceipt, modelText: String) {
         recognitionSeconds = receipt.recognitionSeconds
+        documentLineCount = receipt.documentLineCount
         lines = receipt.lines.map {
             Line(text: $0.text, x: $0.box.minX, y: $0.box.minY, width: $0.box.width, height: $0.box.height, confidence: $0.confidence)
         }
