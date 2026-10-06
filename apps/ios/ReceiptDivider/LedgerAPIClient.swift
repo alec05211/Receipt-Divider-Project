@@ -163,8 +163,15 @@ struct APISettings: Decodable, Sendable { let currency: String; let sliderUnit: 
 /// Someone in the caller's ledger: themselves, a friend, or anyone they share a transaction with.
 struct APILedgerPerson: Decodable, Sendable { let userId: UUID; let displayName: String?; let username: String?; let avatarEtag: String? }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }
-/// `ownerIds` are the people who had the item; an item sent without owners belongs to the payer.
-struct APIExpenseItem: Codable, Sendable { let name: String; let amountCents: Int; let offsetCents: Int?; let ownerIds: [UUID]? }
+/// `amountCents` is the printed price; the two offsets are the item's own discount and its share of receipt-wide
+/// adjustments. `kind` is "item" or "tip". `ownerIds` are the people who had the item; an item sent without owners
+/// belongs to the payer.
+struct APIExpenseItem: Codable, Sendable {
+    let name: String; let amountCents: Int; let localOffsetCents: Int?; let globalOffsetCents: Int?
+    let kind: String?; let taxed: Bool?; let ownerIds: [UUID]?
+}
+/// `kind` is "discount", "tax", "tip" or "surcharge"; `rate` is a fraction (0.06 for 6%) and is nil for a tip.
+struct APIAdjustment: Codable, Sendable { let kind: String; let amountCents: Int; let rate: Double? }
 struct APIAllocation: Codable, Sendable { let userId: UUID; let amountCents: Int }
 
 struct CreateAPIExpense: Encodable, Sendable {
@@ -178,6 +185,7 @@ struct CreateAPIExpense: Encodable, Sendable {
     let totalCents: Int
     let evidenceIds: [UUID]
     let items: [APIExpenseItem]
+    let adjustments: [APIAdjustment]
     let allocations: [APIAllocation]
 }
 
@@ -197,6 +205,8 @@ struct APIExpense: Decodable, Sendable {
     let payerId: UUID
     let totalCents: Int
     let items: [APIExpenseItem]
+    /// In receipt order; nil from a server that predates adjustments.
+    let adjustments: [APIAdjustment]?
     let allocations: [APIAllocation]
     let evidenceIds: [UUID]
     let createdAt: String

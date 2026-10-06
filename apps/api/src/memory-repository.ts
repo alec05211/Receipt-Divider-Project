@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -145,7 +145,7 @@ export class MemoryRepository implements LedgerRepository {
       if (existing.fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict");
       return structuredClone(existing.value as Expense);
     }
-    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: expenseItems(input), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
+    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: expenseItems(input), adjustments: expenseAdjustments(input), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
     this.expenses.push(expense); this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
     return structuredClone(expense);
   }

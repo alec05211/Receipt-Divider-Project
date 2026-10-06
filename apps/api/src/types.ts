@@ -27,12 +27,45 @@ export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: stri
 export const expenseCategories = ["groceries", "restaurant", "movie", "concert"] as const;
 export type ExpenseCategory = typeof expenseCategories[number];
 
+export const expenseItemKinds = ["item", "tip"] as const;
+/** A tip row is split evenly among its owners rather than priced like an item. */
+export type ExpenseItemKind = typeof expenseItemKinds[number];
+
 /**
- * `ownerIds` are the people who had the item; each must be the payer or have an allocation on the expense. An item with no owners
- * belongs to the payer. Owners record who had what; the allocations alone set what each person owes.
+ * `amountCents` is the price printed on the receipt. `localOffsetCents` is what the receipt ties to that item (its own
+ * discount), and `globalOffsetCents` is its share of receipt-wide adjustments, so the item costs the sum of all three.
+ * `ownerIds` are the people who had the item; each must be the payer or have an allocation on the expense. An item with
+ * no owners belongs to the payer. Owners record who had what; the allocations alone set what each person owes.
  */
-export interface ExpenseItemInput { name: string; amountCents: number; offsetCents?: number; ownerIds?: UUID[]; }
-export interface ExpenseItem extends ExpenseItemInput { ownerIds: UUID[]; }
+export interface ExpenseItemInput {
+  name: string;
+  amountCents: number;
+  localOffsetCents?: number;
+  globalOffsetCents?: number;
+  /** What older clients send for `globalOffsetCents`. */
+  offsetCents?: number;
+  kind?: ExpenseItemKind;
+  /** Whether receipt tax applies to the item; defaults to true. */
+  taxed?: boolean;
+  ownerIds?: UUID[];
+}
+export interface ExpenseItem {
+  name: string;
+  amountCents: number;
+  localOffsetCents: number;
+  globalOffsetCents: number;
+  kind: ExpenseItemKind;
+  taxed: boolean;
+  ownerIds: UUID[];
+}
+
+export const adjustmentKinds = ["discount", "tax", "tip", "surcharge"] as const;
+export type AdjustmentKind = typeof adjustmentKinds[number];
+/**
+ * A receipt-wide adjustment, listed in the order the receipt applies it. `rate` is a fraction of the running cost of
+ * the items it applies to (0.06 for 6% tax) and is null for a tip. `amountCents` is what it came to in this expense.
+ */
+export interface ExpenseAdjustment { kind: AdjustmentKind; amountCents: number; rate: number | null; }
 /** The fields of an existing expense that can be edited; omitted fields are left as they are. */
 export interface ExpenseChanges { description?: string; transactionDate?: string; }
 export interface AllocationInput { userId: UUID; amountCents: number; }
@@ -50,14 +83,17 @@ export interface CreateExpenseInput {
   evidenceIds?: UUID[];
   /** Omitted or empty: the expense is saved as one item for the whole total, owned by everyone allocated. */
   items?: ExpenseItemInput[];
+  /** Omitted or empty: the expense has no receipt-wide adjustments. */
+  adjustments?: ExpenseAdjustment[];
   allocations: AllocationInput[];
 }
 
-export interface Expense extends Omit<CreateExpenseInput, "items" | "evidenceIds" | "category"> {
+export interface Expense extends Omit<CreateExpenseInput, "items" | "adjustments" | "evidenceIds" | "category"> {
   id: UUID;
   category: ExpenseCategory | null;
   creatorId: UUID;
   items: ExpenseItem[];
+  adjustments: ExpenseAdjustment[];
   evidenceIds: UUID[];
   createdAt: string;
 }

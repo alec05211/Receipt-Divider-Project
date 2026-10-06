@@ -14,7 +14,8 @@ final class ReceiptTextRecognizerTests: XCTestCase {
 
         XCTAssertEqual(scan.items.map(\.name), ["COFFEE", "SANDWICH"])
         XCTAssertEqual(scan.printedTotalCents, 1_350)
-        XCTAssertEqual(scan.items.reduce(0) { $0 + $1.totalCents }, 1_350)
+        XCTAssertEqual(scan.taxCents, 100)
+        XCTAssertEqual(scan.reconciledCents, 1_350)
     }
 
     func testCommonOCRTotalSubstitutionsAreSummaryRows() {
@@ -87,8 +88,9 @@ final class ReceiptTextRecognizerTests: XCTestCase {
         ])
 
         XCTAssertEqual(scan.items.count, 1)
-        XCTAssertEqual(scan.items[0].totalCents, 900)
+        XCTAssertEqual(scan.items[0].cents, 1_000)
         XCTAssertEqual(scan.discountCents, 100)
+        XCTAssertEqual(scan.reconciledCents, 900)
         XCTAssertNil(scan.mismatchWarning)
     }
 

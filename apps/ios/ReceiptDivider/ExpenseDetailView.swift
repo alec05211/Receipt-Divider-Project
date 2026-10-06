@@ -78,7 +78,9 @@ struct ExpenseDetailView: View {
                 } else {
                     ContentUnavailableView("No receipt", systemImage: "doc.text.image")
                 }
-                ForEach(current.items.filter(\.isSelected)) { item in
+                // The tip shows with the adjustments when the expense records one.
+                let listsTip = current.adjustments.contains { $0.kind == .tip }
+                ForEach(current.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }) { item in
                     LabeledContent {
                         HStack(spacing: 8) {
                             if !item.ownerIDs.isEmpty { AvatarStack(people: Array(item.ownerIDs)) }
@@ -88,7 +90,11 @@ struct ExpenseDetailView: View {
                         Text(item.name)
                     }
                 }
-                if current.offsetTotal != 0 { LabeledContent("Tax and discounts", value: current.offsetTotal < 0 ? "−\((-current.offsetTotal).usd)" : current.offsetTotal.usd) }
+                if current.itemDiscountTotal != 0 { LabeledContent("Item discounts", value: signed(current.itemDiscountTotal)) }
+                ForEach(current.adjustments) { adjustment in
+                    LabeledContent(adjustment.kind.title, value: signed(adjustment.kind == .discount ? -adjustment.amountCents : adjustment.amountCents))
+                }
+                if current.adjustments.isEmpty, current.globalOffsetTotal != 0 { LabeledContent("Tax and discounts", value: signed(current.globalOffsetTotal)) }
             }
 
             Section("Recent expenses with these people") {
@@ -163,6 +169,7 @@ struct ExpenseDetailView: View {
 }
 
 extension ExpenseDetailView {
+    private func signed(_ cents: Int) -> String { cents < 0 ? "−\((-cents).usd)" : cents.usd }
     private func loadReceipt() async {
         guard receipt == nil, current.receiptImageData == nil, let evidenceID = current.evidenceIDs.first else { return }
         isLoadingReceipt = true

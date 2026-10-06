@@ -7,8 +7,9 @@ import Vision
 import UIKit
 #endif
 
+/// What the rule-based parser read. It is the fallback when the on-device model can't read the receipt.
 struct ReceiptScan {
-    /// Items at their printed prices, with tax and discounts folded into each item's offset.
+    /// Items at their printed prices, with each item's own discount in its local offset.
     var items: [ReceiptItem] = []
     var taxCents = 0
     /// Discounts printed after the subtotal, which apply to the whole receipt.
@@ -20,10 +21,13 @@ struct ReceiptScan {
     /// Every line Vision read, saved with the receipt so a misread can be traced later.
     var recognizedText = ""
 
+    /// The items after their own discounts, plus tax, minus receipt-wide discounts.
+    var reconciledCents: Int { items.reduce(0) { $0 + $1.netCents } + taxCents - discountCents }
+
     /// Nil when the items, tax and discounts add up to the printed total, or when no total was found.
     var mismatchWarning: String? {
         guard let printed = printedTotalCents else { return nil }
-        let found = items.reduce(0) { $0 + $1.totalCents }
+        let found = reconciledCents
         guard found != printed else { return nil }
         return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the item prices."
     }
@@ -34,8 +38,7 @@ struct ExpenseSuggestion {
     var name: String
 }
 
-/// Fast, deterministic on-device suggestions from Vision's recognized text. This remains the fallback when the
-/// Apple Intelligence model is unavailable and keeps a model suggestion from becoming accounting truth.
+/// Keyword-based category and name suggestions, used with the parser when the on-device model is unavailable.
 enum ExpenseSuggester {
     static func suggest(from scan: ReceiptScan) -> ExpenseSuggestion {
         let evidence = ([scan.recognizedText] + scan.items.map(\.name)).joined(separator: "\n")
@@ -103,27 +106,11 @@ enum ReceiptTextRecognizer {
         var confidence: Float = 1
     }
 
-    #if canImport(UIKit)
-    static func scan(_ image: UIImage) async throws -> ReceiptScan {
-        guard let cgImage = image.cgImage else { return ReceiptScan() }
-        let orientation = image.cgImageOrientation
-        if #available(iOS 26.0, *) {
-            if let structured = try? await documentScan(cgImage, orientation: orientation) {
-                if !needsRetry(structured) { return structured }
-                let fallback = try legacyScan(cgImage, orientation: orientation)
-                return score(structured) >= score(fallback) ? structured : fallback
-            }
-        }
-        return try legacyScan(cgImage, orientation: orientation)
-    }
-    #endif
-
-    /// iOS 26 document recognition preserves line structure before the receipt-specific parser classifies rows.
-    @available(iOS 26.0, *)
-    private static func documentScan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) async throws -> ReceiptScan {
+    /// Document recognition's lines in reading order, which is the text the on-device model reads.
+    static func documentLines(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) async throws -> [Fragment] {
         let observations = try await RecognizeDocumentsRequest().perform(on: cgImage, orientation: orientation)
-        guard let document = observations.first?.document else { return ReceiptScan() }
-        let fragments = document.text.lines.compactMap { line -> Fragment? in
+        guard let document = observations.first?.document else { return [] }
+        return document.text.lines.compactMap { line -> Fragment? in
             let candidates = line.topCandidates(3)
             guard let first = candidates.first else { return nil }
             return Fragment(
@@ -133,7 +120,15 @@ enum ReceiptTextRecognizer {
                 confidence: first.confidence
             )
         }
-        return parse(fragments)
+    }
+
+    /// Parses the lines document recognition found. A full OCR pass runs as well only when they don't give a
+    /// credible reading, and the better of the two is kept.
+    static func scan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation, documentLines: [Fragment]) throws -> ReceiptScan {
+        let structured = parse(documentLines)
+        if !needsRetry(structured) { return structured }
+        let fallback = try legacyScan(cgImage, orientation: orientation)
+        return score(structured) >= score(fallback) ? structured : fallback
     }
 
     /// The already-cropped receipt gets one accurate pass. A second enhanced pass runs only when the
@@ -226,7 +221,7 @@ enum ReceiptTextRecognizer {
             if cents < 0 {
                 if role?.rejectsNegativeAmount == true { continue }
                 if !inSummary, let lastItem {
-                    scan.items[lastItem].offsetCents += cents
+                    scan.items[lastItem].localOffsetCents += cents
                 } else {
                     scan.discountCents -= cents
                 }
@@ -262,8 +257,7 @@ enum ReceiptTextRecognizer {
                 break
             }
         }
-        scan.items.spread(scan.taxCents - scan.discountCents)
-        let reconciled = scan.items.reduce(0) { $0 + $1.totalCents }
+        let reconciled = scan.reconciledCents
         scan.printedTotalCents = printedTotal?.cents ?? summaryAmounts.last(where: { $0 == reconciled })
         scan.purchaseDate = purchaseDate(in: fragments.map(\.text))
         scan.recognizedText = fragments.map(\.text).joined(separator: "\n")

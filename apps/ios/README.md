@@ -1,6 +1,6 @@
 # Receipt Divider for iOS
 
-This native iPhone reference client is written in SwiftUI and targets iOS 17 or later.
+This native iPhone reference client is written in SwiftUI and targets iOS 26 or later.
 
 For automatic builds and wireless iPhone installation after pushes to `main`, see [Wireless deployment](WIRELESS_DEPLOYMENT.md).
 
@@ -8,9 +8,9 @@ Use `TabView`, `NavigationStack`, toolbars, sheets, and standard buttons. Do not
 
 On a Mac, install [XcodeGen](https://github.com/yonaskolb/XcodeGen), copy `Signing.local.xcconfig.example` to `Signing.local.xcconfig` and set your Apple Developer team ID (the copy is gitignored), run `xcodegen generate` in this folder, and open `ReceiptDivider.xcodeproj` in the newest Xcode. Xcode resolves the Supabase Swift package within the 2.x release line. Test on a current iPhone to validate authentication, Sign in with Apple, and the system Liquid Glass behavior.
 
-Run the `ReceiptDividerTests` test target on a simulator to verify receipt summary classification and total reconciliation fixtures.
+Run the tests on a simulator with `xcodebuild -project ReceiptDivider.xcodeproj -scheme ReceiptDivider -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test`. They cover the adjustment math, item ownership, and the fallback parser. `ReceiptModelFixtureTests` runs the on-device model on sample receipt text when Apple Intelligence is available (it is skipped otherwise) and logs known gaps as expected failures.
 
-The app opens through a custom SwiftUI authentication gate. Email and password is the primary sign-in/create-account method, with iOS Password AutoFill, emailed password reset, and native Sign in with Apple. New accounts also collect real first name, real last name, and a unique username. Supabase restores and refreshes a saved device session automatically; Settings provides sign out. Once authenticated, the app provisions the account profile, loads the canonical ledger from the deployed Edge Function, and posts expenses, optional receipt evidence, repayments, and friend requests with the current access token. An account-scoped device cache supports display continuity, but Supabase is canonical. Camera/photo intake, document cropping, Vision receipt extraction, and Foundation Models refinement remain on-device. iOS 26 uses `RecognizeDocumentsRequest`; iOS 17–25 use one accurate OCR pass with an enhanced retry only when the first result is incomplete or does not reconcile. Generative refinement never blocks Review and runs only when Apple Intelligence is available.
+The app opens through a custom SwiftUI authentication gate. Email and password is the primary sign-in/create-account method, with iOS Password AutoFill, emailed password reset, and native Sign in with Apple. New accounts also collect real first name, real last name, and a unique username. Supabase restores and refreshes a saved device session automatically; Settings provides sign out. Once authenticated, the app provisions the account profile, loads the canonical ledger from the deployed Edge Function, and posts expenses, optional receipt evidence, repayments, and friend requests with the current access token. An account-scoped device cache supports display continuity, but Supabase is canonical. Camera/photo intake, document cropping, text recognition, and receipt reading stay on-device. `RecognizeDocumentsRequest` recognizes the text; `ReceiptReader` (`ReceiptExtraction.swift`) has the Foundation Models model read it into `ReceiptReading` while participants are chosen, and falls back to the rule-based `ReceiptTextRecognizer` parser when Apple Intelligence is unavailable. `ReceiptAdjustments.swift` holds the deterministic math: quantity rows, and ordered discounts, taxes, tip, and surcharges that set each item's global offset.
 
 ## Supabase setup
 

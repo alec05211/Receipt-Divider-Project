@@ -29,7 +29,7 @@ final class ItemOwnershipTests: XCTestCase {
     }
 
     func testTaxAndDiscountsFollowTheItem() {
-        let items = [ReceiptItem(name: "Wine", cents: 2_000, offsetCents: 160, ownerIDs: [ben, willem])]
+        let items = [ReceiptItem(name: "Wine", cents: 2_000, globalOffsetCents: 160, ownerIDs: [ben, willem])]
         XCTAssertEqual(items.ownerShares(for: [ben, willem]), [ben: 1_080, willem: 1_080])
     }
 }

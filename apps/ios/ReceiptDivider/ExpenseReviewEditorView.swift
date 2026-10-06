@@ -18,6 +18,7 @@ struct ExpenseReviewEditorView: View {
     @Binding private var externalShares: [UUID: Int]
     @Binding private var externalItems: [ReceiptItem]
     @Binding private var externalItemAssignments: [UUID: Set<UUID>]
+    @Binding private var externalAdjustments: [ReceiptAdjustment]
     private let externalContributionDetents: [UUID: Int]
 
     @State private var internalCategory: ExpenseCategory?
@@ -28,6 +29,7 @@ struct ExpenseReviewEditorView: View {
     @State private var internalShares: [UUID: Int] = [:]
     @State private var internalItems: [ReceiptItem] = []
     @State private var internalItemAssignments: [UUID: Set<UUID>] = [:]
+    @State private var internalAdjustments: [ReceiptAdjustment] = []
 
     let participants: [UUID]
     let isEditable: Bool
@@ -66,6 +68,19 @@ struct ExpenseReviewEditorView: View {
     }
     private var itemAssignmentsBinding: Binding<[UUID: Set<UUID>]> {
         mode == .draft ? $externalItemAssignments : $internalItemAssignments
+    }
+    private var adjustmentsBinding: Binding<[ReceiptAdjustment]> {
+        mode == .draft ? $externalAdjustments : $internalAdjustments
+    }
+    /// The tip's amount is the price of the tip row, so editing it here edits that row.
+    private var tipBinding: Binding<Int> {
+        Binding(
+            get: { itemsBinding.wrappedValue.filter { $0.kind == .tip }.reduce(0) { $0 + $1.cents } },
+            set: { cents in
+                guard let index = itemsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) else { return }
+                itemsBinding.wrappedValue[index].cents = max(0, cents)
+            }
+        )
     }
 
     private var isSaving: Bool {
@@ -107,6 +122,7 @@ struct ExpenseReviewEditorView: View {
         payer: Binding<UUID?>,
         purchaseDate: Binding<Date>,
         shares: Binding<[UUID: Int]>,
+        adjustments: Binding<[ReceiptAdjustment]> = .constant([]),
         contributionDetents: [UUID: Int],
         participants: [UUID],
         items: Binding<[ReceiptItem]> = .constant([]),
@@ -128,6 +144,7 @@ struct ExpenseReviewEditorView: View {
         self._externalShares = shares
         self._externalItems = items
         self._externalItemAssignments = itemAssignments
+        self._externalAdjustments = adjustments
         self.externalContributionDetents = contributionDetents
         self.participants = participants
         self.isEditable = isEditable
@@ -151,6 +168,7 @@ struct ExpenseReviewEditorView: View {
         self._externalShares = .constant([:])
         self._externalItems = .constant([])
         self._externalItemAssignments = .constant([:])
+        self._externalAdjustments = .constant([])
         self.externalContributionDetents = [:]
 
         self._internalCategory = State(initialValue: expense.category)
@@ -161,6 +179,7 @@ struct ExpenseReviewEditorView: View {
         self._internalShares = State(initialValue: expense.shares)
         self._internalItems = State(initialValue: expense.items)
         self._internalItemAssignments = State(initialValue: Dictionary(uniqueKeysWithValues: expense.items.map { ($0.id, $0.ownerIDs) }))
+        self._internalAdjustments = State(initialValue: expense.adjustments)
 
         self.participants = expense.participants
         self.isEditable = isEditable
@@ -215,6 +234,29 @@ struct ExpenseReviewEditorView: View {
 
                 DatePicker("Date of expense", selection: dateBinding, displayedComponents: .date)
                     .disabled(!isEditable)
+            }
+
+            if !adjustmentsBinding.wrappedValue.isEmpty {
+                Section {
+                    ForEach(adjustmentsBinding) { $adjustment in
+                        LabeledContent(adjustment.kind.title) {
+                            // Saved expenses keep the adjustments they were split with.
+                            let editable = isEditable && mode == .draft
+                            if adjustment.kind == .tip {
+                                if editable { CentsField(title: "0.00", cents: tipBinding) } else { Text(tipBinding.wrappedValue.usd) }
+                            } else {
+                                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                    if editable { RateField(rate: $adjustment.rate) } else { Text(RateField.format(adjustment.rate) + "%") }
+                                    Text("(\(adjustment.kind == .discount ? "−" : "")\(adjustment.amountCents.usd))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .monospacedDigit()
+                                .fixedSize()
+                            }
+                        }
+                    }
+                }
             }
 
             if showsAssignmentSection {

@@ -8,7 +8,7 @@ packages:
 settings:
   base:
     SWIFT_VERSION: 6.0
-    IPHONEOS_DEPLOYMENT_TARGET: 17.0
+    IPHONEOS_DEPLOYMENT_TARGET: 26.0
 targets:
   ReceiptDivider:
     type: application
@@ -26,6 +26,8 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.receiptdivider.app.auth
             CFBundleURLSchemes: [receiptdivider]
+    scheme:
+      testTargets: [ReceiptDividerTests]
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
@@ -33,6 +35,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.receiptdivider.app
         PRODUCT_NAME: Receipt Divider
+        # Keeps `@testable import ReceiptDivider` working despite the space in the product name.
+        PRODUCT_MODULE_NAME: ReceiptDivider
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Receipt Divider
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -52,3 +56,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.receiptdivider.tests
+        GENERATE_INFOPLIST_FILE: YES
+        # The app's product name has a space, so the default test host path doesn't exist.
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Receipt Divider.app/Receipt Divider
+        BUNDLE_LOADER: $(TEST_HOST)
