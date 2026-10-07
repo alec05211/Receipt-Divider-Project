@@ -77,12 +77,12 @@ export class PostgresRepository implements LedgerRepository {
     });
   }
   async getSettings(userId: UUID): Promise<UserSettings> {
-    const rows = await this.sql`SELECT currency, slider_unit FROM user_settings WHERE user_id=${userId}`;
+    const rows = await this.sql`SELECT currency, slider_unit, tip_split FROM user_settings WHERE user_id=${userId}`;
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
     return mapSettings(rows[0]!);
   }
-  async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit">>): Promise<UserSettings> {
-    const rows = await this.sql`UPDATE user_settings SET slider_unit=coalesce(${changes.sliderUnit ?? null}, slider_unit), updated_at=now() WHERE user_id=${userId} RETURNING currency, slider_unit`;
+  async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">>): Promise<UserSettings> {
+    const rows = await this.sql`UPDATE user_settings SET slider_unit=coalesce(${changes.sliderUnit ?? null}, slider_unit), tip_split=coalesce(${changes.tipSplit ?? null}, tip_split), updated_at=now() WHERE user_id=${userId} RETURNING currency, slider_unit, tip_split`;
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
     return mapSettings(rows[0]!);
   }
@@ -250,7 +250,7 @@ async function requireFriends(sql: any, userId: UUID, ids: UUID[]): Promise<void
 }
 
 function mapProfile(row: any): Profile { return { id: row.id, firstName: row.first_name, lastName: row.last_name, username: row.username, displayName: row.display_name, isDeveloper: row.is_developer }; }
-function mapSettings(row: any): UserSettings { return { currency: row.currency, sliderUnit: row.slider_unit }; }
+function mapSettings(row: any): UserSettings { return { currency: row.currency, sliderUnit: row.slider_unit, tipSplit: row.tip_split }; }
 function mapLedgerPerson(row: any): LedgerPerson { return { userId: row.id, displayName: row.display_name, username: row.username, avatarEtag: row.avatar_etag }; }
 function mapItems(rows: any[], owners: any[]): ExpenseItem[] {
   return rows.map((row) => ({ name: row.name, amountCents: Number(row.amount_cents), localOffsetCents: Number(row.local_offset_cents), globalOffsetCents: Number(row.global_offset_cents), kind: row.kind, taxed: row.taxed, ownerIds: owners.filter((o) => o.position === row.position).map((o) => o.user_id) }));

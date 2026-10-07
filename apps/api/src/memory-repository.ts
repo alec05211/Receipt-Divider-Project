@@ -78,12 +78,12 @@ export class MemoryRepository implements LedgerRepository {
   async ensureProfile(userId: UUID): Promise<Profile> {
     const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null, isDeveloper: false };
     this.profiles.set(userId, profile);
-    if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "percent" }); this.filters.set(userId, []); }
+    if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "percent", tipSplit: "even" }); this.filters.set(userId, []); }
     return { ...profile, isDeveloper: this.developerIds.has(userId) };
   }
   async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.developerIds.has(userId) }; }
   async getSettings(userId: UUID): Promise<UserSettings> { this.requireProfile(userId); return { ...this.settings.get(userId)! }; }
-  async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit">>): Promise<UserSettings> {
+  async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">>): Promise<UserSettings> {
     this.requireProfile(userId);
     const updated = { ...this.settings.get(userId)!, ...changes }; this.settings.set(userId, updated); return { ...updated };
   }

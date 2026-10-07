@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var showServerReset = false
     @AppStorage(ContributionSliderUnit.storageKey) private var sliderUnit: ContributionSliderUnit = .percent
     @AppStorage(ReceiptDiagnostics.lastScanKey) private var lastScan = ""
+    @AppStorage(TipSplit.storageKey) private var tipSplit: TipSplit = .even
 
     var body: some View {
         NavigationStack {
@@ -43,6 +44,10 @@ struct SettingsView: View {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
                         .onChange(of: sliderUnit) { _, unit in
                             Task { if let token = try? await authentication.accessToken() { await store.updateSliderUnit(unit, accessToken: token) } }
+                        }
+                    Picker("Split tip", selection: $tipSplit) { ForEach(TipSplit.allCases) { Text($0.title).tag($0) } }
+                        .onChange(of: tipSplit) { _, split in
+                            Task { if let token = try? await authentication.accessToken() { await store.updateTipSplit(split, accessToken: token) } }
                         }
                 }
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }

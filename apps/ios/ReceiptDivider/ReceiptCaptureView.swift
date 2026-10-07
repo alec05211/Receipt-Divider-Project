@@ -24,6 +24,7 @@ struct ReceiptCaptureView: View {
     @State private var diagnostics: ReceiptDiagnostics?
     /// Which reader handled the last scan and how long it took, shown in Settings for developers.
     @AppStorage(ReceiptDiagnostics.lastScanKey) private var lastScan = ""
+    @AppStorage(TipSplit.storageKey) private var tipSplit: TipSplit = .even
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -55,10 +56,9 @@ struct ReceiptCaptureView: View {
         if splitsPrintedTotal, let printedTotalCents { return printedTotalCents }
         return max(0, expenseItems.reduce(0) { $0 + $1.totalCents } + adjustments.tipCents)
     }
-    /// What each person owes from ownership: their items, plus an equal part of the tip.
+    /// What each person owes from ownership: their items, plus their part of the tip as chosen in Settings.
     private func ownershipShares(_ items: [ReceiptItem]) -> [UUID: Int] {
-        let tip = adjustments.tipCents
-        return (items + (tip > 0 ? [ReceiptItem(name: "Tip", cents: tip, ownerIDs: selectedPeople)] : [])).ownerShares(for: orderedSelection)
+        (items + items.tipRows(adjustments.tipCents, among: selectedPeople, split: tipSplit)).ownerShares(for: orderedSelection)
     }
     /// An even split of the printed total, used only after Split All.
     private var printedTotalShares: [UUID: Int]? {

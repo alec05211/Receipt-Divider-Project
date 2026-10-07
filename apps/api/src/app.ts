@@ -50,10 +50,14 @@ export function createApp(
   app.get("/v1/settings", async (context) => context.json(await repository.getSettings(userId(context))));
   app.patch("/v1/settings", async (context) => {
     const body = await jsonBody(context);
-    const changes: Partial<Pick<UserSettings, "sliderUnit">> = {};
+    const changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">> = {};
     if (body.sliderUnit !== undefined) {
       if (body.sliderUnit !== "dollars" && body.sliderUnit !== "percent") throw new ApiError(400, "sliderUnit must be dollars or percent", "invalid_input");
       changes.sliderUnit = body.sliderUnit;
+    }
+    if (body.tipSplit !== undefined) {
+      if (body.tipSplit !== "even" && body.tipSplit !== "proportional") throw new ApiError(400, "tipSplit must be even or proportional", "invalid_input");
+      changes.tipSplit = body.tipSplit;
     }
     return context.json(await repository.updateSettings(userId(context), changes));
   });

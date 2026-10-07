@@ -21,6 +21,7 @@ struct ExpenseReviewEditorView: View {
     @Binding private var externalAdjustments: [ReceiptAdjustment]
     private let externalContributionDetents: [UUID: Int]
 
+    @AppStorage(TipSplit.storageKey) private var tipSplit: TipSplit = .even
     @State private var internalCategory: ExpenseCategory?
     @State private var internalDescription: String = ""
     @State private var internalTotal: Int = 0
@@ -85,13 +86,12 @@ struct ExpenseReviewEditorView: View {
             let existingOwners = ownedItems[index].ownerIDs
             ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id] ?? existingOwners
         }
-        return (ownedItems + tipItem).ownerShares(for: participants)
+        return (ownedItems + tipRows(for: ownedItems)).ownerShares(for: participants)
     }
 
-    /// The tip as a row everyone owns, so it's split evenly when shares come from ownership.
-    private var tipItem: [ReceiptItem] {
-        let tip = adjustmentsBinding.wrappedValue.tipCents
-        return tip > 0 ? [ReceiptItem(name: "Tip", cents: tip, ownerIDs: Set(participants))] : []
+    /// The tip as rows split the way Settings says, so shares from ownership include it.
+    private func tipRows(for ownedItems: [ReceiptItem]) -> [ReceiptItem] {
+        ownedItems.tipRows(adjustmentsBinding.wrappedValue.tipCents, among: Set(participants), split: tipSplit)
     }
 
     private var showsAssignmentSection: Bool {
@@ -399,7 +399,7 @@ struct ExpenseReviewEditorView: View {
         for index in ownedItems.indices {
             ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id, default: []]
         }
-        sharesBinding.wrappedValue = (ownedItems + tipItem).ownerShares(for: participants)
+        sharesBinding.wrappedValue = (ownedItems + tipRows(for: ownedItems)).ownerShares(for: participants)
         let newTotal = itemsBinding.wrappedValue.filter {
             !(itemAssignmentsBinding.wrappedValue[$0.id]?.isEmpty ?? true)
         }.reduce(0) { $0 + $1.totalCents } + adjustmentsBinding.wrappedValue.tipCents

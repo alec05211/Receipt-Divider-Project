@@ -63,6 +63,28 @@ extension Array where Element == ReceiptItem {
         return result
     }
 }
+
+/// How starting contributions split a receipt's tip; chosen in Settings and saved to the account.
+enum TipSplit: String, CaseIterable, Identifiable {
+    case even, proportional
+    static let storageKey = "tipSplit"
+    var id: Self { self }
+    var title: String { self == .even ? "Evenly" : "By items" }
+}
+
+extension Array where Element == ReceiptItem {
+    /// The tip as rows to add to these items before `ownerShares`. Evenly, it's one row everyone in `people` owns. In
+    /// proportion, it's divided over the owned items by their totals, each part owned by that item's owners, so each
+    /// person's share follows what they had; with no owned items it's split evenly.
+    func tipRows(_ tipCents: Int, among people: Set<UUID>, split: TipSplit) -> [ReceiptItem] {
+        guard tipCents > 0 else { return [] }
+        let owned = filter { !$0.ownerIDs.isDisjoint(with: people) && $0.totalCents > 0 }
+        guard split == .proportional, !owned.isEmpty else { return [ReceiptItem(name: "Tip", cents: tipCents, kind: .tip, ownerIDs: people)] }
+        return zip(owned, ReceiptMath.distribute(tipCents, over: owned.map(\.totalCents))).map { item, cents in
+            ReceiptItem(name: "Tip", cents: cents, kind: .tip, ownerIDs: item.ownerIDs.intersection(people))
+        }
+    }
+}
 /// `payer` and the keys of `shares` are user IDs. `receiptImageData` and `recognizedText` are only set before saving;
 /// saved receipts are fetched by `evidenceIDs`. Expenses split from the same receipt share its evidence ID.
 struct Expense: Identifiable, Hashable, Codable {
@@ -227,7 +249,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         do {
             profile = try await api.ensureProfile(token: accessToken)
             isDeveloper = profile?.isDeveloper ?? false
-            if let settings = try? await api.settings(token: accessToken) { applySliderUnit(settings.sliderUnit) }
+            if let settings = try? await api.settings(token: accessToken) { applySliderUnit(settings.sliderUnit); applyTipSplit(settings.tipSplit) }
             if let identity { profile = try await api.updateIdentity(identity, token: accessToken) }
             try await refresh(accessToken: accessToken)
             friends = try await api.friends(token: accessToken)
@@ -302,6 +324,20 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         savedSliderUnit = rawValue
         guard let rawValue, ContributionSliderUnit(rawValue: rawValue) != nil else { return }
         UserDefaults.standard.set(rawValue, forKey: ContributionSliderUnit.storageKey)
+    }
+
+    /// Saves the tip split to the account, restoring the account's choice if the server rejects it.
+    func updateTipSplit(_ split: TipSplit, accessToken: String) async {
+        guard let api, split.rawValue != savedTipSplit else { return }
+        do { applyTipSplit(try await api.updateTipSplit(split.rawValue, token: accessToken).tipSplit) }
+        catch { applyTipSplit(savedTipSplit) }
+    }
+    /// The tip split last confirmed by the server; the phone keeps a copy for contributions to read.
+    private var savedTipSplit: String?
+    private func applyTipSplit(_ rawValue: String?) {
+        savedTipSplit = rawValue
+        guard let rawValue, TipSplit(rawValue: rawValue) != nil else { return }
+        UserDefaults.standard.set(rawValue, forKey: TipSplit.storageKey)
     }
 
     func updateProfile(_ identity: AccountIdentity, accessToken: String) async throws {
@@ -494,6 +530,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         profile = nil
         isDeveloper = false
         savedSliderUnit = nil
+        savedTipSplit = nil
         avatars = [:]
         receiptImages = [:]
         pendingEvidenceIDs = [:]

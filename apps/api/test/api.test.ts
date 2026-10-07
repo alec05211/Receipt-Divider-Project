@@ -341,14 +341,17 @@ test("removing someone who isn't a friend is a 404", async () => {
   assert.equal((await request(app, "/v1/friends/not-a-uuid", alex, { method: "DELETE" })).status, 400);
 });
 
-test("settings start at USD and percent, and the slider unit can be changed", async () => {
+test("settings start at USD, percent and an even tip, and can be changed", async () => {
   const { app } = await setup();
-  assert.deepEqual(await (await request(app, "/v1/settings", alex)).json(), { currency: "USD", sliderUnit: "percent" });
+  assert.deepEqual(await (await request(app, "/v1/settings", alex)).json(), { currency: "USD", sliderUnit: "percent", tipSplit: "even" });
   const changed = await jsonRequest(app, "/v1/settings", alex, "PATCH", { sliderUnit: "dollars" });
-  assert.equal(changed.status, 200); assert.deepEqual(await changed.json(), { currency: "USD", sliderUnit: "dollars" });
+  assert.equal(changed.status, 200); assert.deepEqual(await changed.json(), { currency: "USD", sliderUnit: "dollars", tipSplit: "even" });
   assert.equal(((await (await request(app, "/v1/settings", alex)).json()) as { sliderUnit: string }).sliderUnit, "dollars");
   assert.equal(((await (await request(app, "/v1/settings", jamie)).json()) as { sliderUnit: string }).sliderUnit, "percent");
   assert.equal((await jsonRequest(app, "/v1/settings", alex, "PATCH", { sliderUnit: "euros" })).status, 400);
+  const tip = await (await jsonRequest(app, "/v1/settings", alex, "PATCH", { tipSplit: "proportional" })).json() as { sliderUnit: string; tipSplit: string };
+  assert.deepEqual([tip.sliderUnit, tip.tipSplit], ["dollars", "proportional"]);
+  assert.equal((await jsonRequest(app, "/v1/settings", alex, "PATCH", { tipSplit: "randomly" })).status, 400);
 });
 
 test("a developer can reset every expense and payment while accounts and friendships stay", async () => {

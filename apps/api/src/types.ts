@@ -148,7 +148,9 @@ export interface LedgerSnapshot {
 
 export type SliderUnit = "dollars" | "percent";
 /** Account-wide preferences. Currency is fixed for now; the slider unit is how contributions are entered. */
-export interface UserSettings { currency: string; sliderUnit: SliderUnit; }
+/** How starting contributions split a receipt's tip: equally per person, or in proportion to what each person had. */
+export type TipSplit = "even" | "proportional";
+export interface UserSettings { currency: string; sliderUnit: SliderUnit; tipSplit: TipSplit; }
 
 export interface StoredImage { contentType: string; bytes: Uint8Array; etag: string; }
 
@@ -158,7 +160,7 @@ export interface LedgerRepository {
   ensureProfile(userId: UUID): Promise<Profile>;
   getProfile(userId: UUID): Promise<Profile>;
   getSettings(userId: UUID): Promise<UserSettings>;
-  updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit">>): Promise<UserSettings>;
+  updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">>): Promise<UserSettings>;
   updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
   searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]>;
   listFriends(userId: UUID): Promise<FriendConnection[]>;
