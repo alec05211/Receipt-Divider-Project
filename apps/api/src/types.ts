@@ -27,6 +27,28 @@ export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: stri
 export const expenseCategories = ["groceries", "restaurant", "movie", "concert"] as const;
 export type ExpenseCategory = typeof expenseCategories[number];
 
+export interface ParsedReceiptItem {
+  name: string;
+  cents: number;
+}
+
+export interface ParsedReceipt {
+  merchant: string | null;
+  category: ExpenseCategory | null;
+  expenseName: string | null;
+  transactionDate: string | null;
+  items: ParsedReceiptItem[];
+  taxCents: number;
+  tipCents: number;
+  discountCents: number;
+  totalCents: number | null;
+  recognizedText: string;
+}
+
+export interface ReceiptVisionParser {
+  parseReceipt(contentType: string, bytes: Uint8Array): Promise<ParsedReceipt>;
+}
+
 /**
  * `ownerIds` are the people who had the item; each must be the payer or have an allocation on the expense. An item with no owners
  * belongs to the payer. Owners record who had what; the allocations alone set what each person owes.

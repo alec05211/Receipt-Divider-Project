@@ -260,6 +260,12 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         return image
     }
 
+    /// Sends a receipt JPEG to the backend for cloud vision parsing (via OpenAI gpt-4o-mini).
+    func parseReceiptImage(_ jpegData: Data, accessToken: String) async throws -> APIParsedReceipt {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        return try await api.parseReceiptImage(jpegData, token: accessToken)
+    }
+
     /// Uploads a square, 512-point JPEG of the chosen photo as the signed-in user's profile picture.
     func uploadAvatar(_ image: UIImage, userID: UUID, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
@@ -579,7 +585,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
 
     /// Transaction dates are calendar days, so they're read and written in the user's time zone. Using UTC here
     /// turned a saved "2026-09-27" into 5 PM on the 26th in US time zones, and pushed evening dates to the next day.
-    private static let dayFormatter: DateFormatter = {
+    static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")

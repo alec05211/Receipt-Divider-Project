@@ -95,6 +95,16 @@ actor LedgerAPIClient {
         )
     }
 
+    func parseReceiptImage(_ data: Data, token: String) async throws -> APIParsedReceipt {
+        try await send(
+            path: "/v1/receipts/parse",
+            method: "POST",
+            token: token,
+            contentType: "image/jpeg",
+            body: data
+        )
+    }
+
     func putEvidenceText(_ text: String, evidenceID: UUID, token: String) async throws {
         let (data, status) = try await perform(path: "/v1/evidence/\(evidenceID.uuidString.lowercased())/text", method: "PUT", token: token, contentType: "application/json", body: encoder.encode(["text": text]))
         try check(data: data, status: status)
@@ -163,6 +173,19 @@ struct APISettings: Decodable, Sendable { let currency: String; let sliderUnit: 
 /// Someone in the caller's ledger: themselves, a friend, or anyone they share a transaction with.
 struct APILedgerPerson: Decodable, Sendable { let userId: UUID; let displayName: String?; let username: String?; let avatarEtag: String? }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }
+struct APIParsedReceiptItem: Decodable, Sendable { let name: String; let cents: Int }
+struct APIParsedReceipt: Decodable, Sendable {
+    let merchant: String?
+    let category: String?
+    let expenseName: String?
+    let transactionDate: String?
+    let items: [APIParsedReceiptItem]
+    let taxCents: Int
+    let tipCents: Int
+    let discountCents: Int
+    let totalCents: Int?
+    let recognizedText: String
+}
 /// `ownerIds` are the people who had the item; an item sent without owners belongs to the payer.
 struct APIExpenseItem: Codable, Sendable { let name: String; let amountCents: Int; let offsetCents: Int?; let ownerIds: [UUID]? }
 struct APIAllocation: Codable, Sendable { let userId: UUID; let amountCents: Int }

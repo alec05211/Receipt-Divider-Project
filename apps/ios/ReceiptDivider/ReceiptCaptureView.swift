@@ -327,6 +327,16 @@ struct ReceiptCaptureView: View {
         let analysisID = UUID()
         receiptAnalysisID = analysisID
         Task { @MainActor in
+            // Try cloud vision parsing first when online and authenticated.
+            if let jpeg = image.jpegData(compressionQuality: 0.8),
+               let token = try? await authentication.accessToken(),
+               let parsed = try? await store.parseReceiptImage(jpeg, accessToken: token) {
+                guard receiptAnalysisID == analysisID else { return }
+                applyCloudParsedReceipt(parsed)
+                return
+            }
+
+            // Fallback: on-device Apple Vision OCR followed by local Foundation Models semantic refinement.
             let scan = (try? await ReceiptTextRecognizer.scan(image)) ?? ReceiptScan()
             guard receiptAnalysisID == analysisID else { return }
             let suggestion = ExpenseSuggester.suggest(from: scan)
@@ -372,6 +382,38 @@ struct ReceiptCaptureView: View {
             if purchaseDate == originalDate, let refinedDate = analysis.scan.purchaseDate { purchaseDate = refinedDate }
             if error == originalError { error = analysis.scan.mismatchWarning }
         }
+    }
+
+    private func applyCloudParsedReceipt(_ parsed: APIParsedReceipt) {
+        items = parsed.items.map { ReceiptItem(name: $0.name, cents: $0.cents, isSelected: true) }
+        recognizedText = parsed.recognizedText
+        printedTotalCents = parsed.totalCents
+        category = parsed.category.flatMap { ExpenseCategory(rawValue: $0) }
+        if let name = parsed.expenseName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            description = name
+        } else if let merchant = parsed.merchant, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            description = "\(merchant) Expense"
+        } else {
+            description = "Shared Expense"
+        }
+        if let rawDate = parsed.transactionDate, let date = ExpenseStore.dayFormatter.date(from: rawDate) {
+            purchaseDate = date
+        }
+        if items.isEmpty {
+            items = [ReceiptItem(name: "", cents: parsed.totalCents ?? 0, isSelected: true)]
+            error = parsed.totalCents == nil ? "No prices found." : nil
+        } else if items.count == 1, let printed = parsed.totalCents {
+            matchPrintedTotal(printed)
+            error = nil
+        } else if let printed = parsed.totalCents {
+            let found = items.reduce(0) { $0 + $1.totalCents }
+            error = found != printed
+                ? "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the item prices."
+                : nil
+        } else {
+            error = nil
+        }
+        step = .review
     }
     /// A single item's total is edited directly; this replaces its price and drops its prior tax or discount offset.
     private var totalBinding: Binding<Int> {

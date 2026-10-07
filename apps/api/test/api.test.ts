@@ -338,3 +338,106 @@ test("Supabase JWT authentication accepts only signed authenticated-user tokens"
   const valid = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("authenticated")}`} }); assert.equal(valid.status, 200);
   const wrongRole = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("anon")}`} }); assert.equal(wrongRole.status, 401);
 });
+
+test("receipt vision parser parses structured receipt data via OpenAI gpt-4o-mini", async () => {
+  const { createOpenAIReceiptParser } = await import("../src/receipt-vision.ts");
+  let capturedBody: any = null;
+
+  const parser = createOpenAIReceiptParser({
+    apiKey: "test-openai-key",
+    fetchFn: async (_url, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              merchant: "Trader Joe's",
+              category: "groceries",
+              expenseName: "Trader Joe's Groceries",
+              transactionDate: "2026-10-06",
+              items: [
+                { name: "Organic Bananas", cents: 249 },
+                { name: "Almond Milk", cents: 399 }
+              ],
+              taxCents: 50,
+              tipCents: 0,
+              discountCents: 0,
+              totalCents: 698,
+              recognizedText: "TRADER JOE'S\nBANANAS 2.49\nALMOND MILK 3.99\nTOTAL 6.98"
+            })
+          }
+        }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+  });
+
+  const jpegBytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  const result = await parser.parseReceipt("image/jpeg", jpegBytes);
+
+  assert.equal(result.merchant, "Trader Joe's");
+  assert.equal(result.category, "groceries");
+  assert.equal(result.expenseName, "Trader Joe's Groceries");
+  assert.equal(result.transactionDate, "2026-10-06");
+  assert.equal(result.items.length, 2);
+  assert.equal(result.items[0]?.name, "Organic Bananas");
+  assert.equal(result.items[0]?.cents, 249);
+  assert.equal(result.totalCents, 698);
+  assert.equal(result.taxCents, 50);
+
+  assert.equal(capturedBody.model, "gpt-4o-mini");
+  assert.ok(capturedBody.messages[1].content[1].image_url.url.startsWith("data:image/jpeg;base64,"));
+});
+
+test("POST /v1/receipts/parse routes authenticated image to receipt vision parser", async () => {
+  const jpegBytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02]);
+  const mockParser = {
+    async parseReceipt(contentType: string, bytes: Uint8Array) {
+      assert.equal(contentType, "image/jpeg");
+      assert.deepEqual(bytes, jpegBytes);
+      return {
+        merchant: "Supermarket",
+        category: "groceries" as const,
+        expenseName: "Supermarket Groceries",
+        transactionDate: "2026-10-06",
+        items: [{ name: "Apples", cents: 450 }],
+        taxCents: 0,
+        tipCents: 0,
+        discountCents: 0,
+        totalCents: 450,
+        recognizedText: "APPLES 4.50"
+      };
+    }
+  };
+
+  const app = createApp(new MemoryRepository(), async (context) => context.req.header("x-user-id") ?? null, mockParser);
+
+  // Authenticated parse succeeds
+  const response = await app.request("/v1/receipts/parse", {
+    method: "POST",
+    headers: { "x-user-id": alex, "content-type": "image/jpeg" },
+    body: jpegBytes
+  });
+  assert.equal(response.status, 200);
+  const data = await response.json() as any;
+  assert.equal(data.merchant, "Supermarket");
+  assert.equal(data.items.length, 1);
+  assert.equal(data.items[0].cents, 450);
+
+  // Unauthenticated call is rejected with 401
+  const unauth = await app.request("/v1/receipts/parse", {
+    method: "POST",
+    headers: { "content-type": "image/jpeg" },
+    body: jpegBytes
+  });
+  assert.equal(unauth.status, 401);
+
+  // HEIC/HEIF is rejected with 415
+  const heicBytes = Uint8Array.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
+  const heicResponse = await app.request("/v1/receipts/parse", {
+    method: "POST",
+    headers: { "x-user-id": alex, "content-type": "image/heic" },
+    body: heicBytes
+  });
+  assert.equal(heicResponse.status, 415);
+});
+

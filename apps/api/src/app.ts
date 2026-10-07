@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { hasImageSignature, requireUuid } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseChanges, LedgerRepository, UserSettings, UUID } from "./types.ts";
+import { createOpenAIReceiptParser } from "./receipt-vision.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const avatarLimit = 5 * 1024 * 1024;
@@ -13,7 +14,11 @@ const evidenceKinds = new Set<EvidenceKind>(["receipt", "restaurant_check", "tic
 
 export type Authenticator = (context: Context) => Promise<UUID | null>;
 
-export function createApp(repository: LedgerRepository, authenticate: Authenticator) {
+export function createApp(
+  repository: LedgerRepository,
+  authenticate: Authenticator,
+  receiptVisionParser: ReceiptVisionParser = createOpenAIReceiptParser(),
+) {
   const app = new Hono();
 
   app.onError((error, context) => {
@@ -90,6 +95,14 @@ export function createApp(repository: LedgerRepository, authenticate: Authentica
     if (text.length > evidenceTextLimit) throw new ApiError(400, `text must be at most ${evidenceTextLimit} characters`, "invalid_input");
     if (!await repository.putEvidenceText(userId(context), requireUuid(context.req.param("evidenceId"), "evidenceId"), text)) throw new ApiError(404, "evidence not found", "not_found");
     return context.body(null, 204);
+  });
+
+  app.post("/v1/receipts/parse", async (context) => {
+    const image = await imageBody(context, evidenceLimit);
+    if (image.contentType === "image/heic" || image.contentType === "image/heif") {
+      throw new ApiError(415, "receipt parsing requires JPEG, PNG, or WebP", "unsupported_media_type");
+    }
+    return context.json(await receiptVisionParser.parseReceipt(image.contentType, image.bytes));
   });
 
   app.post("/v1/expenses", async (context) => context.json(
