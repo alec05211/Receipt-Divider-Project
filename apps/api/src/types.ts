@@ -33,14 +33,18 @@ export type ReceiptRowKind = typeof receiptRowKinds[number];
 
 /**
  * A receipt read from its photo: its printed rows top to bottom, each with a label, plus what only reading it can tell.
- * Amounts stay in each row's text; the app reads them and works out the expense as it does for an on-device reading.
+ * Amounts stay as printed; the app reads them and works out the expense as it does for an on-device reading.
  * Empty strings mean not found.
  */
 export interface ReceiptReading {
   merchant: string;
   category: string;
   purchaseDate: string;
-  rows: { text: string; kind: ReceiptRowKind; taxed: boolean }[];
+  /**
+   * `text` is the row without its price; `price` is the amount at its right end as printed, or empty. `name` is an
+   * item's name with misreads fixed and abbreviations spelled out, or empty; it never changes an amount.
+   */
+  rows: { text: string; price: string; kind: ReceiptRowKind; taxed: boolean; name: string }[];
   expenseName: string;
 }
 

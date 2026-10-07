@@ -182,7 +182,9 @@ struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let co
 /// A receipt read from its photo by cloud vision: its printed rows top to bottom, each labeled as `ReceiptLabels.Kind`
 /// names them. Empty strings mean not found.
 struct APIReceiptReading: Codable, Sendable {
-    struct Row: Codable, Sendable { let text: String; let kind: String; let taxed: Bool }
+    /// `text` is the row without its price; `price` is the amount at its right end as printed, or empty. `name` is an
+    /// item's name tidied by the model, or empty.
+    struct Row: Codable, Sendable { let text: String; let price: String?; let kind: String; let taxed: Bool; var name: String? = nil }
     let merchant: String
     let category: String
     let purchaseDate: String

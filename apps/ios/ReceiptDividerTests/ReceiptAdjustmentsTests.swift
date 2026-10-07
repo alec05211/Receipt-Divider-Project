@@ -192,18 +192,16 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertNil(extraction.mismatchWarning)
     }
 
-    /// A cloud reading is worked out like the on-device model's: amounts come from its rows' text, quantities become
+    /// A cloud reading is worked out like the on-device model's: amounts come from its rows' prices, quantities become
     /// one row per unit, a discount row reduces the item above it, and the cash and card totals make a surcharge.
     func testCloudReadingIsWorkedOutLikeTheModels() {
-        let rows: [(String, String, Bool)] = [
-            ("SMOKEHOUSE", "other", true), ("Brisket  2 x $18.00  36.00", "item", false), ("Coke  4.00", "item", true),
-            ("COUPON  -1.00", "itemDiscount", true), ("Subtotal  39.00", "subtotal", true), ("Tax 8%  3.12", "tax", true),
-            ("Gratuity  8.00", "tip", true), ("Total (Cash)  50.12", "cashTotal", true), ("Total (Non-Cash)  52.12", "total", true),
-            ("18%: $7.20: $59.32", "other", true),
+        let rows: [(String, String, String, Bool)] = [
+            ("SMOKEHOUSE", "", "other", true), ("Brisket 2 x $18.00", "36.00", "item", false), ("Coke", "4.00", "item", true),
+            ("COUPON", "1.00-", "itemDiscount", true), ("Subtotal", "39.00", "subtotal", true), ("Tax 8%", "3.12", "tax", true),
+            ("Gratuity", "8.00", "tip", true), ("Total (Cash)", "50.12", "cashTotal", true), ("Total (Non-Cash)", "52.12", "total", true),
+            ("18%: $7.20: $59.32", "", "other", true),
         ]
-        let reading = APIReceiptReading(merchant: "Smokehouse", category: "restaurant", purchaseDate: "2026-10-05",
-                                        rows: rows.map { .init(text: $0.0, kind: $0.1, taxed: $0.2) }, expenseName: "")
-        let extraction = ReceiptExtraction(reading, text: "")
+        let extraction = ReceiptExtraction(cloudReading(rows), text: "")
         XCTAssertEqual(extraction.items.map(\.name), ["Brisket", "Brisket", "Coke"])
         XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400])
         XCTAssertEqual(extraction.items[2].localOffsetCents, -100)
@@ -222,5 +220,35 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertNil(ReceiptLabels.Kind("invented"))
         XCTAssertEqual(ReceiptLabels.Category("groceries"), .groceries)
         XCTAssertEqual(ReceiptLabels.Category("invented"), .other)
+    }
+
+    /// A row without a price has none, so a unit price in its text isn't taken for its price; a bare quantity detail
+    /// still multiplies to the item above it.
+    func testCloudRowWithoutAPriceKeepsItsUnitPriceOutOfTheItems() {
+        let rows: [(String, String, String, Bool)] = [
+            ("Hot Tea 2 x $3.25", "", "item", true), ("Lemons", "6.98", "item", true), ("2 @ 3.49", "", "detail", true),
+            ("Subtotal", "6.98", "subtotal", true), ("Total", "6.98", "total", true),
+        ]
+        let extraction = ReceiptExtraction(cloudReading(rows), text: "")
+        XCTAssertEqual(extraction.items.map(\.name), ["Lemons", "Lemons"])
+        XCTAssertEqual(extraction.items.map(\.cents), [349, 349])
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
+    /// Cloud vision's tidied name replaces a misread one; the price still comes from the row.
+    func testItemTakesCloudVisionsTidiedName() {
+        let reading = APIReceiptReading(merchant: "", category: "restaurant", purchaseDate: "", rows: [
+            .init(text: "BBU Chicken Club", price: "15.00", kind: "item", taxed: true, name: "BBQ Chicken Club"),
+            .init(text: "Fries", price: "4.00", kind: "item", taxed: true, name: ""),
+            .init(text: "Total", price: "19.00", kind: "total", taxed: true, name: ""),
+        ], expenseName: "")
+        let extraction = ReceiptExtraction(reading, text: "")
+        XCTAssertEqual(extraction.items.map(\.name), ["BBQ Chicken Club", "Fries"])
+        XCTAssertEqual(extraction.items.map(\.cents), [1_500, 400])
+    }
+
+    private func cloudReading(_ rows: [(String, String, String, Bool)]) -> APIReceiptReading {
+        APIReceiptReading(merchant: "Smokehouse", category: "restaurant", purchaseDate: "2026-10-05",
+                          rows: rows.map { .init(text: $0.0, price: $0.1, kind: $0.2, taxed: $0.3) }, expenseName: "")
     }
 }

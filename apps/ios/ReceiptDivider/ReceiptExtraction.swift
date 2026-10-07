@@ -163,7 +163,7 @@ enum ReceiptReader {
             let extraction = ReceiptExtraction(reading, text: recognizedText)
             let json = (try? JSONEncoder().encode(reading)).flatMap { String(data: $0, encoding: .utf8) }
             diagnostics.attempts.append(.init(reader: "cloud", note: issue, seconds: seconds, reading: json, issues: extraction.issues))
-            return (extraction, prompt(for: reading.rows.map { ReceiptRow(plainText($0.text)) }))
+            return (extraction, prompt(for: reading.rows.map(ReceiptRow.init)))
         } catch {
             diagnostics.attempts.append(.init(reader: "cloud", note: issue, seconds: (clock.now - start).seconds, error: String(describing: error)))
             return nil
@@ -250,13 +250,20 @@ struct ReceiptRow: Sendable {
     let percent: Double?
     /// A quantity printed as "2 x $3.25", "2 @ 3.25" or a leading count such as "2 Iced Tea".
     let quantity: Int?
+    /// An item's name with misreads fixed and abbreviations spelled out, from cloud vision; the on-device model is too
+    /// small to do this without attaching names to the wrong rows.
+    var tidiedName: String?
     /// A row that only states a quantity and unit price, such as "2 @ 3.49", which belongs to the item above it.
     var isQuantityDetail: Bool { quantity != nil && !name.contains(where: \.isLetter) }
 
-    init(_ text: String) {
+    init(_ text: String) { self.init(text, readsPrice: true) }
+
+    /// `readsPrice` false is for text known to have no price at its right end, such as a cloud row without one, so a
+    /// unit price like "2 x $3.25" isn't mistaken for the row's price.
+    init(_ text: String, readsPrice: Bool) {
         self.text = text
         // OCR sometimes puts a space after the decimal point, as in "$6. 19".
-        let amount = text.firstMatch(of: /(-?)\s*\$?\s*(\d{1,3}(?:,\d{3})+|\d{1,6})[.,] ?(\d{2})(?!\d)\s*(-?)\s*(?:[A-Z]{1,2})?\s*$/)
+        let amount = !readsPrice ? nil : text.firstMatch(of: /(-?)\s*\$?\s*(\d{1,3}(?:,\d{3})+|\d{1,6})[.,] ?(\d{2})(?!\d)\s*(-?)\s*(?:[A-Z]{1,2})?\s*$/)
         if let amount, let whole = Int(amount.2.filter(\.isNumber)), let cents = Int(amount.3) {
             let value = whole * 100 + cents
             amountCents = amount.1.isEmpty && amount.4.isEmpty ? value : -value
@@ -272,6 +279,22 @@ struct ReceiptRow: Sendable {
         if let leadingCount { name.removeSubrange(leadingCount.range) }
         quantity = quantityMatch.flatMap { Int($0.1) } ?? leadingCount.flatMap { Int($0.1) }
         self.name = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
+extension ReceiptRow {
+    /// A cloud row laid out as the device lays out a printed row: its text, then its price at the right end. A row
+    /// without a price has none, unless it's a bare quantity detail such as "2 @ 3.49", which multiplies to the item
+    /// above it just as it does on the device.
+    init(_ row: APIReceiptReading.Row) {
+        let text = ReceiptReader.plainText(row.text), price = ReceiptReader.plainText(row.price ?? "").trimmingCharacters(in: .whitespaces)
+        if !price.isEmpty {
+            self.init("\(text)  \(price)")
+        } else {
+            let detail = ReceiptRow(text)
+            self = detail.isQuantityDetail ? detail : ReceiptRow(text, readsPrice: false)
+        }
+        tidiedName = row.name
     }
 }
 
@@ -314,7 +337,9 @@ extension ReceiptExtraction {
                     let parts = ReceiptMath.split(min(cents, rows[range].reduce(0) { $0 + $1.netCents }), into: range.count)
                     for (index, part) in zip(range, parts) { rows[index].localOffsetCents -= part }
                 } else if amount > 0 {
-                    let added = ReceiptItem.rows(name: Self.cleaned(row.name, maxLength: 60) ?? "Item", quantity: row.quantity ?? 1,
+                    // Cloud vision's tidied name, when it gave one; the price and quantity stay as printed.
+                    let name = row.tidiedName.flatMap { Self.cleaned($0, maxLength: 60) } ?? Self.cleaned(row.name, maxLength: 60) ?? "Item"
+                    let added = ReceiptItem.rows(name: name, quantity: row.quantity ?? 1,
                                                  lineCents: amount, taxed: label?.taxed ?? true)
                     lastItemRows = rows.count..<(rows.count + added.count)
                     rows += added
@@ -388,7 +413,7 @@ extension ReceiptExtraction {
     /// A cloud vision reading, put together exactly as the on-device model's labels are: every amount comes from a
     /// transcribed row, and the labels only say what each priced row is.
     init(_ reading: APIReceiptReading, text: String) {
-        let rows = reading.rows.map { ReceiptRow(ReceiptReader.plainText($0.text)) }
+        let rows = reading.rows.map(ReceiptRow.init)
         let priced = zip(rows, reading.rows).filter { $0.0.amountCents != nil }.map(\.1)
         let labels = ReceiptLabels(
             merchant: reading.merchant,

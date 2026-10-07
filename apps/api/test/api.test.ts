@@ -396,10 +396,10 @@ test("receipt vision parser returns the receipt's labeled rows", async () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
         merchant: "Trader Joe's", category: "groceries", purchaseDate: "2026-10-06", expenseName: "Trader Joe's Groceries",
         rows: [
-          { text: "TRADER JOE'S", kind: "other", taxed: true },
-          { text: "BANANAS  2.49", kind: "item", taxed: false },
-          { text: "TOTAL  2.49", kind: "total", taxed: true },
-          { text: "MYSTERY  1.00", kind: "invented", taxed: true },
+          { text: "TRADER JOE'S", price: "", kind: "other", taxed: true },
+          { text: "BANANAS", price: "2.49", kind: "item", taxed: false, name: "Bananas" },
+          { text: "TOTAL", price: "2.49", kind: "total", taxed: true },
+          { text: "MYSTERY", price: "1.00", kind: "invented", taxed: true },
         ],
       }) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     },
@@ -410,9 +410,12 @@ test("receipt vision parser returns the receipt's labeled rows", async () => {
   assert.equal(result.merchant, "Trader Joe's");
   assert.equal(result.purchaseDate, "2026-10-06");
   assert.deepEqual(result.rows.map((row) => row.kind), ["other", "item", "total"]);
-  assert.equal(result.rows[1]?.text, "BANANAS  2.49");
+  assert.equal(result.rows[1]?.text, "BANANAS");
+  assert.equal(result.rows[1]?.price, "2.49");
+  assert.equal(result.rows[1]?.name, "Bananas");
+  assert.equal(result.rows[0]?.name, "");
   assert.equal(result.rows[1]?.taxed, false);
-  assert.equal(bodies[0].model, "gpt-4o-mini");
+  assert.equal(bodies[0].model, "gpt-6.1-sol");
   assert.ok(bodies[0].messages[1].content[1].image_url.url.startsWith("data:image/jpeg;base64,"));
 
   await parser.parseReceipt("image/jpeg", jpegBytes, "No total was found.");
@@ -428,7 +431,7 @@ test("POST /v1/receipts/parse routes an authenticated image and note to receipt 
       assert.deepEqual(bytes, jpegBytes);
       receivedNote = note;
       return { merchant: "Supermarket", category: "groceries", purchaseDate: "", expenseName: "",
-        rows: [{ text: "Apples  4.50", kind: "item" as const, taxed: true }] };
+        rows: [{ text: "Apples", price: "4.50", kind: "item" as const, taxed: true, name: "Apples" }] };
     },
   };
   const app = createApp(new MemoryRepository(), async (context) => context.req.header("x-user-id") ?? null, mockParser);
@@ -436,7 +439,7 @@ test("POST /v1/receipts/parse routes an authenticated image and note to receipt 
   const response = await app.request("/v1/receipts/parse", { method: "POST", headers: { "x-user-id": alex, "content-type": "image/jpeg" }, body: jpegBytes });
   assert.equal(response.status, 200);
   const data = await response.json() as any;
-  assert.equal(data.rows[0].text, "Apples  4.50");
+  assert.equal(data.rows[0].price, "4.50");
   assert.equal(receivedNote, undefined);
 
   const reread = await app.request(`/v1/receipts/parse?note=${encodeURIComponent("No total was found.")}`, {
