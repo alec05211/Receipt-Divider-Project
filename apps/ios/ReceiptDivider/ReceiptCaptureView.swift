@@ -13,12 +13,17 @@ struct ReceiptCaptureView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showCamera = false
     @State private var items: [ReceiptItem] = []
+    /// Receipt-wide discounts, taxes, tip and surcharges in receipt order; they set every row's global offset.
+    @State private var adjustments: [ReceiptAdjustment] = []
     /// The total printed on the receipt, when recognition found one.
     @State private var printedTotalCents: Int?
     /// Set by Split All: everyone shares the printed total equally, whether or not the items add up to it.
     @State private var splitsPrintedTotal = false
     @State private var purchaseDate = Date()
     @State private var recognizedText: String?
+    @State private var diagnostics: ReceiptDiagnostics?
+    /// Which reader handled the last scan and how long it took, shown in Settings for developers.
+    @AppStorage(ReceiptDiagnostics.lastScanKey) private var lastScan = ""
     /// User IDs of everyone splitting the expense; starts with the signed-in user.
     @State private var selectedPeople: Set<UUID> = []
     @State private var shares: [UUID: Int] = [:]
@@ -34,17 +39,26 @@ struct ReceiptCaptureView: View {
     @State private var isSaving = false
     @State private var showSaveSuccess = false
     @State private var assignmentsLocked = false
-    /// Invalidates a slow semantic refinement when another receipt starts or the flow resets.
+    /// Invalidates a reading still in progress when another receipt starts or the flow resets.
     @State private var receiptAnalysisID: UUID?
+    /// True while the receipt's items are still being read, after its text has been recognized.
+    @State private var isExtracting = false
+    /// Set when the user confirms participants before the items are read; the flow continues once they are.
+    @State private var continuesAfterExtraction = false
     /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
     @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
 
     /// A receipt with at most one item skips assignment and belongs to everyone selected.
-    private var hasSingleItem: Bool { items.count <= 1 }
+    private var hasSingleItem: Bool { items.filter { $0.kind == .item }.count <= 1 }
     private var receiptTotal: Int { max(0, items.reduce(0) { $0 + $1.totalCents }) }
     private var total: Int {
         if splitsPrintedTotal, let printedTotalCents { return printedTotalCents }
-        return max(0, expenseItems.reduce(0) { $0 + $1.totalCents })
+        return max(0, expenseItems.reduce(0) { $0 + $1.totalCents } + adjustments.tipCents)
+    }
+    /// What each person owes from ownership: their items, plus an equal part of the tip.
+    private func ownershipShares(_ items: [ReceiptItem]) -> [UUID: Int] {
+        let tip = adjustments.tipCents
+        return (items + (tip > 0 ? [ReceiptItem(name: "Tip", cents: tip, ownerIDs: selectedPeople)] : [])).ownerShares(for: orderedSelection)
     }
     /// An even split of the printed total, used only after Split All.
     private var printedTotalShares: [UUID: Int]? {
@@ -68,9 +82,9 @@ struct ReceiptCaptureView: View {
         let name = description.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? (category?.suggestedName ?? "Shared Expense") : name
     }
-    /// Only assignments on current rows count when choosing the toolbar action.
+    /// Only assignments on current item rows count when choosing the toolbar action; a tip always belongs to everyone.
     private var hasAnyItemAssignments: Bool {
-        items.contains { !itemAssignments[$0.id, default: []].intersection(selectedPeople).isEmpty }
+        items.contains { $0.kind == .item && !itemAssignments[$0.id, default: []].intersection(selectedPeople).isEmpty }
     }
     private var allocationTotal: Int { selectedPeople.reduce(0) { $0 + (shares[$1] ?? 0) } }
     private var isValidSplit: Bool { !selectedPeople.isEmpty && allocationTotal == total && payer.map(selectedPeople.contains) == true }
@@ -109,7 +123,7 @@ struct ReceiptCaptureView: View {
                                 .fontWeight(.semibold)
                                 .accessibilityLabel("Continue")
                         }
-                        .disabled(selectedPeople.isEmpty || total == 0)
+                        .disabled(selectedPeople.isEmpty || (!isExtracting && total == 0))
                     }
                 }
                 if step == .assign {
@@ -138,6 +152,8 @@ struct ReceiptCaptureView: View {
             .fullScreenCover(isPresented: $showCamera) { DocumentScanner(image: $image).ignoresSafeArea() }
             .onChange(of: image) { _, newImage in if newImage != nil { startReading() } }
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
+            .onChange(of: items) { applyAdjustments() }
+            .onChange(of: adjustments) { applyAdjustments() }
             .overlay { if showSaveSuccess { SaveSuccessView().transition(.scale(scale: 0.75).combined(with: .opacity)) } }
             .alert("Couldn’t save", isPresented: Binding(
                 get: { error != nil },
@@ -159,8 +175,9 @@ struct ReceiptCaptureView: View {
         } description: { EmptyView() } actions: {
             Button { showCamera = true } label: { Label("Scan receipt", systemImage: "doc.viewfinder").prominentLabel() }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
-            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; printedTotalCents = nil; splitsPrintedTotal = false; step = .review }.padding(.top, 12)
+            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; step = .review }.padding(.top, 12)
         }
+        .onAppear { ReceiptReader.prewarm() }
     }
     private var readingScreen: some View {
         VStack(spacing: 16) { ProgressView().controlSize(.large); Text("Finding items").font(.headline) }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -296,7 +313,8 @@ struct ReceiptCaptureView: View {
             payer: $payer,
             purchaseDate: $purchaseDate,
             shares: $shares,
-            contributionDetents: printedTotalShares ?? expenseItems.ownerShares(for: orderedSelection),
+            adjustments: $adjustments,
+            contributionDetents: printedTotalShares ?? ownershipShares(expenseItems),
             participants: orderedSelection,
             items: $items,
             itemAssignments: $itemAssignments,
@@ -321,115 +339,106 @@ struct ReceiptCaptureView: View {
             image = await Task.detached { ReceiptImageProcessor.flatten(picture) }.value
         }
     }
+    /// Recognizes the text, then lets the user choose participants while the items are read.
     private func startReading() {
         guard let image else { return }
         step = .reading
         let analysisID = UUID()
         receiptAnalysisID = analysisID
+        isExtracting = true
+        continuesAfterExtraction = false
         Task { @MainActor in
-            // Try cloud vision parsing first when online and authenticated.
-            if let jpeg = image.jpegData(compressionQuality: 0.8),
-               let token = try? await authentication.accessToken(),
-               let parsed = try? await store.parseReceiptImage(jpeg, accessToken: token) {
-                guard receiptAnalysisID == analysisID else { return }
-                applyCloudParsedReceipt(parsed)
-                return
-            }
-
-            // Fallback: on-device Apple Vision OCR followed by local Foundation Models semantic refinement.
-            let scan = (try? await ReceiptTextRecognizer.scan(image)) ?? ReceiptScan()
+            // Cloud vision reads the photo while the device recognizes its text; the on-device reader is the fallback.
+            let cloud = Task { await cloudExtraction(image) }
+            let recognized = await ReceiptReader.recognize(image)
             guard receiptAnalysisID == analysisID else { return }
-            let suggestion = ExpenseSuggester.suggest(from: scan)
-            items = scan.items
-            recognizedText = scan.recognizedText
-            printedTotalCents = scan.printedTotalCents
-            category = suggestion.category
-            description = suggestion.name
-            for index in items.indices { items[index].isSelected = true }
-            if let date = scan.purchaseDate { purchaseDate = date }
-            error = scan.mismatchWarning
-            if items.isEmpty {
-                items = [ReceiptItem(name: "", cents: scan.printedTotalCents ?? 0, isSelected: true)]
-                error = scan.printedTotalCents == nil ? "No prices found." : nil
-            } else if items.count == 1, let printed = scan.printedTotalCents {
-                matchPrintedTotal(printed)
-                error = nil
-            }
+            recognizedText = recognized.text
             step = .review
-
-            // Semantic cleanup can take several seconds on-device. Review is usable immediately, and refinements
-            // apply only while the corresponding field still has its original extracted value.
-            let originalNames = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.name) })
-            let originalDescription = description
-            let originalCategory = category
-            let originalTotal = receiptTotal
-            let originalDate = purchaseDate
-            let originalError = error
-            let analysis = await OnDeviceReceiptAnalyzer.analyze(scan)
-            guard receiptAnalysisID == analysisID, step == .review else { return }
-            for refined in analysis.scan.items {
-                guard let index = items.firstIndex(where: { $0.id == refined.id }),
-                      let originalName = originalNames[refined.id],
-                      items[index].name == originalName else { continue }
-                items[index].name = refined.name
+            let extraction: ReceiptExtraction
+            if let cloudExtraction = await cloud.value {
+                extraction = cloudExtraction
+            } else {
+                extraction = await ReceiptReader.extract(recognized)
             }
-            if description == originalDescription { description = analysis.suggestion.name }
-            if category == originalCategory { category = analysis.suggestion.category }
-            if let printed = analysis.scan.printedTotalCents {
-                printedTotalCents = printed
-                if items.count == 1, receiptTotal == originalTotal { matchPrintedTotal(printed) }
+            guard receiptAnalysisID == analysisID else { return }
+            apply(extraction)
+            isExtracting = false
+            if continuesAfterExtraction {
+                continuesAfterExtraction = false
+                advanceFromReview()
             }
-            if purchaseDate == originalDate, let refinedDate = analysis.scan.purchaseDate { purchaseDate = refinedDate }
-            if error == originalError { error = analysis.scan.mismatchWarning }
         }
     }
-
-    private func applyCloudParsedReceipt(_ parsed: APIParsedReceipt) {
-        items = parsed.items.map { ReceiptItem(name: $0.name, cents: $0.cents, isSelected: true) }
-        recognizedText = parsed.recognizedText
-        printedTotalCents = parsed.totalCents
-        category = parsed.category.flatMap { ExpenseCategory(rawValue: $0) }
-        if let name = parsed.expenseName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            description = name
-        } else if let merchant = parsed.merchant, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            description = "\(merchant) Expense"
-        } else {
-            description = "Shared Expense"
+    /// The cloud vision reading, or nil when the request fails (offline, signed out, or no key on the server).
+    private func cloudExtraction(_ image: UIImage) async -> ReceiptExtraction? {
+        guard let jpeg = image.jpegData(compressionQuality: 0.8),
+              let token = try? await authentication.accessToken(),
+              let parsed = try? await store.parseReceiptImage(jpeg, accessToken: token) else { return nil }
+        return ReceiptExtraction(parsed)
+    }
+    private func apply(_ extraction: ReceiptExtraction) {
+        items = extraction.items.map { item in
+            var item = item
+            item.isSelected = true
+            return item
         }
-        if let rawDate = parsed.transactionDate, let date = ExpenseStore.dayFormatter.date(from: rawDate) {
-            purchaseDate = date
+        adjustments = extraction.adjustments
+        recognizedText = extraction.recognizedText
+        diagnostics = extraction.diagnostics
+        if let diagnostics = extraction.diagnostics {
+            lastScan = "\(diagnostics.reader == "model" ? "Model" : "Parser"), \(diagnostics.totalSeconds.formatted(.number.precision(.fractionLength(1)))) s"
         }
-        if items.isEmpty {
-            items = [ReceiptItem(name: "", cents: parsed.totalCents ?? 0, isSelected: true)]
-            error = parsed.totalCents == nil ? "No prices found." : nil
-        } else if items.count == 1, let printed = parsed.totalCents {
+        printedTotalCents = extraction.printedTotalCents
+        category = extraction.category
+        description = extraction.name
+        if let date = extraction.purchaseDate { purchaseDate = date }
+        error = extraction.warning
+        if !items.contains(where: { $0.kind == .item }) {
+            items = [ReceiptItem(name: "", cents: extraction.printedTotalCents ?? 0, isSelected: true)]
+            adjustments = []
+            error = extraction.printedTotalCents == nil ? "No prices found." : nil
+        } else if items.count == 1, let printed = extraction.printedTotalCents, extraction.mismatchWarning != nil {
             matchPrintedTotal(printed)
             error = nil
-        } else if let printed = parsed.totalCents {
-            let found = items.reduce(0) { $0 + $1.totalCents }
-            error = found != printed
-                ? "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the item prices."
-                : nil
-        } else {
-            error = nil
         }
-        step = .review
     }
-    /// A single item's total is edited directly; this replaces its price and drops its prior tax or discount offset.
+    /// Re-applies the adjustments whenever rows or rates change, so every row's global offset and the total stay current.
+    /// A tip adjustment goes when its row is deleted. On final review, contributions follow the new amounts.
+    private func applyAdjustments() {
+        var updated = items
+        let applied = updated.applyAdjustments(adjustments)
+        let changed = updated != items || applied != adjustments
+        if updated != items { items = updated }
+        if applied != adjustments { adjustments = applied }
+        if step == .split, changed {
+            shares = assignedShares()
+            balancer = ContributionBalancer()
+        }
+    }
+    /// A single item's total is edited directly; this replaces its price and drops its offsets and adjustments.
     private var totalBinding: Binding<Int> {
         Binding(get: { total }, set: { cents in
-            guard hasSingleItem, !items.isEmpty else { return }
+            guard items.count == 1 else { return }
+            adjustments = []
             items[0].cents = max(0, cents)
-            items[0].offsetCents = 0
+            items[0].localOffsetCents = 0
+            items[0].globalOffsetCents = 0
         })
     }
-    /// Keeps a lone item's printed price while recording the difference to the receipt total as tax and discounts.
+    /// Keeps a lone item's printed price while recording the difference to the receipt total as its own offset.
     private func matchPrintedTotal(_ printed: Int) {
         guard items.count == 1, items[0].cents > 0 else { return }
-        items[0].offsetCents = printed - items[0].cents
+        adjustments = []
+        items[0].localOffsetCents = printed - items[0].cents
+        items[0].globalOffsetCents = 0
     }
     private func advanceFromReview() {
         personSearch = ""
+        if isExtracting {
+            continuesAfterExtraction = true
+            step = .reading
+            return
+        }
         if hasSingleItem {
             itemAssignments = Dictionary(uniqueKeysWithValues: items.map { ($0.id, selectedPeople) })
             splitsPrintedTotal = false
@@ -513,11 +522,11 @@ struct ReceiptCaptureView: View {
     /// Contributions from current ownership; Split All uses the printed total when one was recognized.
     private func assignedShares() -> [UUID: Int] {
         if let printedTotalShares { return printedTotalShares }
-        return items.map { item in
+        return ownershipShares(items.map { item in
             var item = item
             item.ownerIDs = itemAssignments[item.id, default: []]
             return item
-        }.ownerShares(for: orderedSelection)
+        })
     }
     private func setDefaultPayer() {
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : orderedSelection.first }
@@ -530,7 +539,7 @@ struct ReceiptCaptureView: View {
     }
     /// Sets contributions from item ownership and defaults the payer to the signed-in participant.
     private func setItemSplit() {
-        shares = printedTotalShares ?? expenseItems.ownerShares(for: orderedSelection)
+        shares = printedTotalShares ?? ownershipShares(expenseItems)
         balancer = ContributionBalancer()
         setDefaultPayer()
     }
@@ -541,7 +550,13 @@ struct ReceiptCaptureView: View {
     }
     private func save() {
         guard let payer else { return }
-        var expense = Expense(description: savedDescription, transactionDate: purchaseDate, payer: payer, items: expenseItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category)
+        var expense = Expense(description: savedDescription, transactionDate: purchaseDate, payer: payer, items: expenseItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category, adjustments: adjustments)
+        expense.receiptDiagnostics = diagnostics.map { diagnostics in
+            var diagnostics = diagnostics
+            diagnostics.saved = ReceiptDiagnostics.Summary(name: savedDescription, category: category, purchaseDate: purchaseDate, items: expense.items,
+                                                           adjustments: adjustments, subtotalCents: nil, totalCents: total)
+            return diagnostics
+        }
         expense.recordedTotalCents = total
         isSaving = true
         error = nil
@@ -563,10 +578,12 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; step = .capture; image = nil; selectedPhoto = nil; items = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func reset() { receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
     private func back() {
         switch step {
-        case .review: personSearch = ""; step = .capture
+        case .review:
+            // Going back abandons this receipt, so a reading still in progress can't fill in a later manual entry.
+            personSearch = ""; receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; diagnostics = nil; step = .capture
         case .assign:
             if assignmentsLocked { undoAssignmentConfirmation() }
             else { step = .review }

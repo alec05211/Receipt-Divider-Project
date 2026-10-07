@@ -148,6 +148,9 @@ test("only the uploader can store the text recognized in their receipt", async (
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S\n09/27/26 5:41 PM" })).status, 204);
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, jamie, "PUT", { text: "not mine" })).status, 404);
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: 42 })).status, 400);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S", diagnostics: { reader: "model", attempts: [] } })).status, 204);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S", diagnostics: ["not", "an", "object"] })).status, 400);
+  assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "TRADER JOE'S", diagnostics: { lines: "x".repeat(500_001) } })).status, 400);
   assert.equal((await jsonRequest(app, `/v1/evidence/${id}/text`, alex, "PUT", { text: "x".repeat(100_001) })).status, 400);
 });
 
@@ -168,7 +171,7 @@ test("items record who had them while allocations set what each person owes", as
     items: [{ name: "Orange juice", amountCents: 300, ownerIds: [alex, jamie.toUpperCase(), morgan] }],
   }));
   assert.equal(juice.status, 201);
-  assert.deepEqual((await juice.json() as { items: Item[] }).items, [{ name: "Orange juice", amountCents: 300, offsetCents: 0, ownerIds: [alex, jamie, morgan] }]);
+  assert.deepEqual((await juice.json() as { items: Item[] }).items, [{ name: "Orange juice", amountCents: 300, localOffsetCents: 0, globalOffsetCents: 0, kind: "item", taxed: true, ownerIds: [alex, jamie, morgan] }]);
 
   // An unowned item belongs to the payer, and an expense without items becomes one item owned by everyone on it.
   const unowned = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000002", jamie, [[alex, 100], [jamie, 100]], {
@@ -176,7 +179,7 @@ test("items record who had them while allocations set what each person owes", as
   }));
   assert.deepEqual((await unowned.json() as { items: Item[] }).items.map((item) => item.ownerIds), [[alex], [jamie]]);
   const whole = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000003", alex, [[alex, 600], [jamie, 600]], { description: "Movie" }));
-  assert.deepEqual((await whole.json() as { items: Item[] }).items, [{ name: "Movie", amountCents: 1200, offsetCents: 0, ownerIds: [alex, jamie] }]);
+  assert.deepEqual((await whole.json() as { items: Item[] }).items, [{ name: "Movie", amountCents: 1200, localOffsetCents: 0, globalOffsetCents: 0, kind: "item", taxed: true, ownerIds: [alex, jamie] }]);
 
   const shared = (await snapshot(app, jamie)).expenses as unknown as Array<{ items: Item[] }>;
   assert.ok(shared.some((entry) => entry.items[0]?.name === "Orange juice" && entry.items[0].ownerIds.length === 3));
@@ -194,6 +197,47 @@ test("items record who had them while allocations set what each person owes", as
   // The payer may own items without owing anything.
   const treat = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("42000000-0000-4000-8000-000000000005", alex, [[jamie, 300]], { items: [{ name: "Juice", amountCents: 300 }] }));
   assert.deepEqual((await treat.json() as { items: Item[] }).items[0]!.ownerIds, [alex]);
+});
+
+test("items keep their printed price with local and global offsets, and adjustments keep receipt order", async () => {
+  const { app } = await setupFriends();
+  // A $10 burger with a $1 coupon and a $5 untaxed salad, 6% tax on the burger, a $4 tip, then a 3% card surcharge.
+  const adjustments = [{ kind: "tax", amountCents: 54, rate: 0.06 }, { kind: "tip", amountCents: 400, rate: null }, { kind: "surcharge", amountCents: 44, rate: 0.03 }];
+  const meal = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("43000000-0000-4000-8000-000000000001", alex, [[alex, 1000], [jamie, 998]], {
+    items: [
+      { name: "Burger", amountCents: 1000, localOffsetCents: -100, globalOffsetCents: 82, ownerIds: [alex] },
+      { name: "Salad", amountCents: 500, globalOffsetCents: 15, taxed: false, ownerIds: [jamie] },
+      { name: "Tip", amountCents: 400, globalOffsetCents: 1, kind: "tip", ownerIds: [alex, jamie] },
+    ],
+    adjustments,
+  }));
+  assert.equal(meal.status, 201);
+  const saved = await meal.json() as { items: Array<Record<string, unknown>>; adjustments: unknown };
+  assert.deepEqual(saved.items.map(({ localOffsetCents, globalOffsetCents, kind, taxed }) => ({ localOffsetCents, globalOffsetCents, kind, taxed })), [
+    { localOffsetCents: -100, globalOffsetCents: 82, kind: "item", taxed: true },
+    { localOffsetCents: 0, globalOffsetCents: 15, kind: "item", taxed: false },
+    { localOffsetCents: 0, globalOffsetCents: 1, kind: "tip", taxed: true },
+  ]);
+  assert.deepEqual(saved.adjustments, adjustments);
+  const shared = (await snapshot(app, jamie)).expenses as unknown as Array<{ clientRequestId: string; adjustments: unknown }>;
+  assert.deepEqual(shared.find((entry) => entry.clientRequestId === "43000000-0000-4000-8000-000000000001")?.adjustments, adjustments);
+
+  // Older clients send one offset, which becomes the global offset; an expense without adjustments has none.
+  const legacy = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("43000000-0000-4000-8000-000000000002", alex, [[alex, 1080]], { items: [{ name: "Wine", amountCents: 1000, offsetCents: 80 }] }));
+  const legacyExpense = await legacy.json() as { items: Array<{ localOffsetCents: number; globalOffsetCents: number }>; adjustments: unknown[] };
+  assert.deepEqual([legacyExpense.items[0]!.localOffsetCents, legacyExpense.items[0]!.globalOffsetCents], [0, 80]);
+  assert.deepEqual(legacyExpense.adjustments, []);
+
+  for (const extra of [
+    { items: [{ name: "Tip", amountCents: 100, kind: "gift" }] },
+    { items: [{ name: "Tip", amountCents: 100, taxed: "yes" }] },
+    { adjustments: [{ kind: "fee", amountCents: 100, rate: null }] },
+    { adjustments: [{ kind: "tax", amountCents: -1, rate: 0.06 }] },
+    { adjustments: [{ kind: "tax", amountCents: 6, rate: -0.06 }] },
+  ]) {
+    const status = (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("43000000-0000-4000-8000-000000000003", alex, [[alex, 100]], extra))).status;
+    assert.equal(status, 400, JSON.stringify(extra));
+  }
 });
 
 test("an expense may carry one of the known categories", async () => {

@@ -61,6 +61,41 @@ struct PercentField: View {
     }
 }
 
+/// Edits a rate such as 0.06 as a percent ("6"), to up to three decimal places. Like `PercentField`, the typed text is
+/// kept while editing.
+struct RateField: View {
+    @Binding var rate: Double
+    @State private var text = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 1) {
+            Spacer(minLength: 0)
+            TextField("0", text: $text)
+                .keyboardType(.decimalPad)
+                .focused($isFocused)
+                .multilineTextAlignment(.trailing)
+                .fixedSize()
+                .onChange(of: text) { _, text in
+                    guard isFocused else { return }
+                    rate = max(0, Double(text.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: ",", with: ".")) ?? 0) / 100
+                }
+            Text("%").foregroundStyle(.secondary)
+        }
+        .onAppear { text = Self.format(rate) }
+        .onChange(of: rate) { if !isFocused { text = Self.format(rate) } }
+        .onChange(of: isFocused) { if !isFocused { text = Self.format(rate) } }
+        .keyboardDoneButton($isFocused)
+    }
+
+    /// A rate worked out from printed amounts is rarely exact, such as 8.001% for an 8% tax, so one within a
+    /// two-hundredth of a percent of a whole number shows as that number.
+    static func format(_ rate: Double) -> String {
+        let percent = rate * 100, whole = percent.rounded()
+        return (abs(percent - whole) < 0.005 ? whole : percent).formatted(.number.precision(.fractionLength(0...3)).grouping(.never))
+    }
+}
+
 private extension View {
     func keyboardDoneButton(_ isFocused: FocusState<Bool>.Binding) -> some View {
         toolbar {

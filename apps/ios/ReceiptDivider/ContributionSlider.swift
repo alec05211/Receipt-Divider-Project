@@ -93,7 +93,7 @@ private struct SystemSlider: UIViewRepresentable {
     func updateUIView(_ slider: UISlider, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
-        if #available(iOS 26.0, *), coordinator.configuredFor != [total, detent] {
+        if coordinator.configuredFor != [total, detent] {
             slider.trackConfiguration = .init(allowsTickValuesOnly: false, ticks: [.init(position: fraction(detent))])
             coordinator.configuredFor = [total, detent]
         }

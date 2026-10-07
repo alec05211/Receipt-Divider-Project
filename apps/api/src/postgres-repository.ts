@@ -1,6 +1,6 @@
 import postgres from "postgres";
-import { calculateBalances, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
+import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
@@ -89,7 +89,7 @@ export class PostgresRepository implements LedgerRepository {
   async resetLedgerData(userId: UUID): Promise<void> {
     const [row] = await this.sql`SELECT is_developer FROM user_profiles WHERE id=${userId}`;
     if (!row?.is_developer) throw new ApiError(403, "developer access is required", "forbidden");
-    await this.sql`TRUNCATE expense_evidence, expense_allocations, expense_item_owners, expense_items, expenses, repayments, evidence_assets, audit_events`;
+    await this.sql`TRUNCATE expense_evidence, expense_allocations, expense_adjustments, expense_item_owners, expense_items, expenses, repayments, evidence_assets, audit_events`;
   }
   async getProfile(userId: UUID): Promise<Profile> {
     const rows = await this.sql`SELECT id, first_name, last_name, username, display_name, is_developer FROM user_profiles WHERE id=${userId}`;
@@ -133,8 +133,8 @@ export class PostgresRepository implements LedgerRepository {
         WHERE ee.evidence_id=a.id AND ${visibleTo(this.sql, requesterId)}))`;
     if (!rows.length) return null; return { contentType: rows[0]!.content_type, bytes: toBytes(rows[0]!.image_data), etag: rows[0]!.image_etag };
   }
-  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean> {
-    const rows = await this.sql`UPDATE evidence_assets SET extraction_status='complete', extracted_data=${this.sql.json({ source: "device", text })} WHERE id=${evidenceId} AND uploaded_by=${uploaderId} RETURNING id`;
+  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics: object | null = null): Promise<boolean> {
+    const rows = await this.sql`UPDATE evidence_assets SET extraction_status='complete', extracted_data=${this.sql.json({ source: "device", text, diagnostics } as any)} WHERE id=${evidenceId} AND uploaded_by=${uploaderId} RETURNING id`;
     return rows.length > 0;
   }
 
@@ -152,12 +152,14 @@ export class PostgresRepository implements LedgerRepository {
       if (evidenceIds.length && (await tx`SELECT id FROM evidence_assets WHERE uploaded_by=${creatorId} AND id IN ${tx(evidenceIds)}`).length !== evidenceIds.length) throw new ApiError(400, "evidence was not uploaded by you", "invalid_evidence");
       const [row] = await tx`INSERT INTO expenses (creator_id, payer_id, client_request_id, request_fingerprint, description, category, currency, total_cents, transaction_date) VALUES (${creatorId}, ${input.payerId}, ${input.clientRequestId}, ${requestFingerprint}, ${input.description.trim()}, ${input.category ?? null}, ${input.currency}, ${input.totalCents}, ${input.transactionDate}) RETURNING *`;
       const items = expenseItems(input);
-      for (const [position, item] of items.entries()) await tx`INSERT INTO expense_items (expense_id, position, name, amount_cents, offset_cents) VALUES (${row!.id}, ${position}, ${item.name}, ${item.amountCents}, ${item.offsetCents ?? 0})`;
+      for (const [position, item] of items.entries()) await tx`INSERT INTO expense_items (expense_id, position, name, amount_cents, local_offset_cents, global_offset_cents, kind, taxed) VALUES (${row!.id}, ${position}, ${item.name}, ${item.amountCents}, ${item.localOffsetCents}, ${item.globalOffsetCents}, ${item.kind}, ${item.taxed})`;
+      const adjustments = expenseAdjustments(input);
+      for (const [position, adjustment] of adjustments.entries()) await tx`INSERT INTO expense_adjustments (expense_id, position, kind, amount_cents, rate) VALUES (${row!.id}, ${position}, ${adjustment.kind}, ${adjustment.amountCents}, ${adjustment.rate})`;
       for (const allocation of input.allocations) await tx`INSERT INTO expense_allocations (expense_id, user_id, amount_cents) VALUES (${row!.id}, ${allocation.userId}, ${allocation.amountCents})`;
       for (const [position, item] of items.entries()) for (const ownerId of item.ownerIds) await tx`INSERT INTO expense_item_owners (expense_id, position, user_id) VALUES (${row!.id}, ${position}, ${ownerId})`;
       for (const [position, evidenceId] of evidenceIds.entries()) await tx`INSERT INTO expense_evidence (expense_id, evidence_id, position) VALUES (${row!.id}, ${evidenceId}, ${position})`;
       await tx`INSERT INTO audit_events (actor_id, event_type, entity_id) VALUES (${creatorId}, 'expense.created', ${row!.id})`;
-      return mapExpense(row!, items, input.allocations, evidenceIds);
+      return mapExpense(row!, items, adjustments, input.allocations, evidenceIds);
     });
   }
 
@@ -201,17 +203,18 @@ export class PostgresRepository implements LedgerRepository {
 
   async getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot> {
     const visibleIds = this.sql`SELECT e.id FROM expenses e WHERE e.status='active' AND ${visibleTo(this.sql, userId)}`;
-    const [settings, savedFilters, expenseRows, itemRows, ownerRows, allocationRows, evidenceRows, paymentRows, friendRows] = await Promise.all([
+    const [settings, savedFilters, expenseRows, itemRows, ownerRows, adjustmentRows, allocationRows, evidenceRows, paymentRows, friendRows] = await Promise.all([
       this.sql`SELECT currency FROM user_settings WHERE user_id=${userId}`, this.listSavedFilters(userId),
       this.sql`SELECT * FROM expenses WHERE id IN (${visibleIds}) ORDER BY transaction_date DESC, created_at DESC, id`,
       this.sql`SELECT * FROM expense_items WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, position`,
       this.sql`SELECT * FROM expense_item_owners WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, position, user_id`,
+      this.sql`SELECT * FROM expense_adjustments WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, position`,
       this.sql`SELECT * FROM expense_allocations WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, user_id`,
       this.sql`SELECT * FROM expense_evidence WHERE expense_id IN (${visibleIds}) ORDER BY expense_id, position`,
       this.sql`SELECT * FROM repayments WHERE status='active' AND (from_user_id=${userId} OR to_user_id=${userId}) ORDER BY transaction_date DESC, created_at DESC, id`,
       this.sql`SELECT CASE WHEN requester_id=${userId} THEN addressee_id ELSE requester_id END user_id FROM friend_requests WHERE status='accepted' AND (requester_id=${userId} OR addressee_id=${userId})`]);
     if (!settings.length) throw new ApiError(404, "profile not found", "not_found");
-    let expenses = expenseRows.map((row) => mapExpense(row, mapItems(itemRows.filter((i) => i.expense_id === row.id), ownerRows.filter((o) => o.expense_id === row.id)), allocationRows.filter((a) => a.expense_id === row.id).map(mapAllocation), evidenceRows.filter((e) => e.expense_id === row.id).map((e) => e.evidence_id)));
+    let expenses = expenseRows.map((row) => mapExpense(row, mapItems(itemRows.filter((i) => i.expense_id === row.id), ownerRows.filter((o) => o.expense_id === row.id)), adjustmentRows.filter((a) => a.expense_id === row.id).map(mapAdjustment), allocationRows.filter((a) => a.expense_id === row.id).map(mapAllocation), evidenceRows.filter((e) => e.expense_id === row.id).map((e) => e.evidence_id)));
     let payments = paymentRows.map(mapPayment);
     const balances = calculateBalances(userId, expenses, payments);
     const peopleIds = new Set<UUID>([userId, ...friendRows.map((row) => row.user_id as UUID)]);
@@ -228,8 +231,8 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   private async loadExpense(sql: any, row: any): Promise<Expense> {
-    const [items, owners, allocations, evidence] = await Promise.all([sql`SELECT * FROM expense_items WHERE expense_id=${row.id} ORDER BY position`, sql`SELECT * FROM expense_item_owners WHERE expense_id=${row.id} ORDER BY position, user_id`, sql`SELECT * FROM expense_allocations WHERE expense_id=${row.id} ORDER BY user_id`, sql`SELECT evidence_id FROM expense_evidence WHERE expense_id=${row.id} ORDER BY position`]);
-    return mapExpense(row, mapItems(items, owners), allocations.map(mapAllocation), evidence.map((e: any) => e.evidence_id));
+    const [items, owners, adjustments, allocations, evidence] = await Promise.all([sql`SELECT * FROM expense_items WHERE expense_id=${row.id} ORDER BY position`, sql`SELECT * FROM expense_item_owners WHERE expense_id=${row.id} ORDER BY position, user_id`, sql`SELECT * FROM expense_adjustments WHERE expense_id=${row.id} ORDER BY position`, sql`SELECT * FROM expense_allocations WHERE expense_id=${row.id} ORDER BY user_id`, sql`SELECT evidence_id FROM expense_evidence WHERE expense_id=${row.id} ORDER BY position`]);
+    return mapExpense(row, mapItems(items, owners), adjustments.map(mapAdjustment), allocations.map(mapAllocation), evidence.map((e: any) => e.evidence_id));
   }
 }
 
@@ -250,10 +253,11 @@ function mapProfile(row: any): Profile { return { id: row.id, firstName: row.fir
 function mapSettings(row: any): UserSettings { return { currency: row.currency, sliderUnit: row.slider_unit }; }
 function mapLedgerPerson(row: any): LedgerPerson { return { userId: row.id, displayName: row.display_name, username: row.username, avatarEtag: row.avatar_etag }; }
 function mapItems(rows: any[], owners: any[]): ExpenseItem[] {
-  return rows.map((row) => ({ name: row.name, amountCents: Number(row.amount_cents), offsetCents: Number(row.offset_cents), ownerIds: owners.filter((o) => o.position === row.position).map((o) => o.user_id) }));
+  return rows.map((row) => ({ name: row.name, amountCents: Number(row.amount_cents), localOffsetCents: Number(row.local_offset_cents), globalOffsetCents: Number(row.global_offset_cents), kind: row.kind, taxed: row.taxed, ownerIds: owners.filter((o) => o.position === row.position).map((o) => o.user_id) }));
 }
+function mapAdjustment(row: any): ExpenseAdjustment { return { kind: row.kind, amountCents: Number(row.amount_cents), rate: row.rate === null ? null : Number(row.rate) }; }
 function mapAllocation(row: any): AllocationInput { return { userId: row.user_id, amountCents: Number(row.amount_cents) }; }
-function mapExpense(row: any, items: ExpenseItem[], allocations: AllocationInput[], evidenceIds: UUID[]): Expense { return { id: row.id, creatorId: row.creator_id, clientRequestId: row.client_request_id, description: row.description, category: row.category ?? null, transactionDate: toDay(row.transaction_date), payerId: row.payer_id, currency: row.currency, totalCents: Number(row.total_cents), items, allocations, evidenceIds, createdAt: toIso(row.created_at) }; }
+function mapExpense(row: any, items: ExpenseItem[], adjustments: ExpenseAdjustment[], allocations: AllocationInput[], evidenceIds: UUID[]): Expense { return { id: row.id, creatorId: row.creator_id, clientRequestId: row.client_request_id, description: row.description, category: row.category ?? null, transactionDate: toDay(row.transaction_date), payerId: row.payer_id, currency: row.currency, totalCents: Number(row.total_cents), items, adjustments, allocations, evidenceIds, createdAt: toIso(row.created_at) }; }
 function mapPayment(row: any): Payment { return { id: row.id, recorderId: row.recorder_id, clientRequestId: row.client_request_id, fromUserId: row.from_user_id, toUserId: row.to_user_id, amountCents: Number(row.amount_cents), transactionDate: toDay(row.transaction_date), createdAt: toIso(row.created_at) }; }
 function mapFriend(row: any, direction: FriendConnection["direction"]): FriendConnection { return { requestId: row.request_id, userId: row.user_id, displayName: row.display_name, username: row.username, avatarEtag: row.avatar_etag, status: row.status, direction }; }
 function toBytes(value: unknown): Uint8Array { if (value instanceof Uint8Array) return value; throw new Error("PostgreSQL returned an unexpected bytea value"); }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseCategory, ExpenseChanges, ExpenseItem, Payment, UUID } from "./types.ts";
-import { ApiError, expenseCategories } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseAdjustment, ExpenseCategory, ExpenseChanges, ExpenseItem, Payment, UUID } from "./types.ts";
+import { adjustmentKinds, ApiError, expenseCategories, expenseItemKinds } from "./types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -81,7 +81,19 @@ export function validateExpense(input: CreateExpenseInput): void {
   for (const item of items) {
     if (!item.name?.trim() || item.name.length > 300) throw new ApiError(400, "each item needs a name", "invalid_input");
     requireCents(item.amountCents, "item amountCents", false);
-    requireCents(item.offsetCents ?? 0, "item offsetCents", true);
+    requireCents(item.localOffsetCents ?? 0, "item localOffsetCents", true);
+    requireCents(item.globalOffsetCents ?? item.offsetCents ?? 0, "item globalOffsetCents", true);
+    if (item.kind !== undefined && !(expenseItemKinds as readonly string[]).includes(item.kind)) throw new ApiError(400, `item kind must be one of ${expenseItemKinds.join(", ")}`, "invalid_input");
+    if (item.taxed !== undefined && typeof item.taxed !== "boolean") throw new ApiError(400, "item taxed must be true or false", "invalid_input");
+  }
+  const adjustments = input.adjustments ?? [];
+  if (!Array.isArray(adjustments) || adjustments.length > 20) throw new ApiError(400, "an expense may have at most 20 adjustments", "invalid_input");
+  for (const adjustment of adjustments) {
+    if (!(adjustmentKinds as readonly string[]).includes(adjustment?.kind)) throw new ApiError(400, `adjustment kind must be one of ${adjustmentKinds.join(", ")}`, "invalid_input");
+    requireCents(adjustment.amountCents, "adjustment amountCents", false, true);
+    if (adjustment.rate != null && (typeof adjustment.rate !== "number" || !Number.isFinite(adjustment.rate) || adjustment.rate < 0 || adjustment.rate >= 1000)) {
+      throw new ApiError(400, "adjustment rate must be null or a fraction from 0 up to 1000", "invalid_input");
+    }
   }
 
   const memberIds = new Set<string>();
@@ -121,12 +133,18 @@ export function validateExpense(input: CreateExpenseInput): void {
  */
 export function expenseItems(input: CreateExpenseInput): ExpenseItem[] {
   if (!input.items?.length) {
-    return [{ name: input.description.trim(), amountCents: input.totalCents, offsetCents: 0, ownerIds: input.allocations.map((allocation) => allocation.userId) }];
+    return [{ name: input.description.trim(), amountCents: input.totalCents, localOffsetCents: 0, globalOffsetCents: 0, kind: "item", taxed: true, ownerIds: input.allocations.map((allocation) => allocation.userId) }];
   }
   return input.items.map((item) => ({
-    name: item.name.trim(), amountCents: item.amountCents, offsetCents: item.offsetCents ?? 0,
+    name: item.name.trim(), amountCents: item.amountCents, localOffsetCents: item.localOffsetCents ?? 0,
+    globalOffsetCents: item.globalOffsetCents ?? item.offsetCents ?? 0, kind: item.kind ?? "item", taxed: item.taxed ?? true,
     ownerIds: item.ownerIds?.length ? [...item.ownerIds] : [input.payerId],
   }));
+}
+
+/** The adjustments an expense is saved with, in receipt order. Leaves `input` unchanged so its fingerprint doesn't. */
+export function expenseAdjustments(input: CreateExpenseInput): ExpenseAdjustment[] {
+  return (input.adjustments ?? []).map((adjustment) => ({ kind: adjustment.kind, amountCents: adjustment.amountCents, rate: adjustment.rate ?? null }));
 }
 
 /** Validates `input` and lowercases its IDs in place. */

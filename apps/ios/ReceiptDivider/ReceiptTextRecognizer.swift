@@ -7,8 +7,9 @@ import Vision
 import UIKit
 #endif
 
+/// What the rule-based parser read. It is the fallback when the on-device model can't read the receipt.
 struct ReceiptScan {
-    /// Items at their printed prices, with tax and discounts folded into each item's offset.
+    /// Items at their printed prices, with each item's own discount in its local offset.
     var items: [ReceiptItem] = []
     var taxCents = 0
     /// Discounts printed after the subtotal, which apply to the whole receipt.
@@ -20,10 +21,13 @@ struct ReceiptScan {
     /// Every line Vision read, saved with the receipt so a misread can be traced later.
     var recognizedText = ""
 
+    /// The items after their own discounts, plus tax, minus receipt-wide discounts.
+    var reconciledCents: Int { items.reduce(0) { $0 + $1.netCents } + taxCents - discountCents }
+
     /// Nil when the items, tax and discounts add up to the printed total, or when no total was found.
     var mismatchWarning: String? {
         guard let printed = printedTotalCents else { return nil }
-        let found = items.reduce(0) { $0 + $1.totalCents }
+        let found = reconciledCents
         guard found != printed else { return nil }
         return "Items, tax and discounts add up to \(found.usd), but the receipt total is \(printed.usd). Check the item prices."
     }
@@ -34,8 +38,7 @@ struct ExpenseSuggestion {
     var name: String
 }
 
-/// Fast, deterministic on-device suggestions from Vision's recognized text. This remains the fallback when the
-/// Apple Intelligence model is unavailable and keeps a model suggestion from becoming accounting truth.
+/// Keyword-based category and name suggestions, used with the parser when the on-device model is unavailable.
 enum ExpenseSuggester {
     static func suggest(from scan: ReceiptScan) -> ExpenseSuggestion {
         let evidence = ([scan.recognizedText] + scan.items.map(\.name)).joined(separator: "\n")
@@ -103,27 +106,11 @@ enum ReceiptTextRecognizer {
         var confidence: Float = 1
     }
 
-    #if canImport(UIKit)
-    static func scan(_ image: UIImage) async throws -> ReceiptScan {
-        guard let cgImage = image.cgImage else { return ReceiptScan() }
-        let orientation = image.cgImageOrientation
-        if #available(iOS 26.0, *) {
-            if let structured = try? await documentScan(cgImage, orientation: orientation) {
-                if !needsRetry(structured) { return structured }
-                let fallback = try legacyScan(cgImage, orientation: orientation)
-                return score(structured) >= score(fallback) ? structured : fallback
-            }
-        }
-        return try legacyScan(cgImage, orientation: orientation)
-    }
-    #endif
-
-    /// iOS 26 document recognition preserves line structure before the receipt-specific parser classifies rows.
-    @available(iOS 26.0, *)
-    private static func documentScan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) async throws -> ReceiptScan {
+    /// Document recognition's lines in reading order, which is the text the on-device model reads.
+    static func documentLines(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) async throws -> [Fragment] {
         let observations = try await RecognizeDocumentsRequest().perform(on: cgImage, orientation: orientation)
-        guard let document = observations.first?.document else { return ReceiptScan() }
-        let fragments = document.text.lines.compactMap { line -> Fragment? in
+        guard let document = observations.first?.document else { return [] }
+        return document.text.lines.compactMap { line -> Fragment? in
             let candidates = line.topCandidates(3)
             guard let first = candidates.first else { return nil }
             return Fragment(
@@ -133,7 +120,15 @@ enum ReceiptTextRecognizer {
                 confidence: first.confidence
             )
         }
-        return parse(fragments)
+    }
+
+    /// Parses the lines document recognition found. A full OCR pass runs as well only when they don't give a
+    /// credible reading, and the better of the two is kept.
+    static func scan(_ cgImage: CGImage, orientation: CGImagePropertyOrientation, documentLines: [Fragment]) throws -> ReceiptScan {
+        let structured = parse(documentLines)
+        if !needsRetry(structured) { return structured }
+        let fallback = try legacyScan(cgImage, orientation: orientation)
+        return score(structured) >= score(fallback) ? structured : fallback
     }
 
     /// The already-cropped receipt gets one accurate pass. A second enhanced pass runs only when the
@@ -226,7 +221,7 @@ enum ReceiptTextRecognizer {
             if cents < 0 {
                 if role?.rejectsNegativeAmount == true { continue }
                 if !inSummary, let lastItem {
-                    scan.items[lastItem].offsetCents += cents
+                    scan.items[lastItem].localOffsetCents += cents
                 } else {
                     scan.discountCents -= cents
                 }
@@ -262,8 +257,7 @@ enum ReceiptTextRecognizer {
                 break
             }
         }
-        scan.items.spread(scan.taxCents - scan.discountCents)
-        let reconciled = scan.items.reduce(0) { $0 + $1.totalCents }
+        let reconciled = scan.reconciledCents
         scan.printedTotalCents = printedTotal?.cents ?? summaryAmounts.last(where: { $0 == reconciled })
         scan.purchaseDate = purchaseDate(in: fragments.map(\.text))
         scan.recognizedText = fragments.map(\.text).joined(separator: "\n")
@@ -310,6 +304,62 @@ enum ReceiptTextRecognizer {
 
     private static func isExcluded(_ lowercased: String) -> Bool {
         excludedWords.firstMatch(in: lowercased, range: NSRange(lowercased.startIndex..., in: lowercased)) != nil
+    }
+
+    /// The receipt as printed rows, top to bottom, which is what the on-device model reads. Text recognition can return
+    /// a receipt's names and prices as separate columns, so pieces sharing a printed line are joined left to right.
+    /// Unlike the parser's grouping, this keeps every piece's text as recognized and pairs only by position.
+    static func layoutText(_ fragments: [Fragment]) -> String {
+        layoutRows(fragments).joined(separator: "\n")
+    }
+
+    /// The printed rows of `layoutText`.
+    static func layoutRows(_ fragments: [Fragment]) -> [String] {
+        var rows: [[Fragment]] = []
+        for fragment in fragments.sorted(by: { $0.box.midY > $1.box.midY }) {
+            // A piece joins the nearest row it shares a line with and doesn't overlap horizontally.
+            let candidates = rows.indices.filter { index in
+                let anchor = rows[index][0].box
+                return abs(anchor.midY - fragment.box.midY) < min(anchor.height, fragment.box.height) * 0.6
+                    && !rows[index].contains { $0.box.minX < fragment.box.maxX && fragment.box.minX < $0.box.maxX }
+            }
+            if let index = candidates.min(by: { abs(rows[$0][0].box.midY - fragment.box.midY) < abs(rows[$1][0].box.midY - fragment.box.midY) }) {
+                rows[index].append(fragment)
+            } else {
+                rows.append([fragment])
+            }
+        }
+        return rows.sorted { $0[0].box.midY > $1[0].box.midY }
+            .map { $0.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: "  ") }
+    }
+
+    /// The accurate OCR pass's lines, which fill in what document recognition misses.
+    static func accurateLines(_ cgImage: CGImage, orientation: CGImagePropertyOrientation) throws -> [Fragment] {
+        try fragments(in: CIImage(cgImage: cgImage).oriented(orientation))
+    }
+
+    /// Document recognition's lines completed with the accurate pass's. Document recognition can drop a short line,
+    /// such as a price, or merge two stacked prices into one tall line. Accurate lines are added where no document line
+    /// covers them, and a document line spanning several of them is replaced by them.
+    static func merge(document: [Fragment], accurate: [Fragment]) -> [Fragment] {
+        let heights = document.map(\.box.height).sorted()
+        guard !heights.isEmpty else { return accurate }
+        let lineHeight = heights[heights.count / 2]
+        var result: [Fragment] = []
+        for line in document {
+            let inside = accurate.filter { overlap(line.box, $0.box) > 0.5 && $0.box.height < lineHeight * 1.3 }
+            let stacked = Set(inside.map { Int(($0.box.midY / lineHeight).rounded()) }).count > 1
+            if line.box.height > lineHeight * 1.6, stacked { result += inside } else { result.append(line) }
+        }
+        result += accurate.filter { candidate in !result.contains { overlap($0.box, candidate.box) > 0.3 } }
+        return result
+    }
+
+    /// The share of the smaller box covered by the other.
+    private static func overlap(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        let shared = a.intersection(b)
+        guard !shared.isNull, min(a.width * a.height, b.width * b.height) > 0 else { return 0 }
+        return shared.width * shared.height / min(a.width * a.height, b.width * b.height)
     }
 
     private static func rows(from fragments: [Fragment]) -> [[Fragment]] {

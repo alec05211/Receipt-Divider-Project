@@ -105,8 +105,9 @@ actor LedgerAPIClient {
         )
     }
 
-    func putEvidenceText(_ text: String, evidenceID: UUID, token: String) async throws {
-        let (data, status) = try await perform(path: "/v1/evidence/\(evidenceID.uuidString.lowercased())/text", method: "PUT", token: token, contentType: "application/json", body: encoder.encode(["text": text]))
+    func putEvidenceText(_ text: String, diagnostics: ReceiptDiagnostics?, evidenceID: UUID, token: String) async throws {
+        struct Body: Encodable { let text: String; let diagnostics: ReceiptDiagnostics? }
+        let (data, status) = try await perform(path: "/v1/evidence/\(evidenceID.uuidString.lowercased())/text", method: "PUT", token: token, contentType: "application/json", body: encoder.encode(Body(text: text, diagnostics: diagnostics)))
         try check(data: data, status: status)
     }
 
@@ -186,8 +187,15 @@ struct APIParsedReceipt: Decodable, Sendable {
     let totalCents: Int?
     let recognizedText: String
 }
-/// `ownerIds` are the people who had the item; an item sent without owners belongs to the payer.
-struct APIExpenseItem: Codable, Sendable { let name: String; let amountCents: Int; let offsetCents: Int?; let ownerIds: [UUID]? }
+/// `amountCents` is the printed price; the two offsets are the item's own discount and its share of receipt-wide
+/// adjustments. `kind` is "item" or "tip". `ownerIds` are the people who had the item; an item sent without owners
+/// belongs to the payer.
+struct APIExpenseItem: Codable, Sendable {
+    let name: String; let amountCents: Int; let localOffsetCents: Int?; let globalOffsetCents: Int?
+    let kind: String?; let taxed: Bool?; let ownerIds: [UUID]?
+}
+/// `kind` is "discount", "tax", "tip" or "surcharge"; `rate` is a fraction (0.06 for 6%) and is nil for a tip.
+struct APIAdjustment: Codable, Sendable { let kind: String; let amountCents: Int; let rate: Double? }
 struct APIAllocation: Codable, Sendable { let userId: UUID; let amountCents: Int }
 
 struct CreateAPIExpense: Encodable, Sendable {
@@ -201,6 +209,7 @@ struct CreateAPIExpense: Encodable, Sendable {
     let totalCents: Int
     let evidenceIds: [UUID]
     let items: [APIExpenseItem]
+    let adjustments: [APIAdjustment]
     let allocations: [APIAllocation]
 }
 
@@ -220,6 +229,8 @@ struct APIExpense: Decodable, Sendable {
     let payerId: UUID
     let totalCents: Int
     let items: [APIExpenseItem]
+    /// In receipt order; nil from a server that predates adjustments.
+    let adjustments: [APIAdjustment]?
     let allocations: [APIAllocation]
     let evidenceIds: [UUID]
     let createdAt: String

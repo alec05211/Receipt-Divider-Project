@@ -68,17 +68,19 @@ struct AssignItemsView: View {
                             }
                         let assigned = filterPeople.filter { itemAssignments[item.id, default: []].contains($0) }
                         if !assigned.isEmpty { AvatarStack(people: assigned, size: 22) }
-                        Text(item.totalCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+                        // The receipt's price after the item's own discount; receipt-wide tax and fees come later.
+                        Text(item.netCents.usd).monospacedDigit().foregroundStyle(.secondary).fixedSize()
                     }
                     .frame(height: 26)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
+                    // A tip always belongs to everyone.
                     .onTapGesture {
-                        guard isEditable, !assignmentsLocked, let target = activeAssignmentTarget else { return }
+                        guard isEditable, !assignmentsLocked, item.kind == .item, let target = activeAssignmentTarget else { return }
                         toggleAssignment(target, for: item.id)
                     }
                     .accessibilityAction(named: "Assign people") {
-                        guard isEditable, !assignmentsLocked, let target = activeAssignmentTarget else { return }
+                        guard isEditable, !assignmentsLocked, item.kind == .item, let target = activeAssignmentTarget else { return }
                         toggleAssignment(target, for: item.id)
                     }
                     .swipeActions {
@@ -229,11 +231,20 @@ struct ItemEditor: View {
             Form {
                 TextField("Item name", text: $item.name).submitLabel(.done)
                 LabeledContent("Price") { CentsField(title: "0.00", cents: $item.cents) }
+                if item.kind == .item {
+                    LabeledContent("Discount") { CentsField(title: "0.00", cents: discountBinding) }
+                    Toggle("Taxed", isOn: $item.taxed)
+                }
             }
             .navigationTitle("Edit item")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .presentationDetents([.medium])
+    }
+
+    /// The item's own discount, entered as a positive amount and kept as a negative local offset.
+    private var discountBinding: Binding<Int> {
+        Binding(get: { -item.localOffsetCents }, set: { item.localOffsetCents = -min(max(0, $0), item.cents) })
     }
 }

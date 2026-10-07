@@ -3,38 +3,41 @@ import Observation
 import UIKit
 
 struct ReceiptItem: Identifiable, Hashable, Codable {
-    var id = UUID(); var name: String; var cents: Int
-    /// The item's part of the receipt's tax and discounts, kept apart so `cents` stays the printed price.
-    /// Negative when discounts outweigh tax.
-    var offsetCents = 0
+    /// A tip row is split evenly among everyone on the expense rather than assigned like an item.
+    enum Kind: String, Codable, Sendable { case item, tip }
+    var id = UUID(); var name: String
+    /// The price printed on the receipt.
+    var cents: Int
+    /// What the receipt ties to this item alone, such as its own discount (negative).
+    var localOffsetCents = 0
+    /// The item's share of the receipt-wide discounts, taxes and surcharges, set by `applyAdjustments`.
+    var globalOffsetCents = 0
+    var kind = Kind.item
+    /// Whether receipt tax applies to this item.
+    var taxed = true
     var isSelected = false
     /// User IDs of the people who had this item. Ownership only says who had what; `Expense.shares` holds what each owes.
     var ownerIDs: Set<UUID> = []
-    var totalCents: Int { cents + offsetCents }
+    /// The price after the item's own offset: what receipt-wide adjustments are applied to.
+    var netCents: Int { cents + localOffsetCents }
+    var totalCents: Int { cents + localOffsetCents + globalOffsetCents }
 }
 extension ReceiptItem {
+    /// Items cached by builds before offsets were split stored one combined `offsetCents`.
+    private enum LegacyKeys: String, CodingKey { case offsetCents }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id); name = try container.decode(String.self, forKey: .name); cents = try container.decode(Int.self, forKey: .cents)
-        offsetCents = try container.decodeIfPresent(Int.self, forKey: .offsetCents) ?? 0
+        localOffsetCents = try container.decodeIfPresent(Int.self, forKey: .localOffsetCents) ?? 0
+        let legacyOffset = try decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(Int.self, forKey: .offsetCents)
+        globalOffsetCents = try container.decodeIfPresent(Int.self, forKey: .globalOffsetCents) ?? legacyOffset ?? 0
+        kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .item
+        taxed = try container.decodeIfPresent(Bool.self, forKey: .taxed) ?? true
         isSelected = try container.decodeIfPresent(Bool.self, forKey: .isSelected) ?? false
         ownerIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .ownerIDs) ?? []
     }
 }
 extension Array where Element == ReceiptItem {
-    /// Adds an amount (tax minus discounts) to the offsets of the matching items, in proportion to what each
-    /// costs after its own discounts. Rounding cents go to the largest fractions, so the offsets add up exactly.
-    mutating func spread(_ amount: Int, where include: (ReceiptItem) -> Bool = { _ in true }) {
-        let targets = indices.filter { include(self[$0]) && self[$0].totalCents > 0 }
-        let base = targets.reduce(0) { $0 + self[$1].totalCents }
-        guard amount != 0, base > 0 else { return }
-        let exact = targets.map { (index: $0, value: Double(amount) * Double(self[$0].totalCents) / Double(base)) }
-        for share in exact { self[share.index].offsetCents += Int(share.value.rounded(.towardZero)) }
-        let remainder = amount - exact.reduce(0) { $0 + Int($1.value.rounded(.towardZero)) }
-        let byFraction = exact.sorted { abs($0.value.truncatingRemainder(dividingBy: 1)) > abs($1.value.truncatingRemainder(dividingBy: 1)) }
-        for share in byFraction.prefix(abs(remainder)) { self[share.index].offsetCents += remainder.signum() }
-    }
-
     /// What each of `people` owes for the items they own: every item is divided equally among its owners among
     /// `people`. Exact shares are rounded down and the leftover cents go to the largest fractions, earlier `people`
     /// winning ties, so the shares add up to the owned items' total and everyone owning everything is an even split.
@@ -65,9 +68,15 @@ extension Array where Element == ReceiptItem {
 struct Expense: Identifiable, Hashable, Codable {
     var id = UUID(); var description: String; var transactionDate: Date; var payer: UUID; var items: [ReceiptItem]; var shares: [UUID: Int]; var receiptImageData: Data?; var createdAt = Date(); var recordedTotalCents: Int?; var evidenceIDs: [UUID] = []; var recognizedText: String?
     var category: ExpenseCategory? = nil
+    /// Receipt-wide discounts, taxes, tip and surcharges, in the order the receipt applies them.
+    var adjustments: [ReceiptAdjustment] = []
+    /// How the receipt was read; like `recognizedText`, only set before saving.
+    var receiptDiagnostics: ReceiptDiagnostics? = nil
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
-    /// Tax and discounts included in the selected items.
-    var offsetTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.offsetCents } }
+    /// The selected items' own discounts.
+    var itemDiscountTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.localOffsetCents } }
+    /// The selected items' share of receipt-wide adjustments, for expenses saved before adjustments were recorded.
+    var globalOffsetTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.globalOffsetCents } }
     var participants: [UUID] { Array(shares.keys) }
 }
 /// What an expense was for, chosen by hand. Optional; older expenses have none.
@@ -122,7 +131,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
 
 @MainActor
 @Observable final class ExpenseStore {
-    private let storageKeyPrefix = "receipt-divider-ledger-v3"
+    /// Bumped when the cached expense format changes, so an older cache is ignored rather than failing to decode.
+    private let storageKeyPrefix = "receipt-divider-ledger-v4"
     private let api: LedgerAPIClient?
     private var pendingEvidenceIDs: [UUID: UUID] = [:]
     /// Optimistic expenses keyed by the same client request ID used for idempotent server creation.
@@ -340,6 +350,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     func stage(_ expense: Expense) {
         var preview = expense
         preview.recognizedText = nil
+        preview.receiptDiagnostics = nil
         pendingExpenses[expense.id] = preview
         pendingExpenseIDs.insert(expense.id)
         if !expenses.contains(where: { $0.id == expense.id }) { expenses.append(preview) }
@@ -367,11 +378,14 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                     receiptImages[evidence.id] = UIImage(data: image)
                     evidenceIDs = [evidence.id]
                     // Only for troubleshooting a misread, so a failure here shouldn't block saving.
-                    if let text = expense.recognizedText, !text.isEmpty { try? await api.putEvidenceText(text, evidenceID: evidence.id, token: accessToken) }
+                    if let text = expense.recognizedText, !text.isEmpty {
+                        try? await api.putEvidenceText(text, diagnostics: expense.receiptDiagnostics, evidenceID: evidence.id, token: accessToken)
+                    }
                 }
             }
             let selectedItems = expense.items.filter(\.isSelected).map {
-                APIExpenseItem(name: $0.name, amountCents: $0.cents, offsetCents: $0.offsetCents, ownerIds: $0.ownerIDs.sorted { $0.uuidString < $1.uuidString })
+                APIExpenseItem(name: $0.name, amountCents: $0.cents, localOffsetCents: $0.localOffsetCents, globalOffsetCents: $0.globalOffsetCents,
+                               kind: $0.kind.rawValue, taxed: $0.taxed, ownerIds: $0.ownerIDs.sorted { $0.uuidString < $1.uuidString })
             }
             let request = CreateAPIExpense(
                 clientRequestId: expense.id,
@@ -383,6 +397,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 totalCents: expense.total,
                 evidenceIds: evidenceIDs,
                 items: selectedItems,
+                adjustments: expense.adjustments.map { APIAdjustment(kind: $0.kind.rawValue, amountCents: $0.amountCents, rate: $0.kind == .tip ? nil : $0.rate) },
                 allocations: allocations
             )
             _ = try await api.createExpense(request, token: accessToken)
@@ -522,13 +537,19 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 description: remote.description,
                 transactionDate: Self.dayFormatter.date(from: remote.transactionDate) ?? .now,
                 payer: remote.payerId,
-                items: remote.items.map { ReceiptItem(name: $0.name, cents: $0.amountCents, offsetCents: $0.offsetCents ?? 0, isSelected: true, ownerIDs: Set($0.ownerIds ?? [])) },
+                items: remote.items.map {
+                    ReceiptItem(name: $0.name, cents: $0.amountCents, localOffsetCents: $0.localOffsetCents ?? 0, globalOffsetCents: $0.globalOffsetCents ?? 0,
+                                kind: $0.kind.flatMap(ReceiptItem.Kind.init(rawValue:)) ?? .item, taxed: $0.taxed ?? true, isSelected: true, ownerIDs: Set($0.ownerIds ?? []))
+                },
                 shares: Dictionary(remote.allocations.map { ($0.userId, $0.amountCents) }, uniquingKeysWith: +),
                 receiptImageData: nil,
                 createdAt: Self.isoDate(remote.createdAt),
                 recordedTotalCents: remote.totalCents,
                 evidenceIDs: remote.evidenceIds,
-                category: remote.category.flatMap(ExpenseCategory.init(rawValue:))
+                category: remote.category.flatMap(ExpenseCategory.init(rawValue:)),
+                adjustments: (remote.adjustments ?? []).compactMap { adjustment in
+                    ReceiptAdjustment.Kind(rawValue: adjustment.kind).map { ReceiptAdjustment(kind: $0, rate: adjustment.rate ?? 0, amountCents: adjustment.amountCents) }
+                }
             )
         }
         expenses = confirmedExpenses + Array(pendingExpenses.values)

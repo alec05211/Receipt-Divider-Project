@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
-interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; }
+interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; diagnostics?: object | null; }
 interface FriendRequest { id: UUID; requesterId: UUID; addresseeId: UUID; status: "pending" | "accepted"; }
 
 /** Test/local adapter. It deliberately has no persistence and is never selected when DATABASE_URL is set. */
@@ -127,10 +127,10 @@ export class MemoryRepository implements LedgerRepository {
     const visible = image.ownerId === requesterId || this.visibleExpenses(requesterId).some((expense) => expense.evidenceIds.includes(evidenceId));
     return visible ? image : null;
   }
-  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string): Promise<boolean> {
+  async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics: object | null = null): Promise<boolean> {
     const image = this.evidence.get(evidenceId);
     if (image?.ownerId !== uploaderId) return false;
-    image.text = text; return true;
+    image.text = text; image.diagnostics = diagnostics; return true;
   }
 
   async createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense> {
@@ -145,7 +145,7 @@ export class MemoryRepository implements LedgerRepository {
       if (existing.fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict");
       return structuredClone(existing.value as Expense);
     }
-    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: expenseItems(input), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
+    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: expenseItems(input), adjustments: expenseAdjustments(input), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
     this.expenses.push(expense); this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
     return structuredClone(expense);
   }
