@@ -95,9 +95,11 @@ actor LedgerAPIClient {
         )
     }
 
-    func parseReceiptImage(_ data: Data, token: String) async throws -> APIParsedReceipt {
-        try await send(
-            path: "/v1/receipts/parse",
+    /// `note` is a problem with a first reading, for a re-read.
+    func readReceiptImage(_ data: Data, note: String?, token: String) async throws -> APIReceiptReading {
+        let query = note.flatMap { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }.map { "?note=\($0)" } ?? ""
+        return try await send(
+            path: "/v1/receipts/parse\(query)",
             method: "POST",
             token: token,
             contentType: "image/jpeg",
@@ -174,18 +176,15 @@ struct APISettings: Decodable, Sendable { let currency: String; let sliderUnit: 
 /// Someone in the caller's ledger: themselves, a friend, or anyone they share a transaction with.
 struct APILedgerPerson: Decodable, Sendable { let userId: UUID; let displayName: String?; let username: String?; let avatarEtag: String? }
 struct APIEvidence: Decodable, Sendable { let id: UUID; let kind: String; let contentType: String; let etag: String; let createdAt: String }
-struct APIParsedReceiptItem: Decodable, Sendable { let name: String; let cents: Int }
-struct APIParsedReceipt: Decodable, Sendable {
-    let merchant: String?
-    let category: String?
-    let expenseName: String?
-    let transactionDate: String?
-    let items: [APIParsedReceiptItem]
-    let taxCents: Int
-    let tipCents: Int
-    let discountCents: Int
-    let totalCents: Int?
-    let recognizedText: String
+/// A receipt read from its photo by cloud vision: its printed rows top to bottom, each labeled as `ReceiptLabels.Kind`
+/// names them. Empty strings mean not found.
+struct APIReceiptReading: Codable, Sendable {
+    struct Row: Codable, Sendable { let text: String; let kind: String; let taxed: Bool }
+    let merchant: String
+    let category: String
+    let purchaseDate: String
+    let rows: [Row]
+    let expenseName: String
 }
 /// `amountCents` is the printed price; the two offsets are the item's own discount and its share of receipt-wide
 /// adjustments. `kind` is "item" or "tip". `ownerIds` are the people who had the item; an item sent without owners

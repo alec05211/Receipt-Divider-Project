@@ -349,17 +349,12 @@ struct ReceiptCaptureView: View {
         continuesAfterExtraction = false
         Task { @MainActor in
             // Cloud vision reads the photo while the device recognizes its text; the on-device reader is the fallback.
-            let cloud = Task { await cloudExtraction(image) }
+            let cloud = cloudReader(image)
             let recognized = await ReceiptReader.recognize(image)
             guard receiptAnalysisID == analysisID else { return }
             recognizedText = recognized.text
             step = .review
-            let extraction: ReceiptExtraction
-            if let cloudExtraction = await cloud.value {
-                extraction = cloudExtraction
-            } else {
-                extraction = await ReceiptReader.extract(recognized)
-            }
+            let extraction = await ReceiptReader.extract(recognized, cloud: cloud)
             guard receiptAnalysisID == analysisID else { return }
             apply(extraction)
             isExtracting = false
@@ -369,12 +364,12 @@ struct ReceiptCaptureView: View {
             }
         }
     }
-    /// The cloud vision reading, or nil when the request fails (offline, signed out, or no key on the server).
-    private func cloudExtraction(_ image: UIImage) async -> ReceiptExtraction? {
-        guard let jpeg = image.jpegData(compressionQuality: 0.8),
-              let token = try? await authentication.accessToken(),
-              let parsed = try? await store.parseReceiptImage(jpeg, accessToken: token) else { return nil }
-        return ReceiptExtraction(parsed)
+    private func cloudReader(_ image: UIImage) -> CloudReader? {
+        guard let jpeg = image.jpegData(compressionQuality: 0.8) else { return nil }
+        let store = store, authentication = authentication
+        return CloudReader { note in
+            try await store.readReceiptImage(jpeg, note: note, accessToken: authentication.accessToken())
+        }
     }
     private func apply(_ extraction: ReceiptExtraction) {
         items = extraction.items.map { item in
@@ -386,7 +381,7 @@ struct ReceiptCaptureView: View {
         recognizedText = extraction.recognizedText
         diagnostics = extraction.diagnostics
         if let diagnostics = extraction.diagnostics {
-            lastScan = "\(diagnostics.reader == "model" ? "Model" : "Parser"), \(diagnostics.totalSeconds.formatted(.number.precision(.fractionLength(1)))) s"
+            lastScan = "\(diagnostics.reader.capitalized), \(diagnostics.totalSeconds.formatted(.number.precision(.fractionLength(1)))) s"
         }
         printedTotalCents = extraction.printedTotalCents
         category = extraction.category

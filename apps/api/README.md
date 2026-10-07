@@ -60,7 +60,7 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `POST` | `/v1/evidence?kind=receipt` | Store optional evidence image bytes. |
 | `GET` | `/v1/evidence/{evidenceId}/image` | Read evidence you uploaded or that is attached to an expense you're on. |
 | `PUT` | `/v1/evidence/{evidenceId}/text` | Store the text your device recognized in evidence you uploaded (`{ "text": … }`), kept in `extracted_data` for troubleshooting. |
-| `POST` | `/v1/receipts/parse` | Parse receipt image bytes (JPEG, PNG, WebP) using OpenAI `gpt-4o-mini` with structured JSON output, extracting items, prices, taxes, tip, date, category, and merchant. |
+| `POST` | `/v1/receipts/parse` | Read receipt image bytes (JPEG, PNG, WebP) with OpenAI `gpt-4o-mini`: returns the merchant, category, date, expense name, and every printed row with its label (`item`, `tax`, `total`, …). An optional `?note=` describes a first reading's problem for a re-read. Needs `OPENAI_API_KEY`. |
 | `POST` | `/v1/expenses` | Atomically post a reviewed general expense between you and your friends, with an optional `category` (`groceries`, `restaurant`, `movie`, or `concert`; returned as `null` when absent). |
 | `PATCH` | `/v1/expenses/:expenseId` | Payer only: change `description` and/or `transactionDate` (`YYYY-MM-DD`). Records one revision per changed field with the old and new value; amounts and balances are untouched. Other participants get 403; anyone else 404. |
 | `POST` | `/v1/payments` | Record a repayment you sent or received (`fromUserId`, `toUserId`). |

@@ -192,20 +192,35 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertNil(extraction.mismatchWarning)
     }
 
-    /// A cloud reading of $20 in items with a $2 discount, $1.62 tax and a $3 tip.
-    func testCloudReadingBecomesOrderedAdjustments() {
-        let parsed = APIParsedReceipt(
-            merchant: "Corner Cafe", category: "restaurant", expenseName: "", transactionDate: "2026-10-01",
-            items: [.init(name: "Sandwich", cents: 1_200), .init(name: "Soup", cents: 800), .init(name: "", cents: 0)],
-            taxCents: 162, tipCents: 300, discountCents: 200, totalCents: 2_262, recognizedText: "CORNER CAFE"
-        )
-        let extraction = ReceiptExtraction(parsed)
-
-        XCTAssertEqual(extraction.items.map(\.name), ["Sandwich", "Soup"])
-        XCTAssertEqual(extraction.adjustments.map(\.kind), [.discount, .tax, .tip])
-        XCTAssertEqual(extraction.adjustments.map(\.amountCents), [200, 162, 300])
+    /// A cloud reading is worked out like the on-device model's: amounts come from its rows' text, quantities become
+    /// one row per unit, a discount row reduces the item above it, and the cash and card totals make a surcharge.
+    func testCloudReadingIsWorkedOutLikeTheModels() {
+        let rows: [(String, String, Bool)] = [
+            ("SMOKEHOUSE", "other", true), ("Brisket  2 x $18.00  36.00", "item", false), ("Coke  4.00", "item", true),
+            ("COUPON  -1.00", "itemDiscount", true), ("Subtotal  39.00", "subtotal", true), ("Tax 8%  3.12", "tax", true),
+            ("Gratuity  8.00", "tip", true), ("Total (Cash)  50.12", "cashTotal", true), ("Total (Non-Cash)  52.12", "total", true),
+            ("18%: $7.20: $59.32", "other", true),
+        ]
+        let reading = APIReceiptReading(merchant: "Smokehouse", category: "restaurant", purchaseDate: "2026-10-05",
+                                        rows: rows.map { .init(text: $0.0, kind: $0.1, taxed: $0.2) }, expenseName: "")
+        let extraction = ReceiptExtraction(reading, text: "")
+        XCTAssertEqual(extraction.items.map(\.name), ["Brisket", "Brisket", "Coke"])
+        XCTAssertEqual(extraction.items.map(\.cents), [1_800, 1_800, 400])
+        XCTAssertEqual(extraction.items[2].localOffsetCents, -100)
+        XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax, .tip, .surcharge])
+        XCTAssertEqual(extraction.adjustments.tipCents, 832)
+        XCTAssertEqual(extraction.printedTotalCents, 5_212)
+        XCTAssertEqual(extraction.subtotalCents, 3_900)
         XCTAssertEqual(extraction.category, .restaurant)
-        XCTAssertNotNil(extraction.purchaseDate)
-        XCTAssertNil(extraction.mismatchWarning)
+        XCTAssertEqual(extraction.name, "Smokehouse Meal")
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
+    func testCloudReadingNamesMapToLabels() {
+        XCTAssertEqual(ReceiptLabels.Kind("itemDiscount"), .itemDiscount)
+        XCTAssertEqual(ReceiptLabels.Kind("cashTotal"), .cashTotal)
+        XCTAssertNil(ReceiptLabels.Kind("invented"))
+        XCTAssertEqual(ReceiptLabels.Category("groceries"), .groceries)
+        XCTAssertEqual(ReceiptLabels.Category("invented"), .other)
     }
 }

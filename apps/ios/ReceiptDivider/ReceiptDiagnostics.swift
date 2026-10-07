@@ -12,6 +12,8 @@ struct ReceiptDiagnostics: Codable, Hashable, Sendable {
     }
 
     struct Attempt: Codable, Hashable, Sendable {
+        /// "cloud" or "model".
+        var reader: String?
         /// The discrepancy the model was told about, for a re-read.
         var note: String?
         var seconds: Double
@@ -65,15 +67,15 @@ struct ReceiptDiagnostics: Codable, Hashable, Sendable {
     var build = ReceiptDiagnostics.buildCommit ?? "local"
     var system = ProcessInfo.processInfo.operatingSystemVersionString
     var device = ReceiptDiagnostics.deviceModel
-    /// "model" or "parser".
+    /// "cloud", "model" or "parser".
     var reader = "parser"
-    /// Why the parser was used instead of the model.
+    /// Why an earlier reader wasn't used.
     var fallbackReason: String?
     var recognitionSeconds: Double
     /// Recognized lines; those after the first `documentLineCount` came from the accurate pass.
     var lines: [Line]
     var documentLineCount: Int
-    /// The rows the model was given.
+    /// The rows the chosen reading labeled: the device's rows for the model or parser, the transcribed rows for cloud.
     var modelText: String
     var attempts: [Attempt] = []
     var read: Summary?

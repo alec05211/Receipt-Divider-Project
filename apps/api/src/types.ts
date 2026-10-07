@@ -27,26 +27,26 @@ export interface EvidenceAsset { id: UUID; kind: EvidenceKind; contentType: stri
 export const expenseCategories = ["groceries", "restaurant", "movie", "concert"] as const;
 export type ExpenseCategory = typeof expenseCategories[number];
 
-export interface ParsedReceiptItem {
-  name: string;
-  cents: number;
-}
+/** What a receipt row is, as the device's model labels it. */
+export const receiptRowKinds = ["item", "detail", "itemDiscount", "subtotal", "orderDiscount", "tax", "tip", "surcharge", "total", "cashTotal", "other"] as const;
+export type ReceiptRowKind = typeof receiptRowKinds[number];
 
-export interface ParsedReceipt {
-  merchant: string | null;
-  category: ExpenseCategory | null;
-  expenseName: string | null;
-  transactionDate: string | null;
-  items: ParsedReceiptItem[];
-  taxCents: number;
-  tipCents: number;
-  discountCents: number;
-  totalCents: number | null;
-  recognizedText: string;
+/**
+ * A receipt read from its photo: its printed rows top to bottom, each with a label, plus what only reading it can tell.
+ * Amounts stay in each row's text; the app reads them and works out the expense as it does for an on-device reading.
+ * Empty strings mean not found.
+ */
+export interface ReceiptReading {
+  merchant: string;
+  category: string;
+  purchaseDate: string;
+  rows: { text: string; kind: ReceiptRowKind; taxed: boolean }[];
+  expenseName: string;
 }
 
 export interface ReceiptVisionParser {
-  parseReceipt(contentType: string, bytes: Uint8Array): Promise<ParsedReceipt>;
+  /** `note` is a problem with a first reading, for a re-read. */
+  parseReceipt(contentType: string, bytes: Uint8Array, note?: string): Promise<ReceiptReading>;
 }
 
 export const expenseItemKinds = ["item", "tip"] as const;

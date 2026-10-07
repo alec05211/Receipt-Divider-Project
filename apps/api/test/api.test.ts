@@ -383,105 +383,68 @@ test("Supabase JWT authentication accepts only signed authenticated-user tokens"
   const wrongRole = await app.request("/v1/profile", { method: "PUT", headers: { authorization: `Bearer ${await token("anon")}`} }); assert.equal(wrongRole.status, 401);
 });
 
-test("receipt vision parser parses structured receipt data via OpenAI gpt-4o-mini", async () => {
+test("receipt vision parser returns the receipt's labeled rows", async () => {
   const { createOpenAIReceiptParser } = await import("../src/receipt-vision.ts");
-  let capturedBody: any = null;
-
+  const bodies: any[] = [];
   const parser = createOpenAIReceiptParser({
     apiKey: "test-openai-key",
     fetchFn: async (_url, init) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return new Response(JSON.stringify({
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              merchant: "Trader Joe's",
-              category: "groceries",
-              expenseName: "Trader Joe's Groceries",
-              transactionDate: "2026-10-06",
-              items: [
-                { name: "Organic Bananas", cents: 249 },
-                { name: "Almond Milk", cents: 399 }
-              ],
-              taxCents: 50,
-              tipCents: 0,
-              discountCents: 0,
-              totalCents: 698,
-              recognizedText: "TRADER JOE'S\nBANANAS 2.49\nALMOND MILK 3.99\nTOTAL 6.98"
-            })
-          }
-        }]
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
-    }
+      bodies.push(JSON.parse(init?.body as string));
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        merchant: "Trader Joe's", category: "groceries", purchaseDate: "2026-10-06", expenseName: "Trader Joe's Groceries",
+        rows: [
+          { text: "TRADER JOE'S", kind: "other", taxed: true },
+          { text: "BANANAS  2.49", kind: "item", taxed: false },
+          { text: "TOTAL  2.49", kind: "total", taxed: true },
+          { text: "MYSTERY  1.00", kind: "invented", taxed: true },
+        ],
+      }) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
   });
-
   const jpegBytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+
   const result = await parser.parseReceipt("image/jpeg", jpegBytes);
-
   assert.equal(result.merchant, "Trader Joe's");
-  assert.equal(result.category, "groceries");
-  assert.equal(result.expenseName, "Trader Joe's Groceries");
-  assert.equal(result.transactionDate, "2026-10-06");
-  assert.equal(result.items.length, 2);
-  assert.equal(result.items[0]?.name, "Organic Bananas");
-  assert.equal(result.items[0]?.cents, 249);
-  assert.equal(result.totalCents, 698);
-  assert.equal(result.taxCents, 50);
+  assert.equal(result.purchaseDate, "2026-10-06");
+  assert.deepEqual(result.rows.map((row) => row.kind), ["other", "item", "total"]);
+  assert.equal(result.rows[1]?.text, "BANANAS  2.49");
+  assert.equal(result.rows[1]?.taxed, false);
+  assert.equal(bodies[0].model, "gpt-4o-mini");
+  assert.ok(bodies[0].messages[1].content[1].image_url.url.startsWith("data:image/jpeg;base64,"));
 
-  assert.equal(capturedBody.model, "gpt-4o-mini");
-  assert.ok(capturedBody.messages[1].content[1].image_url.url.startsWith("data:image/jpeg;base64,"));
+  await parser.parseReceipt("image/jpeg", jpegBytes, "No total was found.");
+  assert.match(bodies[1].messages[1].content[0].text, /No total was found\./);
 });
 
-test("POST /v1/receipts/parse routes authenticated image to receipt vision parser", async () => {
+test("POST /v1/receipts/parse routes an authenticated image and note to receipt vision", async () => {
   const jpegBytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02]);
+  let receivedNote: string | undefined;
   const mockParser = {
-    async parseReceipt(contentType: string, bytes: Uint8Array) {
+    async parseReceipt(contentType: string, bytes: Uint8Array, note?: string) {
       assert.equal(contentType, "image/jpeg");
       assert.deepEqual(bytes, jpegBytes);
-      return {
-        merchant: "Supermarket",
-        category: "groceries" as const,
-        expenseName: "Supermarket Groceries",
-        transactionDate: "2026-10-06",
-        items: [{ name: "Apples", cents: 450 }],
-        taxCents: 0,
-        tipCents: 0,
-        discountCents: 0,
-        totalCents: 450,
-        recognizedText: "APPLES 4.50"
-      };
-    }
+      receivedNote = note;
+      return { merchant: "Supermarket", category: "groceries", purchaseDate: "", expenseName: "",
+        rows: [{ text: "Apples  4.50", kind: "item" as const, taxed: true }] };
+    },
   };
-
   const app = createApp(new MemoryRepository(), async (context) => context.req.header("x-user-id") ?? null, mockParser);
 
-  // Authenticated parse succeeds
-  const response = await app.request("/v1/receipts/parse", {
-    method: "POST",
-    headers: { "x-user-id": alex, "content-type": "image/jpeg" },
-    body: jpegBytes
-  });
+  const response = await app.request("/v1/receipts/parse", { method: "POST", headers: { "x-user-id": alex, "content-type": "image/jpeg" }, body: jpegBytes });
   assert.equal(response.status, 200);
   const data = await response.json() as any;
-  assert.equal(data.merchant, "Supermarket");
-  assert.equal(data.items.length, 1);
-  assert.equal(data.items[0].cents, 450);
+  assert.equal(data.rows[0].text, "Apples  4.50");
+  assert.equal(receivedNote, undefined);
 
-  // Unauthenticated call is rejected with 401
-  const unauth = await app.request("/v1/receipts/parse", {
-    method: "POST",
-    headers: { "content-type": "image/jpeg" },
-    body: jpegBytes
-  });
+  const reread = await app.request(`/v1/receipts/parse?note=${encodeURIComponent("No total was found.")}`, {
+    method: "POST", headers: { "x-user-id": alex, "content-type": "image/jpeg" }, body: jpegBytes });
+  assert.equal(reread.status, 200);
+  assert.equal(receivedNote, "No total was found.");
+
+  const unauth = await app.request("/v1/receipts/parse", { method: "POST", headers: { "content-type": "image/jpeg" }, body: jpegBytes });
   assert.equal(unauth.status, 401);
 
-  // HEIC/HEIF is rejected with 415
   const heicBytes = Uint8Array.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
-  const heicResponse = await app.request("/v1/receipts/parse", {
-    method: "POST",
-    headers: { "x-user-id": alex, "content-type": "image/heic" },
-    body: heicBytes
-  });
+  const heicResponse = await app.request("/v1/receipts/parse", { method: "POST", headers: { "x-user-id": alex, "content-type": "image/heic" }, body: heicBytes });
   assert.equal(heicResponse.status, 415);
 });
-

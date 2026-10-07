@@ -58,11 +58,29 @@ struct RecognizedReceipt: Sendable {
     var text: String { lines.map(\.text).joined(separator: "\n") }
 }
 
-/// Reads receipts in two parts. Code pairs each printed name with its price by their positions on the page, so every
-/// amount comes from the receipt as recognized, and reads quantities from what's printed. The on-device Apple
-/// Intelligence model labels the priced rows, which decides where the items end and what each summary row is (subtotal,
-/// tax, tip, total and so on), and reads item discounts, taxed items, the merchant and the date. The rule-based parser
-/// is the fallback when the model is unavailable, fails, or finds no items.
+/// Cloud vision for one receipt photo. The first reading starts as soon as this is made, alongside the device's text
+/// recognition; a re-read sends the photo again with a note about what didn't add up.
+struct CloudReader: Sendable {
+    private let first: Task<APIReceiptReading, Error>
+    private let reader: @Sendable (String?) async throws -> APIReceiptReading
+
+    init(_ read: @escaping @Sendable (_ note: String?) async throws -> APIReceiptReading) {
+        reader = read
+        first = Task { try await read(nil) }
+    }
+
+    func read(note: String?) async throws -> APIReceiptReading {
+        if let note { try await reader(note) } else { try await first.value }
+    }
+}
+
+/// Reads receipts in two parts. First the printed rows: cloud vision transcribes them from the photo, or, when it's
+/// unavailable, code pairs each name the device recognized with its price by their positions on the page. Every amount
+/// comes from a row's text, and quantities from what's printed. Then each priced row is labeled, by cloud vision along
+/// with its transcription or by the on-device Apple Intelligence model, which decides where the items end and what each
+/// summary row is (subtotal, tax, tip, total and so on), and reads item discounts, taxed items, the merchant and the
+/// date. From the labels on, both readings are worked out by the same code. The rule-based parser is the fallback when
+/// neither model can read the receipt.
 enum ReceiptReader {
     /// Loads the model ahead of a scan so reading starts sooner.
     static func prewarm() {
@@ -81,29 +99,75 @@ enum ReceiptReader {
         return RecognizedReceipt(image: image, lines: lines, recognitionSeconds: (clock.now - start).seconds, documentLineCount: documentLines.count)
     }
 
-    static func extract(_ receipt: RecognizedReceipt) async -> ReceiptExtraction {
+    /// Reads the receipt with cloud vision when given it, then with the on-device model, then with the parser, each
+    /// taking over when the one before is unavailable, fails, or finds no items.
+    static func extract(_ receipt: RecognizedReceipt, cloud: CloudReader? = nil) async -> ReceiptExtraction {
         let rows = ReceiptTextRecognizer.layoutRows(receipt.lines).map { ReceiptRow(plainText($0)) }
         let modelText = prompt(for: rows)
         var diagnostics = ReceiptDiagnostics(receipt, modelText: modelText)
+        var fallbackReasons: [String] = []
+        if let cloud {
+            if var extraction = await cloudExtraction(cloud, recognizedText: receipt.text, diagnostics: &diagnostics) {
+                diagnostics.reader = "cloud"
+                diagnostics.read = ReceiptDiagnostics.Summary(extraction)
+                extraction.diagnostics = diagnostics
+                return extraction
+            }
+            fallbackReasons.append("Cloud vision gave no items, or failed.")
+        }
         if receipt.lines.isEmpty {
-            diagnostics.fallbackReason = "No text was recognized."
+            fallbackReasons.append("No text was recognized.")
         } else if !SystemLanguageModel.default.isAvailable {
-            diagnostics.fallbackReason = "The model is unavailable: \(SystemLanguageModel.default.availability)"
+            fallbackReasons.append("The model is unavailable: \(SystemLanguageModel.default.availability)")
         } else if var extraction = await modelExtraction(rows: rows, prompt: modelText, recognizedText: receipt.text, diagnostics: &diagnostics) {
             diagnostics.reader = "model"
+            diagnostics.fallbackReason = fallbackReasons.isEmpty ? nil : fallbackReasons.joined(separator: " ")
             diagnostics.read = ReceiptDiagnostics.Summary(extraction)
             extraction.diagnostics = diagnostics
             return extraction
         } else {
-            diagnostics.fallbackReason = "The model's labels gave no items, or the model failed."
+            fallbackReasons.append("The model's labels gave no items, or the model failed.")
         }
         var extraction = receipt.image.cgImage
             .flatMap { try? ReceiptTextRecognizer.scan($0, orientation: receipt.image.cgImageOrientation, documentLines: receipt.lines) }
             .map(ReceiptExtraction.init) ?? ReceiptExtraction(recognizedText: receipt.text)
         diagnostics.reader = "parser"
+        diagnostics.fallbackReason = fallbackReasons.joined(separator: " ")
         diagnostics.read = ReceiptDiagnostics.Summary(extraction)
         extraction.diagnostics = diagnostics
         return extraction
+    }
+
+    /// One cloud reading, and one more when the result doesn't add up, telling it what didn't, as with the on-device
+    /// model. The result with fewer problems wins, and the rows it read become the diagnostics' model text.
+    private static func cloudExtraction(_ cloud: CloudReader, recognizedText: String, diagnostics: inout ReceiptDiagnostics) async -> ReceiptExtraction? {
+        guard let first = await cloudAttempt(cloud, issue: nil, recognizedText: recognizedText, diagnostics: &diagnostics),
+              first.extraction.items.contains(where: { $0.kind == .item }) else { return nil }
+        var best = first
+        if let issue = first.extraction.issues.first,
+           let retry = await cloudAttempt(cloud, issue: issue, recognizedText: recognizedText, diagnostics: &diagnostics),
+           retry.extraction.items.contains(where: { $0.kind == .item }), retry.extraction.issues.count < first.extraction.issues.count {
+            best = retry
+        }
+        diagnostics.modelText = best.rows
+        return best.extraction
+    }
+
+    private static func cloudAttempt(_ cloud: CloudReader, issue: String?, recognizedText: String,
+                                     diagnostics: inout ReceiptDiagnostics) async -> (extraction: ReceiptExtraction, rows: String)? {
+        let clock = ContinuousClock(), start = clock.now
+        do {
+            let reading = try await cloud.read(note: issue)
+            // The first reading runs alongside text recognition, so only the time spent waiting for it after is counted.
+            let seconds = (clock.now - start).seconds
+            let extraction = ReceiptExtraction(reading, text: recognizedText)
+            let json = (try? JSONEncoder().encode(reading)).flatMap { String(data: $0, encoding: .utf8) }
+            diagnostics.attempts.append(.init(reader: "cloud", note: issue, seconds: seconds, reading: json, issues: extraction.issues))
+            return (extraction, prompt(for: reading.rows.map { ReceiptRow(plainText($0.text)) }))
+        } catch {
+            diagnostics.attempts.append(.init(reader: "cloud", note: issue, seconds: (clock.now - start).seconds, error: String(describing: error)))
+            return nil
+        }
     }
 
     /// The rows as the model sees them: each priced row numbered, other rows indented for context.
@@ -139,10 +203,10 @@ enum ReceiptReader {
             let request = "\(note)Label the numbered rows of this receipt. There are \(count) numbered rows, 0 to \(count - 1); give every one a label."
             let labels = try await session.respond(to: "\(request)\n\nRECEIPT ROWS\n\(prompt)", generating: ReceiptLabels.self, options: GenerationOptions(sampling: .greedy)).content
             let extraction = ReceiptExtraction(rows: rows, labels: labels, text: recognizedText)
-            diagnostics.attempts.append(.init(note: issue, seconds: (clock.now - start).seconds, reading: labels.generatedContent.jsonString, issues: extraction.issues))
+            diagnostics.attempts.append(.init(reader: "model", note: issue, seconds: (clock.now - start).seconds, reading: labels.generatedContent.jsonString, issues: extraction.issues))
             return extraction
         } catch {
-            diagnostics.attempts.append(.init(note: issue, seconds: (clock.now - start).seconds, error: String(describing: error)))
+            diagnostics.attempts.append(.init(reader: "model", note: issue, seconds: (clock.now - start).seconds, error: String(describing: error)))
             return nil
         }
     }
@@ -321,30 +385,21 @@ extension ReceiptExtraction {
         )
     }
 
-    /// The cloud vision reading, with its discount, tax and tip as adjustments in that order.
-    init(_ parsed: APIParsedReceipt) {
-        var rows = parsed.items.filter { $0.cents > 0 }.map { item in
-            ReceiptItem(name: Self.cleaned(item.name, maxLength: 60) ?? "Item", cents: item.cents)
-        }
-        var printed: [ReceiptAdjustment] = []
-        if parsed.discountCents > 0 { printed.append(ReceiptAdjustment(kind: .discount, amountCents: parsed.discountCents)) }
-        if parsed.taxCents > 0 { printed.append(ReceiptAdjustment(kind: .tax, amountCents: parsed.taxCents)) }
-        if parsed.tipCents > 0 { printed.append(ReceiptAdjustment(kind: .tip, amountCents: parsed.tipCents)) }
-        let adjustments = rows.resolveAdjustments(printed)
-        let category = parsed.category.flatMap(ExpenseCategory.init(rawValue:))
-        let merchant = parsed.merchant.flatMap { Self.cleaned($0, maxLength: 40) }
-        let name = parsed.expenseName.flatMap { Self.cleaned($0, maxLength: 48) }
-            ?? merchant.map { "\($0) \(category?.nameSuffix ?? "Expense")" }
-            ?? category?.suggestedName ?? "Shared Expense"
-        self.init(
-            category: category,
-            name: name,
-            purchaseDate: parsed.transactionDate.flatMap(Self.date),
-            items: rows,
-            adjustments: adjustments,
-            printedTotalCents: parsed.totalCents.flatMap { $0 > 0 ? $0 : nil },
-            recognizedText: parsed.recognizedText
+    /// A cloud vision reading, put together exactly as the on-device model's labels are: every amount comes from a
+    /// transcribed row, and the labels only say what each priced row is.
+    init(_ reading: APIReceiptReading, text: String) {
+        let rows = reading.rows.map { ReceiptRow(ReceiptReader.plainText($0.text)) }
+        let priced = zip(rows, reading.rows).filter { $0.0.amountCents != nil }.map(\.1)
+        let labels = ReceiptLabels(
+            merchant: reading.merchant,
+            category: ReceiptLabels.Category(reading.category),
+            purchaseDate: reading.purchaseDate,
+            rows: priced.enumerated().compactMap { index, row in
+                ReceiptLabels.Kind(row.kind).map { ReceiptLabels.Row(row: index, kind: $0, taxed: row.taxed) }
+            },
+            expenseName: reading.expenseName
         )
+        self.init(rows: rows, labels: labels, text: text)
     }
 
     private static func cleaned(_ value: String, maxLength: Int) -> String? {
@@ -400,13 +455,20 @@ struct ReceiptLabels {
     }
 
     @Generable
-    enum Kind {
+    enum Kind: CaseIterable {
         case item, detail, itemDiscount, subtotal, orderDiscount, tax, tip, surcharge, total, cashTotal, other
+        /// The kind a cloud reading names, such as "itemDiscount".
+        init?(_ name: String) {
+            guard let kind = Self.allCases.first(where: { "\($0)" == name }) else { return nil }
+            self = kind
+        }
     }
 
     @Generable
-    enum Category {
+    enum Category: CaseIterable {
         case groceries, restaurant, movie, concert, other
+        /// The category a cloud reading names; anything unknown is other.
+        init(_ name: String) { self = Self.allCases.first { "\($0)" == name } ?? .other }
         var expenseCategory: ExpenseCategory? {
             switch self {
             case .groceries: .groceries

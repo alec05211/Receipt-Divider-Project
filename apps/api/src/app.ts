@@ -108,7 +108,8 @@ export function createApp(
     if (image.contentType === "image/heic" || image.contentType === "image/heif") {
       throw new ApiError(415, "receipt parsing requires JPEG, PNG, or WebP", "unsupported_media_type");
     }
-    return context.json(await receiptVisionParser.parseReceipt(image.contentType, image.bytes));
+    const note = context.req.query("note")?.slice(0, 500) || undefined;
+    return context.json(await receiptVisionParser.parseReceipt(image.contentType, image.bytes, note));
   });
 
   app.post("/v1/expenses", async (context) => context.json(
