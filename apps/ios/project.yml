@@ -40,6 +40,7 @@ targets:
         # Keeps `@testable import ReceiptDivider` working despite the space in the product name.
         PRODUCT_MODULE_NAME: ReceiptDivider
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Receipt Divider
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
