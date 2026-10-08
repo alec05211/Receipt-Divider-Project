@@ -410,14 +410,13 @@ struct ReceiptCaptureView: View {
             balancer = ContributionBalancer()
         }
     }
-    /// A single item's total is edited directly; this replaces its price and drops its offsets and adjustments.
     private var totalBinding: Binding<Int> {
         Binding(get: { total }, set: { cents in
             guard items.count == 1 else { return }
-            adjustments = []
-            items[0].cents = max(0, cents)
+            let net = max(0, cents - adjustments.reduce(0) { $0 + $1.amountCents })
+            items[0].cents = net
             items[0].localOffsetCents = 0
-            items[0].globalOffsetCents = 0
+            applyAdjustments()
         })
     }
     /// Keeps a lone item's printed price while recording the difference to the receipt total as its own offset.

@@ -58,7 +58,7 @@ struct ExpenseDetailView: View {
                 }
             }
 
-            Section("Split") {
+            Section {
                 ForEach(participants, id: \.self) { person in
                     HStack {
                         PersonBadge(person: person)
@@ -149,6 +149,15 @@ struct ExpenseDetailView: View {
         }
         .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    ExpenseReviewEditorView(expense: current, isEditable: canEdit)
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+            }
+        }
     }
 
     private func metadataLine(font: Font, avatarSize: CGFloat) -> some View {

@@ -111,6 +111,120 @@ struct ExpenseReviewEditorView: View {
         return !name.isEmpty
     }
 
+    private var subtotalCents: Int {
+        let selectedItems = itemsBinding.wrappedValue.filter { $0.kind == .item && $0.isSelected }
+        if selectedItems.isEmpty {
+            return max(0, totalBinding.wrappedValue - taxCents - tipCents)
+        }
+        return selectedItems.reduce(0) { $0 + $1.netCents }
+    }
+
+    private var taxRate: Double? {
+        adjustmentsBinding.wrappedValue.first(where: { $0.kind == .tax && $0.rate > 0 })?.rate
+    }
+
+    private var taxCents: Int {
+        if let taxAdj = adjustmentsBinding.wrappedValue.first(where: { $0.kind == .tax }) {
+            return taxAdj.amountCents
+        }
+        if adjustmentsBinding.wrappedValue.isEmpty, mode == .existing {
+            let offset = itemsBinding.wrappedValue.filter(\.isSelected).reduce(0) { $0 + $1.globalOffsetCents }
+            return max(0, offset)
+        }
+        return 0
+    }
+
+    private var tipCents: Int {
+        adjustmentsBinding.wrappedValue.tipCents
+    }
+
+    private var otherAdjustments: [ReceiptAdjustment] {
+        adjustmentsBinding.wrappedValue.filter { $0.kind != .tax && $0.kind != .tip }
+    }
+
+    private var itemDiscountTotal: Int {
+        itemsBinding.wrappedValue.filter(\.isSelected).reduce(0) { $0 + $1.localOffsetCents }
+    }
+
+    private var subtotalBinding: Binding<Int> {
+        Binding(
+            get: { subtotalCents },
+            set: { newSubtotal in
+                guard isEditable else { return }
+                let cents = max(0, newSubtotal)
+                if itemsBinding.wrappedValue.isEmpty {
+                    itemsBinding.wrappedValue = [ReceiptItem(name: "", cents: cents, isSelected: true)]
+                } else if itemsBinding.wrappedValue.count == 1 {
+                    itemsBinding.wrappedValue[0].cents = cents
+                    itemsBinding.wrappedValue[0].localOffsetCents = 0
+                }
+                recalculateTotal()
+            }
+        )
+    }
+
+    private var taxBinding: Binding<Int> {
+        Binding(
+            get: { taxCents },
+            set: { newTax in
+                guard isEditable else { return }
+                let cents = max(0, newTax)
+                if let idx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tax }) {
+                    adjustmentsBinding.wrappedValue[idx].amountCents = cents
+                    adjustmentsBinding.wrappedValue[idx].rate = 0
+                } else if cents > 0 {
+                    if let tipIdx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) {
+                        adjustmentsBinding.wrappedValue.insert(ReceiptAdjustment(kind: .tax, amountCents: cents), at: tipIdx)
+                    } else {
+                        adjustmentsBinding.wrappedValue.append(ReceiptAdjustment(kind: .tax, amountCents: cents))
+                    }
+                }
+                recalculateTotal()
+            }
+        )
+    }
+
+    private var tipBinding: Binding<Int> {
+        Binding(
+            get: { tipCents },
+            set: { newTip in
+                guard isEditable else { return }
+                let cents = max(0, newTip)
+                if let idx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) {
+                    adjustmentsBinding.wrappedValue[idx].amountCents = cents
+                } else if cents > 0 {
+                    adjustmentsBinding.wrappedValue.append(ReceiptAdjustment(kind: .tip, amountCents: cents))
+                }
+                recalculateTotal()
+            }
+        )
+    }
+
+    private func recalculateTotal() {
+        var items = itemsBinding.wrappedValue
+        let applied = items.applyAdjustments(adjustmentsBinding.wrappedValue)
+        itemsBinding.wrappedValue = items
+        adjustmentsBinding.wrappedValue = applied
+        let newTotal = items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents } + applied.tipCents
+        totalBinding.wrappedValue = max(0, newTotal)
+        if items.count <= 1 {
+            guard newTotal > 0, !participants.isEmpty else { return }
+            let base = newTotal / participants.count
+            let remainder = newTotal % participants.count
+            sharesBinding.wrappedValue = Dictionary(uniqueKeysWithValues: participants.enumerated().map { index, person in
+                (person, base + (index < remainder ? 1 : 0))
+            })
+            balancer = ContributionBalancer()
+        } else {
+            recomputeAssignedShares()
+        }
+    }
+
+    private func signedAdjustment(_ adjustment: ReceiptAdjustment) -> String {
+        let amount = adjustment.amountCents
+        return adjustment.kind == .discount ? "−\(amount.usd)" : amount.usd
+    }
+
     /// Initializer for draft mode during new expense capture review.
     init(
         category: Binding<ExpenseCategory?>,
@@ -201,11 +315,14 @@ struct ExpenseReviewEditorView: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: categoryBinding.wrappedValue?.symbol ?? "circle.dashed")
-                            Text(categoryBinding.wrappedValue?.title ?? "None")
-                            Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-                        .fixedSize()
+                        .frame(minWidth: 46)
+                        .contentShape(Rectangle())
                     }
+                    .accessibilityLabel(categoryBinding.wrappedValue?.title ?? "Category")
                     .disabled(!isEditable)
 
                     TextField("What was this for?", text: descriptionBinding).submitLabel(.done)
@@ -214,14 +331,62 @@ struct ExpenseReviewEditorView: View {
             }
 
             Section {
-                LabeledContent("Expense total") {
-                    if isEditable && itemsBinding.wrappedValue.count <= 1 {
-                        CentsField(title: "0.00", cents: totalBinding).fontWeight(.semibold)
+                LabeledContent("Subtotal") {
+                    if isEditable && mode == .draft && itemsBinding.wrappedValue.count <= 1 {
+                        CentsField(title: "0.00", cents: subtotalBinding).fontWeight(.semibold)
                     } else {
-                        Text(totalBinding.wrappedValue.usd).fontWeight(.semibold)
+                        Text(subtotalCents.usd).fontWeight(.semibold)
                     }
                 }
 
+                LabeledContent("Tax") {
+                    if isEditable && mode == .draft {
+                        HStack(spacing: 4) {
+                            if let taxRate, taxRate > 0 {
+                                Text("(\(RateField.format(taxRate))%)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            CentsField(title: "0.00", cents: taxBinding)
+                        }
+                    } else {
+                        HStack(spacing: 4) {
+                            if let taxRate, taxRate > 0 {
+                                Text("(\(RateField.format(taxRate))%)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(taxCents.usd)
+                        }
+                    }
+                }
+
+                LabeledContent("Tip") {
+                    if isEditable && mode == .draft {
+                        CentsField(title: "0.00", cents: tipBinding)
+                    } else {
+                        Text(tipCents.usd)
+                    }
+                }
+
+                if itemDiscountTotal != 0 {
+                    LabeledContent("Item discounts") {
+                        Text(itemDiscountTotal < 0 ? "−\((-itemDiscountTotal).usd)" : itemDiscountTotal.usd)
+                    }
+                }
+
+                ForEach(otherAdjustments) { adjustment in
+                    LabeledContent(adjustment.kind.title) {
+                        Text(signedAdjustment(adjustment))
+                    }
+                }
+
+                LabeledContent("Total") {
+                    Text(totalBinding.wrappedValue.usd).fontWeight(.semibold)
+                }
+            }
+
+            Section {
                 Picker("Paid by", selection: payerBinding) {
                     ForEach(participants, id: \.self) { person in
                         Text(store.name(for: person)).tag(Optional(person))
@@ -229,35 +394,39 @@ struct ExpenseReviewEditorView: View {
                 }
                 .disabled(!isEditable)
 
-                DatePicker("Date of expense", selection: dateBinding, displayedComponents: .date)
-                    .disabled(!isEditable)
+                LabeledContent("Date of expense") {
+                    DatePicker("", selection: dateBinding, displayedComponents: .date)
+                        .labelsHidden()
+                        .frame(maxHeight: 32)
+                }
+                .disabled(!isEditable)
             }
 
-            if !adjustmentsBinding.wrappedValue.isEmpty {
-                Section {
-                    ForEach(adjustmentsBinding) { $adjustment in
-                        LabeledContent(adjustment.kind.title) {
-                            // Saved expenses keep the adjustments they were split with.
-                            let editable = isEditable && mode == .draft
-                            if adjustment.kind == .tip {
-                                if editable { CentsField(title: "0.00", cents: $adjustment.amountCents) } else { Text(adjustment.amountCents.usd) }
-                            } else {
-                                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                    if editable { RateField(rate: $adjustment.rate) } else { Text(RateField.format(adjustment.rate) + "%") }
-                                    Text("(\(adjustment.kind == .discount ? "−" : "")\(adjustment.amountCents.usd))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .monospacedDigit()
-                                .fixedSize()
-                            }
+            Section {
+                ForEach(participants, id: \.self) { person in
+                    VStack(spacing: 4) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(store.name(for: person))
+                            Spacer()
+                            ContributionAmountField(
+                                name: store.name(for: person),
+                                cents: shareBinding(for: person),
+                                total: totalBinding.wrappedValue
+                            )
+                        }
+                        if participants.count > 1 {
+                            ContributionSlider(
+                                name: store.name(for: person),
+                                cents: shareBinding(for: person),
+                                total: totalBinding.wrappedValue,
+                                detent: contributionDetents[person] ?? 0
+                            )
+                            .disabled(!isEditable)
                         }
                     }
                 }
-            }
 
-            if showsAssignmentSection {
-                Section {
+                if showsAssignmentSection {
                     if let onOpenAssignItems {
                         Button {
                             onOpenAssignItems()
@@ -288,31 +457,6 @@ struct ExpenseReviewEditorView: View {
                             Text("Assign items")
                         }
                         .disabled(!isEditable)
-                    }
-                }
-            }
-
-            Section {
-                ForEach(participants, id: \.self) { person in
-                    VStack(spacing: 4) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(store.name(for: person))
-                            Spacer()
-                            ContributionAmountField(
-                                name: store.name(for: person),
-                                cents: shareBinding(for: person),
-                                total: totalBinding.wrappedValue
-                            )
-                        }
-                        if participants.count > 1 {
-                            ContributionSlider(
-                                name: store.name(for: person),
-                                cents: shareBinding(for: person),
-                                total: totalBinding.wrappedValue,
-                                detent: contributionDetents[person] ?? 0
-                            )
-                            .disabled(!isEditable)
-                        }
                     }
                 }
             }
