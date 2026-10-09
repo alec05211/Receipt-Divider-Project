@@ -49,6 +49,7 @@ struct EditProfileView: View {
             } footer: { Text("3–24 lowercase letters, numbers, or underscores.") }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
         }
+        .scrollIndicators(.hidden)
         .onChange(of: photoItem) { _, item in if let item { uploadPhoto(item) } }
         .sheet(isPresented: $showPhotoCrop, onDismiss: { pendingPhoto = nil; photoItem = nil }) {
             if let pendingPhoto { AvatarCropView(image: pendingPhoto) { uploadPhoto($0) } }

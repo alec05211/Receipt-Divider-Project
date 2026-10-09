@@ -27,6 +27,7 @@ struct FriendsView: View {
             if let errorMessage { Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) } }
             if isSearchActive { searchResults } else { friendSections }
         }
+        .scrollIndicators(.hidden)
         .navigationTitle("Friends")
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search by name or username")
         .submitLabel(.done)

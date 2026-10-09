@@ -14,6 +14,7 @@ struct PaymentsView: View {
                 ForEach(payments) { PaymentRow(payment: $0) }
             }
         }
+        .scrollIndicators(.hidden)
         .navigationTitle("Payments")
         .refreshable {
             guard let token = try? await authentication.accessToken() else { return }

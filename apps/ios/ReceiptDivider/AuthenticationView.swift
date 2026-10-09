@@ -108,6 +108,7 @@ struct AuthenticationView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollIndicators(.hidden)
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationBarBackButtonHidden()
         }
@@ -368,6 +369,7 @@ private struct NewPasswordView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollIndicators(.hidden)
             .background(Color(uiColor: .systemGroupedBackground))
         }
         .onAppear { isFocused = true }

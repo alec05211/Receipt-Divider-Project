@@ -28,6 +28,7 @@ struct AppTabView: View {
                 .tabItem { Label("Add expense", systemImage: "plus.circle.fill") }.tag(AppTab.add)
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(AppTab.settings)
         }
+        .scrollIndicators(.hidden)
         // Standard TabView deliberately owns its appearance. Current iOS applies
         // the system Liquid Glass treatment when available.
         .tint(.primary)

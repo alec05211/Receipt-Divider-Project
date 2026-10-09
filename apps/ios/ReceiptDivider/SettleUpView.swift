@@ -44,6 +44,7 @@ struct SettleUpView: View {
             }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
         }
+        .scrollIndicators(.hidden)
         .navigationTitle("Settle up")
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(isSaving ? "Recording…" : "Record", action: save).disabled(amount <= 0 || other == nil || isSaving) } }
         .sensoryFeedback(.success, trigger: didSave)

@@ -150,6 +150,7 @@ struct ExpenseDetailView: View {
         .listStyle(.insetGrouped)
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(12)
+        .scrollIndicators(.hidden)
         .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
     }

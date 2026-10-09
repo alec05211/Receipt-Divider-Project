@@ -53,6 +53,7 @@ private struct SummaryContent: View {
             .padding(.bottom, 20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .scrollIndicators(.hidden)
         .background(Color(.systemGroupedBackground))
     }
 }
@@ -126,6 +127,7 @@ private struct BalancesView: View {
                 }
             }
         }
+        .scrollIndicators(.hidden)
         .navigationTitle("Balances")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $selectedPerson) { person in

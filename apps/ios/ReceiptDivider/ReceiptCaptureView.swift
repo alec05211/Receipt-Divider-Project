@@ -268,6 +268,7 @@ struct ReceiptCaptureView: View {
                     }
                 }
             }
+            .scrollIndicators(.hidden)
         }
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -444,29 +445,29 @@ struct ReceiptCaptureView: View {
             step = .reading
             return
         }
-        if hasSingleItem {
-            itemAssignments = Dictionary(uniqueKeysWithValues: items.map { ($0.id, selectedPeople) })
-            splitsPrintedTotal = false
-            assignmentsLocked = false
-            assignmentsBeforeLock = nil
-            prepareFinalSplit()
-            step = .split
-        } else {
-            prepareAssignments()
-            step = .assign
-        }
+        prepareAssignmentsForReview()
+        prepareFinalSplit()
+        step = .split
     }
-    /// Preserves valid prior assignments, including an existing Split All selection.
-    private func prepareAssignments() {
+
+    /// Sets up default item assignments to all participants, or preserves valid customized assignments.
+    private func prepareAssignmentsForReview() {
         let validPeople = selectedPeople
-        if splitsPrintedTotal {
-            itemAssignments = Dictionary(uniqueKeysWithValues: items.map { ($0.id, validPeople) })
+        let hasCustomAssignments = items.contains { item in
+            guard let assigned = itemAssignments[item.id] else { return false }
+            return !assigned.isEmpty && assigned != validPeople
+        }
+        if !hasCustomAssignments {
+            for item in items {
+                itemAssignments[item.id] = validPeople
+            }
         } else {
-            itemAssignments = itemAssignments.reduce(into: [UUID: Set<UUID>]()) { result, entry in
-                let kept = entry.value.intersection(validPeople)
-                if !kept.isEmpty { result[entry.key] = kept }
+            for item in items {
+                let kept = itemAssignments[item.id, default: []].intersection(validPeople)
+                itemAssignments[item.id] = kept.isEmpty ? validPeople : kept
             }
         }
+        splitsPrintedTotal = false
         assignmentsLocked = false
         assignmentsBeforeLock = nil
         shares = assignedShares()
@@ -599,14 +600,9 @@ struct ReceiptCaptureView: View {
             personSearch = ""; receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; diagnostics = nil; step = .capture
         case .assign:
             if assignmentsLocked { undoAssignmentConfirmation() }
-            else { step = .review }
+            else { step = .split }
         case .split:
-            if !hasSingleItem {
-                step = .assign
-                if assignmentsLocked { undoAssignmentConfirmation() }
-            } else {
-                step = .review
-            }
+            step = .review
         case .contributions: step = .split
         default: break
         }

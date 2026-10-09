@@ -105,6 +105,7 @@ struct AssignItemsView: View {
         }
         .listStyle(.insetGrouped)
         .contentMargins(.top, 8, for: .scrollContent)
+        .scrollIndicators(.hidden)
         .navigationTitle("Assign items")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $editingItemID) { id in
@@ -236,6 +237,7 @@ struct ItemEditor: View {
                     Toggle("Taxed", isOn: $item.taxed)
                 }
             }
+            .scrollIndicators(.hidden)
             .navigationTitle("Edit item")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }

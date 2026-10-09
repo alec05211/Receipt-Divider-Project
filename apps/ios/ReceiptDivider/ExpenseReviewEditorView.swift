@@ -611,6 +611,7 @@ struct ExpenseReviewEditorView: View {
         .listStyle(.insetGrouped)
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(12)
+        .scrollIndicators(.hidden)
         .navigationTitle("Review expense")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

@@ -59,6 +59,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .scrollIndicators(.hidden)
             .navigationTitle("Settings")
             .confirmationDialog("Clear this device's cached ledger?", isPresented: $showResetConfirmation, titleVisibility: .visible) { Button("Clear cached data", role: .destructive) { store.resetLocalCache() } }
             .sheet(isPresented: $showServerReset) { ServerResetView() }
@@ -109,6 +110,7 @@ private struct ServerResetView: View {
                     .disabled(confirmation != "DELETE" || isDeleting)
                 }
             }
+            .scrollIndicators(.hidden)
             .navigationTitle("Delete all data")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(isDeleting) } }
