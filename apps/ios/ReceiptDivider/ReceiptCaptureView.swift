@@ -8,6 +8,7 @@ struct ReceiptCaptureView: View {
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
     let finish: () -> Void
+    var openScannerTrigger: Int = 0
     @State private var step: Step = .capture
     @State private var image: UIImage?
     @State private var selectedPhoto: PhotosPickerItem?
@@ -154,6 +155,10 @@ struct ReceiptCaptureView: View {
             .onChange(of: selectedPhoto) { _, photo in load(photo) }
             .onChange(of: items) { applyAdjustments() }
             .onChange(of: adjustments) { applyAdjustments() }
+            .onChange(of: openScannerTrigger) { _, newVal in
+                guard newVal > 0 else { return }
+                triggerScannerShortcut()
+            }
             .overlay { if showSaveSuccess { SaveSuccessView().transition(.scale(scale: 0.75).combined(with: .opacity)) } }
             .alert("Couldn’t save", isPresented: Binding(
                 get: { error != nil },
@@ -412,6 +417,7 @@ struct ReceiptCaptureView: View {
     }
     private var totalBinding: Binding<Int> {
         Binding(get: { total }, set: { cents in
+            splitsPrintedTotal = false
             guard items.count == 1 else { return }
             let net = max(0, cents - adjustments.reduce(0) { $0 + $1.amountCents })
             items[0].cents = net
@@ -573,6 +579,14 @@ struct ReceiptCaptureView: View {
         }
     }
     private func reset() { receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func triggerScannerShortcut() {
+        guard canScan else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if step != .capture {
+            reset()
+        }
+        showCamera = true
+    }
     private func back() {
         switch step {
         case .review:

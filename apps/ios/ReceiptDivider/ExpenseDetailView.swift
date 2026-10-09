@@ -147,17 +147,11 @@ struct ExpenseDetailView: View {
         } message: {
             Text(editError ?? "")
         }
+        .listStyle(.insetGrouped)
+        .contentMargins(.top, 8, for: .scrollContent)
+        .listSectionSpacing(12)
         .navigationTitle("Expense")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    ExpenseReviewEditorView(expense: current, isEditable: canEdit)
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-            }
-        }
     }
 
     private func metadataLine(font: Font, avatarSize: CGFloat) -> some View {

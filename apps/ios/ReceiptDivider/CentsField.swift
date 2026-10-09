@@ -4,25 +4,67 @@ import Foundation
 struct CentsField: View {
     let title: String
     @Binding var cents: Int
+    var isFocusedBinding: Binding<Bool>? = nil
+    var onFocusChange: ((Bool) -> Void)? = nil
+    @State private var text = ""
     @FocusState private var isFocused: Bool
+    @Environment(\.fontWeight) private var envFontWeight
 
     var body: some View {
         HStack(spacing: 1) {
             Spacer(minLength: 0)
-            Text("$").foregroundStyle(.secondary)
-            TextField(title, text: Binding(
-                get: { String(format: "%.2f", Double(cents) / 100) },
-                set: { text in
-                    let value = Double(text.replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: ".")) ?? 0
-                    cents = max(0, Int((value * 100).rounded()))
+            HStack(spacing: 1) {
+                Text("$").foregroundStyle(.secondary)
+                    .fontWeight(envFontWeight)
+                TextField(title, text: $text)
+                    .keyboardType(.decimalPad)
+                    .focused($isFocused)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize()
+                    .autocorrectionDisabled()
+                    .fontWeight(envFontWeight)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isFocused = true
+            }
+        }
+        .onAppear { text = formatted }
+        .onChange(of: cents) { _, _ in
+            if !isFocused { text = formatted }
+        }
+        .onChange(of: isFocused) { _, focused in
+            if isFocusedBinding?.wrappedValue != focused {
+                isFocusedBinding?.wrappedValue = focused
+            }
+            onFocusChange?(focused)
+            if focused {
+                if cents == 0 {
+                    text = ""
                 }
-            ))
-            .keyboardType(.decimalPad)
-            .focused($isFocused)
-            .multilineTextAlignment(.trailing)
-            .fixedSize()
+            } else {
+                text = formatted
+            }
+        }
+        .onChange(of: isFocusedBinding?.wrappedValue) { _, externalFocused in
+            if let externalFocused, isFocused != externalFocused {
+                isFocused = externalFocused
+            }
+        }
+        .onChange(of: text) { _, newText in
+            guard isFocused else { return }
+            let cleaned = newText.replacingOccurrences(of: "$", with: "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+            if cleaned.isEmpty {
+                cents = 0
+            } else if let value = Double(cleaned) {
+                cents = max(0, Int((value * 100).rounded()))
+            }
         }
         .keyboardDoneButton($isFocused)
+    }
+
+    private var formatted: String {
+        String(format: "%.2f", Double(cents) / 100)
     }
 }
 

@@ -44,6 +44,10 @@ struct ExpenseReviewEditorView: View {
     @State private var internalIsSaving = false
     @State private var internalSaveError: String?
     @State private var balancer = ContributionBalancer()
+    @State private var isSubtotalFocused = false
+    @State private var isTaxFocused = false
+    @State private var isTipFocused = false
+    @State private var isTotalFocused = false
     let existingExpenseID: UUID?
 
     private var categoryBinding: Binding<ExpenseCategory?> {
@@ -157,6 +161,24 @@ struct ExpenseReviewEditorView: View {
                 } else if itemsBinding.wrappedValue.count == 1 {
                     itemsBinding.wrappedValue[0].cents = cents
                     itemsBinding.wrappedValue[0].localOffsetCents = 0
+                } else {
+                    let oldSubtotal = subtotalCents
+                    if oldSubtotal > 0 {
+                        var accumulated = 0
+                        for i in 0..<itemsBinding.wrappedValue.count - 1 {
+                            let proportion = Double(itemsBinding.wrappedValue[i].cents) / Double(oldSubtotal)
+                            let newCents = Int((Double(cents) * proportion).rounded())
+                            itemsBinding.wrappedValue[i].cents = newCents
+                            accumulated += newCents
+                        }
+                        itemsBinding.wrappedValue[itemsBinding.wrappedValue.count - 1].cents = max(0, cents - accumulated)
+                    } else {
+                        let share = cents / itemsBinding.wrappedValue.count
+                        let rem = cents % itemsBinding.wrappedValue.count
+                        for i in 0..<itemsBinding.wrappedValue.count {
+                            itemsBinding.wrappedValue[i].cents = share + (i < rem ? 1 : 0)
+                        }
+                    }
                 }
                 recalculateTotal()
             }
@@ -170,8 +192,12 @@ struct ExpenseReviewEditorView: View {
                 guard isEditable else { return }
                 let cents = max(0, newTax)
                 if let idx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tax }) {
-                    adjustmentsBinding.wrappedValue[idx].amountCents = cents
-                    adjustmentsBinding.wrappedValue[idx].rate = 0
+                    if cents == 0 {
+                        adjustmentsBinding.wrappedValue.remove(at: idx)
+                    } else {
+                        adjustmentsBinding.wrappedValue[idx].amountCents = cents
+                        adjustmentsBinding.wrappedValue[idx].rate = 0
+                    }
                 } else if cents > 0 {
                     if let tipIdx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) {
                         adjustmentsBinding.wrappedValue.insert(ReceiptAdjustment(kind: .tax, amountCents: cents), at: tipIdx)
@@ -191,13 +217,63 @@ struct ExpenseReviewEditorView: View {
                 guard isEditable else { return }
                 let cents = max(0, newTip)
                 if let idx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) {
-                    adjustmentsBinding.wrappedValue[idx].amountCents = cents
+                    if cents == 0 {
+                        adjustmentsBinding.wrappedValue.remove(at: idx)
+                    } else {
+                        adjustmentsBinding.wrappedValue[idx].amountCents = cents
+                    }
                 } else if cents > 0 {
                     adjustmentsBinding.wrappedValue.append(ReceiptAdjustment(kind: .tip, amountCents: cents))
                 }
                 recalculateTotal()
             }
         )
+    }
+
+    private var editableTotalBinding: Binding<Int> {
+        Binding(
+            get: { totalBinding.wrappedValue },
+            set: { newTotal in
+                guard isEditable else { return }
+                let cents = max(0, newTotal)
+                let adjNet = adjustmentsBinding.wrappedValue.reduce(0) { sum, adj in
+                    sum + (adj.kind == .discount ? -adj.amountCents : adj.amountCents)
+                }
+                let targetSubtotal = max(0, cents - adjNet)
+                if itemsBinding.wrappedValue.isEmpty {
+                    itemsBinding.wrappedValue = [ReceiptItem(name: "", cents: targetSubtotal, isSelected: true)]
+                } else if itemsBinding.wrappedValue.count == 1 {
+                    itemsBinding.wrappedValue[0].cents = targetSubtotal
+                    itemsBinding.wrappedValue[0].localOffsetCents = 0
+                } else {
+                    let oldSubtotal = subtotalCents
+                    if oldSubtotal > 0 {
+                        var accumulated = 0
+                        for i in 0..<itemsBinding.wrappedValue.count - 1 {
+                            let proportion = Double(itemsBinding.wrappedValue[i].cents) / Double(oldSubtotal)
+                            let newCents = Int((Double(targetSubtotal) * proportion).rounded())
+                            itemsBinding.wrappedValue[i].cents = newCents
+                            accumulated += newCents
+                        }
+                        itemsBinding.wrappedValue[itemsBinding.wrappedValue.count - 1].cents = max(0, targetSubtotal - accumulated)
+                    } else {
+                        let share = targetSubtotal / itemsBinding.wrappedValue.count
+                        let rem = targetSubtotal % itemsBinding.wrappedValue.count
+                        for i in 0..<itemsBinding.wrappedValue.count {
+                            itemsBinding.wrappedValue[i].cents = share + (i < rem ? 1 : 0)
+                        }
+                    }
+                }
+                recalculateTotal()
+            }
+        )
+    }
+
+    private var hasAdditiveAmounts: Bool {
+        (taxCents > 0 || isTaxFocused) ||
+        (tipCents > 0 || isTipFocused) ||
+        itemDiscountTotal != 0 ||
+        otherAdjustments.contains { $0.amountCents != 0 }
     }
 
     private func recalculateTotal() {
@@ -331,58 +407,129 @@ struct ExpenseReviewEditorView: View {
             }
 
             Section {
-                LabeledContent("Subtotal") {
-                    if isEditable && mode == .draft && itemsBinding.wrappedValue.count <= 1 {
-                        CentsField(title: "0.00", cents: subtotalBinding).fontWeight(.semibold)
-                    } else {
-                        Text(subtotalCents.usd).fontWeight(.semibold)
-                    }
-                }
-
-                LabeledContent("Tax") {
-                    if isEditable && mode == .draft {
-                        HStack(spacing: 4) {
-                            if let taxRate, taxRate > 0 {
-                                Text("(\(RateField.format(taxRate))%)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                VStack(spacing: 3) {
+                    if hasAdditiveAmounts {
+                        // Subtotal
+                        HStack {
+                            Spacer()
+                            if isEditable {
+                                CentsField(title: "0.00", cents: subtotalBinding, isFocusedBinding: $isSubtotalFocused)
+                                    .accessibilityLabel("Subtotal")
+                            } else {
+                                Text(subtotalCents.usd)
+                                    .accessibilityLabel("Subtotal")
                             }
-                            CentsField(title: "0.00", cents: taxBinding)
                         }
-                    } else {
-                        HStack(spacing: 4) {
-                            if let taxRate, taxRate > 0 {
-                                Text("(\(RateField.format(taxRate))%)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isEditable { isSubtotalFocused = true }
+                        }
+
+                        // Tax
+                        if taxCents > 0 || isTaxFocused {
+                            HStack {
+                                HStack(spacing: 4) {
+                                    Text("Tax")
+                                    if let taxRate, taxRate > 0 {
+                                        Text("(\(RateField.format(taxRate))%)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                if isEditable {
+                                    CentsField(title: "0.00", cents: taxBinding, isFocusedBinding: $isTaxFocused)
+                                        .accessibilityLabel("Tax")
+                                } else {
+                                    Text(taxCents.usd)
+                                        .accessibilityLabel("Tax")
+                                }
                             }
-                            Text(taxCents.usd)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if isEditable { isTaxFocused = true }
+                            }
+                        }
+
+                        // Tip
+                        if tipCents > 0 || isTipFocused {
+                            HStack {
+                                Text("Tip")
+                                Spacer()
+                                if isEditable {
+                                    CentsField(title: "0.00", cents: tipBinding, isFocusedBinding: $isTipFocused)
+                                        .accessibilityLabel("Tip")
+                                } else {
+                                    Text(tipCents.usd)
+                                        .accessibilityLabel("Tip")
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if isEditable { isTipFocused = true }
+                            }
+                        }
+
+                        // Item discounts
+                        if itemDiscountTotal != 0 {
+                            HStack {
+                                Text("Item discounts")
+                                Spacer()
+                                Text(itemDiscountTotal < 0 ? "−\((-itemDiscountTotal).usd)" : itemDiscountTotal.usd)
+                            }
+                        }
+
+                        // Other adjustments
+                        ForEach(otherAdjustments) { adjustment in
+                            if adjustment.amountCents != 0 {
+                                HStack {
+                                    Text(adjustment.kind.title)
+                                    Spacer()
+                                    Text(signedAdjustment(adjustment))
+                                }
+                            }
+                        }
+
+                        Rectangle()
+                            .fill(Color(uiColor: .separator))
+                            .frame(height: 1.5)
+                            .padding(.vertical, 2)
+                    }
+
+                    // Total
+                    HStack {
+                        Spacer()
+                        if isEditable {
+                            CentsField(title: "0.00", cents: editableTotalBinding, isFocusedBinding: $isTotalFocused)
+                                .fontWeight(.semibold)
+                                .accessibilityLabel("Total")
+                        } else {
+                            Text(totalBinding.wrappedValue.usd)
+                                .fontWeight(.semibold)
+                                .accessibilityLabel("Total")
                         }
                     }
-                }
-
-                LabeledContent("Tip") {
-                    if isEditable && mode == .draft {
-                        CentsField(title: "0.00", cents: tipBinding)
-                    } else {
-                        Text(tipCents.usd)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if isEditable { isTotalFocused = true }
                     }
                 }
-
-                if itemDiscountTotal != 0 {
-                    LabeledContent("Item discounts") {
-                        Text(itemDiscountTotal < 0 ? "−\((-itemDiscountTotal).usd)" : itemDiscountTotal.usd)
+                .padding(.vertical, 3)
+                .contextMenu {
+                    if isEditable {
+                        if taxCents == 0 {
+                            Button("Add tax", systemImage: "percent") {
+                                taxBinding.wrappedValue = 1
+                                isTaxFocused = true
+                            }
+                        }
+                        if tipCents == 0 {
+                            Button("Add tip", systemImage: "heart") {
+                                tipBinding.wrappedValue = 1
+                                isTipFocused = true
+                            }
+                        }
                     }
-                }
-
-                ForEach(otherAdjustments) { adjustment in
-                    LabeledContent(adjustment.kind.title) {
-                        Text(signedAdjustment(adjustment))
-                    }
-                }
-
-                LabeledContent("Total") {
-                    Text(totalBinding.wrappedValue.usd).fontWeight(.semibold)
                 }
             }
 
