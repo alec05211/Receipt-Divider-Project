@@ -27,6 +27,25 @@ struct ExpenseDetailView: View {
         }.sorted { $0.transactionDate > $1.transactionDate }
     }
 
+    private var listsTip: Bool { current.adjustments.contains { $0.kind == .tip } }
+    private var selectedItems: [ReceiptItem] { current.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) } }
+    private var isSplitEvenly: Bool {
+        guard participants.count > 1 else { return false }
+        let itemsAllShared = selectedItems.allSatisfy { item in
+            item.ownerIDs.isEmpty || item.ownerIDs == Set(participants)
+        }
+        let shareValues = participants.map { current.shares[$0, default: 0] }
+        guard let minShare = shareValues.min(), let maxShare = shareValues.max() else { return false }
+        let sharesBalanced = (maxShare - minShare) <= 1
+        return itemsAllShared && sharesBalanced
+    }
+
+    private func items(for person: UUID) -> [ReceiptItem] {
+        selectedItems.filter { item in
+            item.ownerIDs.isEmpty || item.ownerIDs.contains(person)
+        }
+    }
+
     var body: some View {
         List {
             Section {
@@ -59,11 +78,63 @@ struct ExpenseDetailView: View {
             }
 
             Section {
-                ForEach(participants, id: \.self) { person in
-                    HStack {
-                        PersonBadge(person: person)
-                        Spacer()
-                        Text(current.shares[person, default: 0].usd).fontWeight(.semibold)
+                if isSplitEvenly {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            HStack(spacing: 6) {
+                                AvatarStack(people: participants)
+                                Text(participants.map { store.name(for: $0) }.joined(separator: ", "))
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            let perPersonShare = current.shares[participants.first ?? store.activeUserID ?? UUID(), default: 0]
+                            Text(participants.count > 1 ? "\(perPersonShare.usd) each" : perPersonShare.usd)
+                                .fontWeight(.semibold)
+                        }
+                        if !selectedItems.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(selectedItems) { item in
+                                    HStack {
+                                        Text(item.name.isEmpty ? "Item" : item.name)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text(item.cents.usd)
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.leading, 28)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                } else {
+                    ForEach(participants, id: \.self) { person in
+                        let personItems = items(for: person)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                PersonBadge(person: person)
+                                Spacer()
+                                Text(current.shares[person, default: 0].usd).fontWeight(.semibold)
+                            }
+                            if !personItems.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(personItems) { item in
+                                        HStack {
+                                            Text(item.name.isEmpty ? "Item" : item.name)
+                                                .lineLimit(1)
+                                            Spacer()
+                                            let ownersCount = max(1, item.ownerIDs.isEmpty ? participants.count : item.ownerIDs.count)
+                                            Text((item.cents / ownersCount).usd)
+                                        }
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.leading, 30)
+                            }
+                        }
+                        .padding(.vertical, 2)
                     }
                 }
             }
@@ -77,18 +148,6 @@ struct ExpenseDetailView: View {
                     ContentUnavailableView("Couldn’t load receipt", systemImage: "wifi.exclamationmark")
                 } else {
                     ContentUnavailableView("No receipt", systemImage: "doc.text.image")
-                }
-                // The tip shows with the adjustments when the expense records one.
-                let listsTip = current.adjustments.contains { $0.kind == .tip }
-                ForEach(current.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }) { item in
-                    LabeledContent {
-                        HStack(spacing: 8) {
-                            if !item.ownerIDs.isEmpty { AvatarStack(people: Array(item.ownerIDs)) }
-                            Text(item.cents.usd)
-                        }
-                    } label: {
-                        Text(item.name)
-                    }
                 }
                 if current.itemDiscountTotal != 0 { LabeledContent("Item discounts", value: signed(current.itemDiscountTotal)) }
                 ForEach(current.adjustments) { adjustment in

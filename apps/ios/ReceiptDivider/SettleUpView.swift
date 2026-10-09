@@ -32,6 +32,36 @@ struct SettleUpView: View {
                     }
                     if let other { LabeledContent("Current balance", value: store.describeBalance(balance, with: store.person(for: other).name)) }
                 }
+
+                if let other {
+                    let itemsTheyOwe = itemsTheyOweMe(other: other)
+                    if !itemsTheyOwe.isEmpty {
+                        Section("\(store.person(for: other).firstName) owes \(store.selfReferenceObject)") {
+                            ForEach(itemsTheyOwe) { item in
+                                HStack {
+                                    Text(item.descriptor)
+                                    Spacer()
+                                    Text(item.cents.usd)
+                                }
+                            }
+                        }
+                    }
+
+                    let itemsIOwe = itemsIOweThem(other: other)
+                    if !itemsIOwe.isEmpty {
+                        let verb = store.selfReferenceMode == .fullName ? "owes" : "owe"
+                        Section("\(store.selfReferenceSubject) \(verb) \(store.person(for: other).firstName)") {
+                            ForEach(itemsIOwe) { item in
+                                HStack {
+                                    Text(item.descriptor)
+                                    Spacer()
+                                    Text(item.cents.usd)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Section("Record payment") {
                     Picker("Direction", selection: $theyPaidMe) {
                         Text("They paid me").tag(true)
@@ -78,5 +108,132 @@ struct SettleUpView: View {
             }
             isSaving = false
         }
+    }
+
+    private struct SettleUpItem: Identifiable {
+        let id = UUID()
+        let descriptor: String
+        let cents: Int
+    }
+
+    private func itemDescriptor(itemName: String, expense: Expense) -> String {
+        let name = itemName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = name.isEmpty ? expense.description : name
+        if let category = expense.category {
+            let tag = category.title.lowercased()
+            if baseName.localizedCaseInsensitiveCompare(tag) == .orderedSame {
+                return baseName
+            }
+            return "\(baseName) (\(tag))"
+        } else if !expense.description.isEmpty && baseName.localizedCaseInsensitiveCompare(expense.description) != .orderedSame {
+            return "\(baseName) (\(expense.description))"
+        }
+        return baseName
+    }
+
+    private func itemsTheyOweMe(other: UUID) -> [SettleUpItem] {
+        guard let me = store.activeUserID, balance != 0 else { return [] }
+        let expenses = store.expenses
+            .filter { $0.payer == me && $0.participants.contains(other) }
+            .sorted { $0.transactionDate < $1.transactionDate }
+
+        var credit = store.payments
+            .filter { $0.from == other && $0.to == me }
+            .reduce(0) { $0 + $1.amount }
+
+        var result: [SettleUpItem] = []
+        for expense in expenses {
+            let listsTip = expense.adjustments.contains { $0.kind == .tip }
+            let selected = expense.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }
+            if selected.isEmpty {
+                let share = expense.shares[other, default: 0]
+                if share > 0 {
+                    if credit >= share {
+                        credit -= share
+                    } else {
+                        let remaining = share - credit
+                        credit = 0
+                        result.append(SettleUpItem(
+                            descriptor: itemDescriptor(itemName: expense.description, expense: expense),
+                            cents: remaining
+                        ))
+                    }
+                }
+            } else {
+                for item in selected {
+                    let isOwner = item.ownerIDs.isEmpty || item.ownerIDs.contains(other)
+                    if isOwner {
+                        let ownersCount = max(1, item.ownerIDs.isEmpty ? expense.participants.count : item.ownerIDs.count)
+                        let share = item.cents / ownersCount
+                        if share > 0 {
+                            if credit >= share {
+                                credit -= share
+                            } else {
+                                let remaining = share - credit
+                                credit = 0
+                                result.append(SettleUpItem(
+                                    descriptor: itemDescriptor(itemName: item.name, expense: expense),
+                                    cents: remaining
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return result.reversed()
+    }
+
+    private func itemsIOweThem(other: UUID) -> [SettleUpItem] {
+        guard let me = store.activeUserID, balance != 0 else { return [] }
+        let expenses = store.expenses
+            .filter { $0.payer == other && $0.participants.contains(me) }
+            .sorted { $0.transactionDate < $1.transactionDate }
+
+        var credit = store.payments
+            .filter { $0.from == me && $0.to == other }
+            .reduce(0) { $0 + $1.amount }
+
+        var result: [SettleUpItem] = []
+        for expense in expenses {
+            let listsTip = expense.adjustments.contains { $0.kind == .tip }
+            let selected = expense.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }
+            if selected.isEmpty {
+                let share = expense.shares[me, default: 0]
+                if share > 0 {
+                    if credit >= share {
+                        credit -= share
+                    } else {
+                        let remaining = share - credit
+                        credit = 0
+                        result.append(SettleUpItem(
+                            descriptor: itemDescriptor(itemName: expense.description, expense: expense),
+                            cents: remaining
+                        ))
+                    }
+                }
+            } else {
+                for item in selected {
+                    let isOwner = item.ownerIDs.isEmpty || item.ownerIDs.contains(me)
+                    if isOwner {
+                        let ownersCount = max(1, item.ownerIDs.isEmpty ? expense.participants.count : item.ownerIDs.count)
+                        let share = item.cents / ownersCount
+                        if share > 0 {
+                            if credit >= share {
+                                credit -= share
+                            } else {
+                                let remaining = share - credit
+                                credit = 0
+                                result.append(SettleUpItem(
+                                    descriptor: itemDescriptor(itemName: item.name, expense: expense),
+                                    cents: remaining
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return result.reversed()
     }
 }

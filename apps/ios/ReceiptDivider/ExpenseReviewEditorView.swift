@@ -412,6 +412,7 @@ struct ExpenseReviewEditorView: View {
                     if hasAdditiveAmounts {
                         // Subtotal
                         HStack {
+                            Text("Subtotal")
                             Spacer()
                             if isEditable {
                                 CentsField(title: "0.00", cents: subtotalBinding, isFocusedBinding: $isSubtotalFocused)
@@ -499,6 +500,9 @@ struct ExpenseReviewEditorView: View {
 
                     // Total
                     HStack {
+                        if !hasAdditiveAmounts {
+                            Text("Total")
+                        }
                         Spacer()
                         if isEditable {
                             CentsField(title: "0.00", cents: editableTotalBinding, isFocusedBinding: $isTotalFocused, fontWeight: .semibold)
