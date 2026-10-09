@@ -71,12 +71,17 @@ struct ReceiptCaptureView: View {
         guard splitsPrintedTotal, let printedTotalCents else { return nil }
         return [ReceiptItem(name: "", cents: printedTotalCents, ownerIDs: selectedPeople)].ownerShares(for: orderedSelection)
     }
-    /// The priced items and their owners in the saved expense. Unassigned rows belong to the payer.
+    /// The priced items and their owners in the saved expense. When no rows were assigned, all items belong to all selected participants.
     private var expenseItems: [ReceiptItem] {
         var result = items.filter { $0.cents > 0 }
+        let isDefaultEven = !hasAnyItemAssignments
         for index in result.indices {
-            let owners = itemAssignments[result[index].id, default: []].intersection(selectedPeople)
-            result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
+            if isDefaultEven {
+                result[index].ownerIDs = selectedPeople
+            } else {
+                let owners = itemAssignments[result[index].id, default: []].intersection(selectedPeople)
+                result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
+            }
             result[index].isSelected = true
             if result[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 result[index].name = result.count == 1 ? savedDescription : "Item"
@@ -453,19 +458,13 @@ struct ReceiptCaptureView: View {
     /// Sets up default item assignments to all participants, or preserves valid customized assignments.
     private func prepareAssignmentsForReview() {
         let validPeople = selectedPeople
-        let hasCustomAssignments = items.contains { item in
-            guard let assigned = itemAssignments[item.id] else { return false }
-            return !assigned.isEmpty && assigned != validPeople
-        }
-        if !hasCustomAssignments {
+        if hasAnyItemAssignments {
             for item in items {
-                itemAssignments[item.id] = validPeople
+                itemAssignments[item.id] = itemAssignments[item.id, default: []].intersection(validPeople)
             }
         } else {
-            for item in items {
-                let kept = itemAssignments[item.id, default: []].intersection(validPeople)
-                itemAssignments[item.id] = kept.isEmpty ? validPeople : kept
-            }
+            // Keep itemAssignments empty so Assign Items opens blank with nobody assigned
+            itemAssignments = [:]
         }
         splitsPrintedTotal = false
         assignmentsLocked = false
@@ -528,6 +527,13 @@ struct ReceiptCaptureView: View {
     /// Contributions from current ownership; Split All uses the printed total when one was recognized.
     private func assignedShares() -> [UUID: Int] {
         if let printedTotalShares { return printedTotalShares }
+        if !hasAnyItemAssignments {
+            return ownershipShares(items.map { item in
+                var item = item
+                item.ownerIDs = selectedPeople
+                return item
+            })
+        }
         return ownershipShares(items.map { item in
             var item = item
             item.ownerIDs = itemAssignments[item.id, default: []]
