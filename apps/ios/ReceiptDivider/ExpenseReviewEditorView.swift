@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The full expense review and editing component containing categorizer, naming, core controls,
 /// and participant contribution sliders. Used during receipt capture and when routing from an existing expense.
@@ -500,8 +501,7 @@ struct ExpenseReviewEditorView: View {
                     HStack {
                         Spacer()
                         if isEditable {
-                            CentsField(title: "0.00", cents: editableTotalBinding, isFocusedBinding: $isTotalFocused)
-                                .fontWeight(.semibold)
+                            CentsField(title: "0.00", cents: editableTotalBinding, isFocusedBinding: $isTotalFocused, fontWeight: .semibold)
                                 .accessibilityLabel("Total")
                         } else {
                             Text(totalBinding.wrappedValue.usd)

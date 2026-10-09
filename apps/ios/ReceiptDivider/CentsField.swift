@@ -4,44 +4,45 @@ import Foundation
 struct CentsField: View {
     let title: String
     @Binding var cents: Int
-    var isFocusedBinding: Binding<Bool>? = nil
-    var onFocusChange: ((Bool) -> Void)? = nil
+    var isFocusedBinding: Binding<Bool>?
+    var onFocusChange: ((Bool) -> Void)?
+    var fontWeight: Font.Weight?
     @State private var text = ""
     @FocusState private var isFocused: Bool
-    init(title: String, cents: Binding<Int>) {
-        self.title = title
-        self._cents = cents
-        self.isFocusedBinding = nil
-        self.onFocusChange = nil
-    }
 
     init(
         title: String,
         cents: Binding<Int>,
-        isFocusedBinding: Binding<Bool>?,
-        onFocusChange: ((Bool) -> Void)? = nil
+        isFocusedBinding: Binding<Bool>? = nil,
+        onFocusChange: ((Bool) -> Void)? = nil,
+        fontWeight: Font.Weight? = nil
     ) {
         self.title = title
         self._cents = cents
         self.isFocusedBinding = isFocusedBinding
         self.onFocusChange = onFocusChange
+        self.fontWeight = fontWeight
     }
 
-    @Environment(\.fontWeight) private var envFontWeight
+    func fontWeight(_ weight: Font.Weight?) -> CentsField {
+        var copy = self
+        copy.fontWeight = weight
+        return copy
+    }
 
     var body: some View {
         HStack(spacing: 1) {
             Spacer(minLength: 0)
             HStack(spacing: 1) {
                 Text("$").foregroundStyle(.secondary)
-                    .fontWeight(envFontWeight)
+                    .fontWeight(fontWeight)
                 TextField(title, text: $text)
                     .keyboardType(.decimalPad)
                     .focused($isFocused)
                     .multilineTextAlignment(.trailing)
                     .fixedSize()
                     .autocorrectionDisabled()
-                    .fontWeight(envFontWeight)
+                    .fontWeight(fontWeight)
             }
             .contentShape(Rectangle())
             .onTapGesture {
