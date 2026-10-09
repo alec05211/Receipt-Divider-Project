@@ -8,6 +8,25 @@ struct CentsField: View {
     var onFocusChange: ((Bool) -> Void)? = nil
     @State private var text = ""
     @FocusState private var isFocused: Bool
+    init(title: String, cents: Binding<Int>) {
+        self.title = title
+        self._cents = cents
+        self.isFocusedBinding = nil
+        self.onFocusChange = nil
+    }
+
+    init(
+        title: String,
+        cents: Binding<Int>,
+        isFocusedBinding: Binding<Bool>?,
+        onFocusChange: ((Bool) -> Void)? = nil
+    ) {
+        self.title = title
+        self._cents = cents
+        self.isFocusedBinding = isFocusedBinding
+        self.onFocusChange = onFocusChange
+    }
+
     @Environment(\.fontWeight) private var envFontWeight
 
     var body: some View {

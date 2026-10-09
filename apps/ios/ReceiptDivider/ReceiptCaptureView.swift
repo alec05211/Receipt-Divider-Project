@@ -9,6 +9,11 @@ struct ReceiptCaptureView: View {
     @Environment(AuthenticationStore.self) private var authentication
     let finish: () -> Void
     var openScannerTrigger: Int = 0
+
+    init(finish: @escaping () -> Void, openScannerTrigger: Int = 0) {
+        self.finish = finish
+        self.openScannerTrigger = openScannerTrigger
+    }
     @State private var step: Step = .capture
     @State private var image: UIImage?
     @State private var selectedPhoto: PhotosPickerItem?
