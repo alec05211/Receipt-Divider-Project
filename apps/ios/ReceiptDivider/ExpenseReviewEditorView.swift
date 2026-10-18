@@ -43,6 +43,7 @@ struct ExpenseReviewEditorView: View {
     let onPayerChanged: ((UUID?) -> Void)?
 
     @State private var internalIsSaving = false
+    @State private var isPickingDate = false
     @State private var internalSaveError: String?
     @State private var balancer = ContributionBalancer()
     @State private var isSubtotalFocused = false
@@ -380,6 +381,64 @@ struct ExpenseReviewEditorView: View {
         self.existingExpenseID = expense.id
     }
 
+    private var payerDateRow: some View {
+        let payer = payerBinding.wrappedValue.map { store.person(for: $0) }
+        return HStack(spacing: 4) {
+            Text("Paid by").foregroundStyle(.secondary)
+            Menu {
+                Picker("Paid by", selection: payerBinding) {
+                    ForEach(participants, id: \.self) { person in
+                        Text(store.name(for: person)).tag(Optional(person))
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    if let payer {
+                        AvatarView(userID: payer.id, name: payer.name, etag: payer.avatarEtag, size: 20)
+                    }
+                    Text(payer?.firstName ?? "Choose")
+                    if isEditable {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.primary)
+                .contentShape(Rectangle())
+            }
+            .disabled(!isEditable)
+            .accessibilityLabel("Paid by \(payer?.name ?? "")")
+            Text("on").foregroundStyle(.secondary)
+            let dateText = Text(dateBinding.wrappedValue.formatted(date: .abbreviated, time: .omitted))
+            if isEditable {
+                Button {
+                    isPickingDate = true
+                } label: {
+                    dateText
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Date of expense")
+                .popover(isPresented: $isPickingDate) {
+                    DatePicker("Date of expense", selection: dateBinding, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                        .labelsHidden()
+                        .padding()
+                        .frame(width: 320)
+                        .presentationCompactAdaptation(.popover)
+                }
+            } else {
+                dateText
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.subheadline)
+        .lineLimit(1)
+    }
+
     var body: some View {
         List {
             Section {
@@ -405,25 +464,12 @@ struct ExpenseReviewEditorView: View {
                     TextField("What was this for?", text: descriptionBinding).submitLabel(.done)
                         .disabled(!isEditable)
                 }
+                .frame(height: 36)
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
 
-                HStack(spacing: 6) {
-                    Text("Paid by")
-                    Picker("Paid by", selection: payerBinding) {
-                        ForEach(participants, id: \.self) { person in
-                            Text(store.name(for: person)).tag(Optional(person))
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    Text("on")
-                    DatePicker("Date of expense", selection: dateBinding, displayedComponents: .date)
-                        .labelsHidden()
-                        .frame(maxHeight: 32)
-                    Spacer(minLength: 0)
-                }
-                .lineLimit(1)
-                .disabled(!isEditable)
+                payerDateRow
+                    .frame(height: 36)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
             }
 
             Section {
