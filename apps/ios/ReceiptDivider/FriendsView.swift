@@ -29,10 +29,7 @@ struct FriendsView: View {
         }
         .scrollIndicators(.hidden)
         .navigationTitle("Friends")
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search by name or username")
-        .submitLabel(.done)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
+        .friendSearch(text: $query, isEnabled: !store.isDevAccount)
         .refreshable { await reload() }
         .task {
             while !Task.isCancelled {
@@ -71,7 +68,9 @@ struct FriendsView: View {
                 ForEach(accepted) { friend in
                     personRow(friend) { EmptyView() }
                         .contextMenu {
-                            Button("Remove friend", systemImage: "person.badge.minus", role: .destructive) { remove(friend) }
+                            if !store.isDevAccount {
+                                Button("Remove friend", systemImage: "person.badge.minus", role: .destructive) { remove(friend) }
+                            }
                         }
                 }
             }
@@ -183,5 +182,19 @@ struct FriendsView: View {
     private func reload() async {
         guard let token = try? await authentication.accessToken() else { return }
         try? await store.refreshFriends(accessToken: token)
+    }
+}
+
+private extension View {
+    /// Dev accounts' friends follow their owner's, so a dev account has no search.
+    @ViewBuilder func friendSearch(text: Binding<String>, isEnabled: Bool) -> some View {
+        if isEnabled {
+            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search by name or username")
+                .submitLabel(.done)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        } else {
+            self
+        }
     }
 }

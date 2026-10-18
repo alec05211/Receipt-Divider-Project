@@ -19,6 +19,8 @@ actor LedgerAPIClient {
     private let session: URLSession
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    /// When set, requests act as the signed-in developer's dev account.
+    private var actsAsDevAccount = false
 
     init?(bundle: Bundle = .main, session: URLSession = .shared) {
         guard
@@ -29,6 +31,8 @@ actor LedgerAPIClient {
         baseURL = url
         self.session = session
     }
+
+    func actAsDevAccount(_ enabled: Bool) { actsAsDevAccount = enabled }
 
     /// Creates the caller's profile and ledger on first use, and returns the current profile.
     func ensureProfile(token: String) async throws -> APIProfile {
@@ -129,7 +133,7 @@ actor LedgerAPIClient {
         try await send(path: "/v1/payments", method: "POST", token: token, body: encoder.encode(request))
     }
 
-    /// Developer-only: deletes every account's expenses and payments. Accounts and friendships are kept.
+    /// Developer-only: deletes the expenses and payments the current account is on. Accounts and friendships are kept.
     func resetLedgerData(token: String) async throws {
         let (data, status) = try await perform(path: "/v1/developer/reset-ledger", method: "POST", token: token, contentType: "application/json", body: encoder.encode(["confirm": "DELETE"]))
         try check(data: data, status: status)
@@ -155,6 +159,7 @@ actor LedgerAPIClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if actsAsDevAccount { request.setValue("dev", forHTTPHeaderField: "X-Identity") }
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         request.httpBody = body
 

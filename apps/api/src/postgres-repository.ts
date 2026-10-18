@@ -10,7 +10,8 @@ export class PostgresRepository implements LedgerRepository {
   async checkHealth(): Promise<void> { await this.sql`SELECT 1`; }
 
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
-    const first = validName(firstName, "firstName"), last = validName(lastName, "lastName"), handle = validUsername(username);
+    const first = validName(firstName, "firstName"), last = validName(lastName, "lastName"), handle = validOwnUsername(username);
+    await requireAccount(this.sql, userId);
     try {
       const rows = await this.sql`UPDATE user_profiles SET first_name=${first}, last_name=${last}, username=${handle}, updated_at=now() WHERE id=${userId} RETURNING id, first_name, last_name, username, display_name`;
       if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
@@ -20,11 +21,12 @@ export class PostgresRepository implements LedgerRepository {
 
   async searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]> {
     const prefix = `${searchTerm(query).replace(/[\\%_]/g, "\\$&")}%`;
+    if (await isDevAccount(this.sql, userId)) return [];
     const rows = await this.sql`
       SELECT p.id, p.display_name, p.username, p.avatar_etag, f.id request_id, f.status, f.requester_id
       FROM user_profiles p
       LEFT JOIN friend_requests f ON f.pair_low=least(p.id, ${userId}::uuid) AND f.pair_high=greatest(p.id, ${userId}::uuid)
-      WHERE p.id<>${userId} AND p.username IS NOT NULL
+      WHERE p.id<>${userId} AND p.username IS NOT NULL AND p.dev_owner_id IS NULL
         AND (p.username ILIKE ${prefix} OR p.first_name ILIKE ${prefix} OR p.last_name ILIKE ${prefix} OR p.display_name ILIKE ${prefix})
       ORDER BY p.display_name, p.username LIMIT 20`;
     return rows.map((row) => {
@@ -42,9 +44,10 @@ export class PostgresRepository implements LedgerRepository {
 
   async requestFriend(userId: UUID, username: string): Promise<FriendConnection> {
     const handle = validUsername(username);
+    await requireAccount(this.sql, userId);
     const [me] = await this.sql`SELECT username FROM user_profiles WHERE id=${userId}`;
     if (!me?.username) throw new ApiError(409, "add your name and username before inviting friends", "profile_incomplete");
-    const targets = await this.sql`SELECT id, display_name, username, avatar_etag FROM user_profiles WHERE lower(username)=lower(${handle})`;
+    const targets = await this.sql`SELECT id, display_name, username, avatar_etag FROM user_profiles WHERE lower(username)=lower(${handle}) AND dev_owner_id IS NULL`;
     if (!targets.length) throw new ApiError(404, "username not found", "not_found");
     const target = targets[0]!;
     if (target.id === userId) throw new ApiError(400, "you cannot invite yourself", "invalid_input");
@@ -65,15 +68,16 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   async removeFriend(userId: UUID, friendId: UUID): Promise<void> {
+    await requireAccount(this.sql, userId);
     const rows = await this.sql`DELETE FROM friend_requests WHERE pair_low=least(${userId}::uuid, ${friendId}::uuid) AND pair_high=greatest(${userId}::uuid, ${friendId}::uuid) RETURNING id`;
     if (!rows.length) throw new ApiError(404, "friend not found", "not_found");
   }
 
   async ensureProfile(userId: UUID): Promise<Profile> {
     return this.sql.begin(async (tx) => {
-      const [row] = await tx`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id RETURNING id, first_name, last_name, username, display_name, is_developer`;
+      await tx`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT (id) DO NOTHING`;
       await tx`INSERT INTO user_settings (user_id) VALUES (${userId}) ON CONFLICT (user_id) DO NOTHING`;
-      return mapProfile(row!);
+      return mapProfile((await selectProfile(tx, userId))[0]!);
     });
   }
   async getSettings(userId: UUID): Promise<UserSettings> {
@@ -86,13 +90,39 @@ export class PostgresRepository implements LedgerRepository {
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
     return mapSettings(rows[0]!);
   }
-  async resetLedgerData(userId: UUID): Promise<void> {
-    const [row] = await this.sql`SELECT is_developer FROM user_profiles WHERE id=${userId}`;
+  async devAccount(accountId: UUID): Promise<UUID> {
+    const [existing] = await this.sql`SELECT d.id FROM user_profiles d JOIN user_profiles o ON o.id=d.dev_owner_id WHERE o.id=${accountId} AND o.is_developer`;
+    if (existing) return existing.id;
+    return this.sql.begin(async (tx) => {
+      const [owner] = await tx`SELECT first_name, last_name, username, is_developer FROM user_profiles WHERE id=${accountId} AND dev_owner_id IS NULL FOR UPDATE`;
+      if (!owner?.is_developer) throw new ApiError(403, "developer access is required", "forbidden");
+      const [row] = await tx`
+        INSERT INTO user_profiles (id, dev_owner_id, first_name, last_name, username)
+        VALUES (gen_random_uuid(), ${accountId}, ${owner.first_name}, ${owner.last_name}, ${owner.username === null ? null : `${owner.username}_dev`})
+        ON CONFLICT (dev_owner_id) DO UPDATE SET dev_owner_id=EXCLUDED.dev_owner_id RETURNING id`;
+      await tx`INSERT INTO user_settings (user_id) VALUES (${row!.id}) ON CONFLICT (user_id) DO NOTHING`;
+      await tx`SELECT sync_dev_friendships()`;
+      return row!.id;
+    });
+  }
+  async resetLedgerData(accountId: UUID, userId: UUID): Promise<void> {
+    const [row] = await this.sql`SELECT is_developer FROM user_profiles WHERE id=${accountId}`;
     if (!row?.is_developer) throw new ApiError(403, "developer access is required", "forbidden");
-    await this.sql`TRUNCATE expense_evidence, expense_allocations, expense_adjustments, expense_item_owners, expense_items, expenses, repayments, evidence_assets, audit_events`;
+    await this.sql.begin(async (tx) => {
+      const expenseIds = (await tx`SELECT e.id FROM expenses e WHERE ${visibleTo(tx, userId)}`).map((e) => e.id as UUID);
+      const paymentIds = (await tx`SELECT id FROM repayments WHERE from_user_id=${userId} OR to_user_id=${userId}`).map((p) => p.id as UUID);
+      const evidenceIds = expenseIds.length ? (await tx`SELECT evidence_id FROM expense_evidence WHERE expense_id IN ${tx(expenseIds)}`).map((e) => e.evidence_id as UUID) : [];
+      if (expenseIds.length) await tx`DELETE FROM expenses WHERE id IN ${tx(expenseIds)}`;
+      if (paymentIds.length) await tx`DELETE FROM repayments WHERE id IN ${tx(paymentIds)}`;
+      const entityIds = [...expenseIds, ...paymentIds];
+      if (entityIds.length) await tx`DELETE FROM audit_events WHERE entity_id IN ${tx(entityIds)}`;
+      // Their own uploads and the receipts of deleted expenses, unless a remaining expense still shows them.
+      await tx`DELETE FROM evidence_assets a WHERE a.uploaded_by=${userId} AND NOT EXISTS (SELECT 1 FROM expense_evidence ee WHERE ee.evidence_id=a.id)`;
+      if (evidenceIds.length) await tx`DELETE FROM evidence_assets a WHERE a.id IN ${tx(evidenceIds)} AND NOT EXISTS (SELECT 1 FROM expense_evidence ee WHERE ee.evidence_id=a.id)`;
+    });
   }
   async getProfile(userId: UUID): Promise<Profile> {
-    const rows = await this.sql`SELECT id, first_name, last_name, username, display_name, is_developer FROM user_profiles WHERE id=${userId}`;
+    const rows = await selectProfile(this.sql, userId);
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found");
     return mapProfile(rows[0]!);
   }
@@ -241,6 +271,22 @@ function visibleTo(sql: any, userId: UUID) {
   return sql`(e.creator_id=${userId} OR e.payer_id=${userId} OR EXISTS (SELECT 1 FROM expense_allocations x WHERE x.expense_id=e.id AND x.user_id=${userId}))`;
 }
 
+/** A dev account's flag is its owner's. */
+function selectProfile(sql: any, userId: UUID) {
+  return sql`SELECT p.id, p.first_name, p.last_name, p.username, p.display_name, coalesce(o.is_developer, p.is_developer) is_developer
+    FROM user_profiles p LEFT JOIN user_profiles o ON o.id=p.dev_owner_id WHERE p.id=${userId}`;
+}
+
+async function isDevAccount(sql: any, userId: UUID): Promise<boolean> {
+  const [row] = await sql`SELECT dev_owner_id IS NOT NULL dev FROM user_profiles WHERE id=${userId}`;
+  return row?.dev === true;
+}
+
+/** Dev accounts take their names from their owner and their friends from their owner's developer friends. */
+async function requireAccount(sql: any, userId: UUID): Promise<void> {
+  if (await isDevAccount(sql, userId)) throw new ApiError(403, "switch to your account to change this", "dev_account");
+}
+
 /** Everyone other than `userId` in `ids` must be one of their accepted friends. */
 async function requireFriends(sql: any, userId: UUID, ids: UUID[]): Promise<void> {
   const others = [...new Set(ids)].filter((id) => id !== userId);
@@ -266,4 +312,5 @@ function toIso(value: unknown): string { return value instanceof Date ? value.to
 function toDay(value: unknown): string { return value instanceof Date ? value.toISOString().slice(0, 10) : String(value); }
 function isUniqueError(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23505"; }
 function validName(value: string, field: string): string { const trimmed = value.trim(); if (!trimmed || trimmed.length > 100) throw new ApiError(400, `${field} must contain 1–100 characters`, "invalid_input"); return trimmed; }
+function validOwnUsername(value: string): string { const username = validUsername(value); if (username.endsWith("_dev")) throw new ApiError(400, "username can’t end in _dev", "invalid_input"); return username; }
 function validUsername(value: string): string { const username = value.trim().toLowerCase(); if (!/^[a-z0-9_]{3,24}$/.test(username)) throw new ApiError(400, "username must be 3–24 lowercase letters, numbers, or underscores", "invalid_input"); return username; }

@@ -1,6 +1,10 @@
 export type UUID = string;
 
-/** A profile exists as soon as the user signs in; the name fields stay null until they set them. */
+/**
+ * A profile exists as soon as the user signs in; the name fields stay null until they set them. A dev account's
+ * profile carries its owner's names, with "_dev" after the username and " (Dev)" after the display name, and its
+ * owner's developer flag.
+ */
 export interface Profile { id: UUID; firstName: string | null; lastName: string | null; username: string | null; displayName: string | null; isDeveloper: boolean; }
 export interface ProfileIdentity { id: UUID; firstName: string; lastName: string; username: string; displayName: string; }
 /** Where the searcher stands with a search result: no request, a request either way, or already friends. */
@@ -163,6 +167,11 @@ export interface LedgerRepository {
   /** Creates the profile and its settings if missing. */
   ensureProfile(userId: UUID): Promise<Profile>;
   getProfile(userId: UUID): Promise<Profile>;
+  /**
+   * The developer's dev account, created on first use with its owner's names and friendships with their developer
+   * friends' dev accounts. 403 unless `accountId` is a developer.
+   */
+  devAccount(accountId: UUID): Promise<UUID>;
   getSettings(userId: UUID): Promise<UserSettings>;
   updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">>): Promise<UserSettings>;
   updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
@@ -197,10 +206,11 @@ export interface LedgerRepository {
   createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
   /**
-   * Developer-only (403 otherwise): deletes every account's expenses, their items, allocations, and evidence, every
-   * payment, and all revision history. Profiles, settings, friendships, and saved filters are kept.
+   * Developer-only (403 unless `accountId` is a developer): deletes every expense `userId` is on, with its items,
+   * allocations, evidence, and revision history, and every payment they're part of. `userId` is the developer or their
+   * dev account. Profiles, settings, friendships, and saved filters are kept.
    */
-  resetLedgerData(userId: UUID): Promise<void>;
+  resetLedgerData(accountId: UUID, userId: UUID): Promise<void>;
   close?(): Promise<void>;
 }
 

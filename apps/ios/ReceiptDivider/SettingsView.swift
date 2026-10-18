@@ -13,7 +13,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink { EditProfileView() } label: { profileHeader }
+                    if store.isDevAccount { profileHeader } else { NavigationLink { EditProfileView() } label: { profileHeader } }
                     HStack {
                         if let email = authentication.email {
                             VStack(alignment: .leading, spacing: 2) {
@@ -53,6 +53,9 @@ struct SettingsView: View {
                 Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
                 if store.isDeveloper {
                     Section("Developer") {
+                        Button(store.isDevAccount ? "Switch to main account" : "Switch to dev account") {
+                            Task { if let token = try? await authentication.accessToken() { await store.switchToDevAccount(!store.isDevAccount, accessToken: token) } }
+                        }
                         LabeledContent("Build", value: ReceiptDiagnostics.buildCommit ?? "Local")
                         LabeledContent("Last scan", value: lastScan.isEmpty ? "None" : lastScan)
                         Button("Delete all expenses and payments", role: .destructive) { showServerReset = true }
@@ -72,7 +75,7 @@ struct SettingsView: View {
     private var profileHeader: some View {
         let name = store.profile?.displayName
         return HStack(spacing: 14) {
-            AvatarView(userID: authentication.userID, name: name, size: 60).id(store.avatarVersion)
+            AvatarView(userID: store.activeUserID, name: name, size: 60).id(store.avatarVersion)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name ?? "Add your name").font(.title3.weight(.semibold))
                 if let username = store.profile?.username { Text("@\(username)").font(.subheadline).foregroundStyle(.secondary) }
@@ -82,7 +85,7 @@ struct SettingsView: View {
     }
 }
 
-/// Wipes every account's expenses and payments on the server; the destructive button only enables once DELETE is typed.
+/// Wipes the current account's expenses and payments on the server; the destructive button only enables once DELETE is typed.
 private struct ServerResetView: View {
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
@@ -99,19 +102,19 @@ private struct ServerResetView: View {
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Type DELETE to erase every account's expenses and payments")
+                    Text("Type DELETE to erase this account's expenses and payments")
                 } footer: {
                     if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
                 }
                 Section {
                     Button(role: .destructive) { Task { await delete() } } label: {
-                        if isDeleting { ProgressView() } else { Text("Delete everything") }
+                        if isDeleting { ProgressView() } else { Text("Delete") }
                     }
                     .disabled(confirmation != "DELETE" || isDeleting)
                 }
             }
             .scrollIndicators(.hidden)
-            .navigationTitle("Delete all data")
+            .navigationTitle("Delete expenses and payments")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(isDeleting) } }
             .interactiveDismissDisabled(isDeleting)

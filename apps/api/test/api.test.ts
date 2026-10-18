@@ -354,10 +354,11 @@ test("settings start at USD, percent and an even tip, and can be changed", async
   assert.equal((await jsonRequest(app, "/v1/settings", alex, "PATCH", { tipSplit: "randomly" })).status, 400);
 });
 
-test("a developer can reset every expense and payment while accounts and friendships stay", async () => {
+test("a developer can reset the expenses and payments they're on while accounts and friendships stay", async () => {
   const { app } = await setupFriends(new Set([alex]));
   assert.equal((await jsonRequest(app, "/v1/expenses", jamie, "POST", expense("10000000-0000-4000-8000-000000000041", jamie, [[alex, 500], [jamie, 500]]))).status, 201);
   assert.equal((await jsonRequest(app, "/v1/payments", alex, "POST", { clientRequestId: "10000000-0000-4000-8000-000000000042", fromUserId: alex, toUserId: jamie, amountCents: 500, transactionDate: "2026-09-21" })).status, 201);
+  assert.equal((await jsonRequest(app, "/v1/expenses", morgan, "POST", expense("10000000-0000-4000-8000-000000000043", morgan, [[morgan, 700]]))).status, 201);
   assert.equal((await (await request(app, "/v1/profile", alex)).json() as { isDeveloper: boolean }).isDeveloper, true);
   assert.equal((await (await request(app, "/v1/profile", jamie)).json() as { isDeveloper: boolean }).isDeveloper, false);
 
@@ -372,9 +373,59 @@ test("a developer can reset every expense and payment while accounts and friends
     const after = await snapshot(app, user);
     assert.equal(after.expenses.length, 0); assert.equal(after.payments.length, 0); assert.equal(after.netBalance, 0);
   }
+  assert.equal((await snapshot(app, morgan)).expenses.length, 1);
   const friends = await (await request(app, "/v1/friends", alex)).json() as unknown[];
   assert.equal(friends.length, 2);
   assert.equal((await (await request(app, "/v1/profile", jamie)).json() as { username: string }).username, "jamie");
+});
+
+test("a developer's dev account is a separate identity befriended only by their developer friends' dev accounts", async () => {
+  const { app } = await setupFriends(new Set([alex, jamie]));
+  const dev = { "x-identity": "dev" };
+  const asDev = (path: string, user: string, init: RequestInit = {}) => request(app, path, user, { ...init, headers: { ...dev, ...init.headers } });
+  const jsonAsDev = (path: string, user: string, method: string, body: unknown) => asDev(path, user, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  assert.equal((await asDev("/v1/profile", morgan, { method: "PUT" })).status, 403);
+  const alexDev = await (await asDev("/v1/profile", alex, { method: "PUT" })).json() as { id: string; username: string; displayName: string; isDeveloper: boolean };
+  assert.notEqual(alexDev.id, alex);
+  assert.deepEqual([alexDev.username, alexDev.displayName, alexDev.isDeveloper], ["alex_dev", "Alex Test (Dev)", true]);
+  const jamieDev = await (await asDev("/v1/profile", jamie, { method: "PUT" })).json() as { id: string };
+
+  // Dev accounts are friends because their owners are; Morgan isn't a developer, so has no dev account to befriend.
+  const devFriends = await (await asDev("/v1/friends", alex)).json() as Array<{ userId: string; displayName: string; status: string }>;
+  assert.deepEqual(devFriends.map((f) => [f.userId, f.displayName, f.status]), [[jamieDev.id, "Jamie Test (Dev)", "accepted"]]);
+  assert.equal((await (await request(app, "/v1/friends", alex)).json() as unknown[]).length, 2);
+
+  // Expenses made as a dev account stay between dev accounts.
+  assert.equal((await jsonAsDev("/v1/expenses", alex, "POST", expense("10000000-0000-4000-8000-000000000051", alexDev.id, [[jamie, 500]]))).status, 422);
+  assert.equal((await jsonAsDev("/v1/expenses", alex, "POST", expense("10000000-0000-4000-8000-000000000052", alexDev.id, [[alexDev.id, 500], [jamieDev.id, 500]]))).status, 201);
+  assert.equal((await (await asDev("/v1/transactions", jamie)).json() as Snapshot).balances[alexDev.id], -500);
+  assert.equal((await snapshot(app, jamie)).expenses.length, 0);
+  assert.equal((await snapshot(app, alex)).expenses.length, 0);
+
+  // Nobody can find, invite, or unfriend a dev account, and a dev account can't change its own names or friends.
+  assert.equal((await (await request(app, "/v1/users/search?q=alex", jamie)).json() as unknown[]).length, 1);
+  assert.equal((await (await asDev("/v1/users/search?q=jamie", alex)).json() as unknown[]).length, 0);
+  assert.equal((await jsonRequest(app, "/v1/friend-requests", stranger, "POST", { username: "alex_dev" })).status, 404);
+  assert.equal((await jsonAsDev("/v1/friend-requests", alex, "POST", { username: "morgan" })).status, 403);
+  assert.equal((await asDev(`/v1/friends/${jamieDev.id}`, alex, { method: "DELETE" })).status, 403);
+  assert.equal((await jsonAsDev("/v1/profile/identity", alex, "PUT", { firstName: "A", lastName: "B", username: "other" })).status, 403);
+  assert.equal((await jsonRequest(app, "/v1/profile/identity", stranger, "PUT", { firstName: "Sam", lastName: "Test", username: "sam_dev" })).status, 400);
+
+  // Its names follow the owner's.
+  assert.equal((await jsonRequest(app, "/v1/profile/identity", alex, "PUT", { firstName: "Alexis", lastName: "Test", username: "alexis" })).status, 200);
+  const renamed = await (await asDev("/v1/profile", alex)).json() as { id: string; username: string; displayName: string };
+  assert.deepEqual([renamed.id, renamed.username, renamed.displayName], [alexDev.id, "alexis_dev", "Alexis Test (Dev)"]);
+
+  // Resetting as the dev account clears only what it's on.
+  assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", expense("10000000-0000-4000-8000-000000000053", alex, [[jamie, 300]]))).status, 201);
+  assert.equal((await jsonAsDev("/v1/developer/reset-ledger", alex, "POST", { confirm: "DELETE" })).status, 204);
+  assert.equal((await (await asDev("/v1/transactions", jamie)).json() as Snapshot).expenses.length, 0);
+  assert.equal((await snapshot(app, jamie)).expenses.length, 1);
+
+  // Ending the owners' friendship ends their dev accounts'.
+  assert.equal((await request(app, `/v1/friends/${jamie}`, alex, { method: "DELETE" })).status, 204);
+  assert.equal((await (await asDev("/v1/friends", alex)).json() as unknown[]).length, 0);
 });
 
 test("Supabase JWT authentication accepts only signed authenticated-user tokens", async () => {

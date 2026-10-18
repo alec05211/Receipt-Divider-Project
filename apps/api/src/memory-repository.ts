@@ -17,6 +17,8 @@ export class MemoryRepository implements LedgerRepository {
   private payments: Payment[] = [];
   private requests = new Map<string, { fingerprint: string; value: Expense | Payment }>();
   private friendRequests: FriendRequest[] = [];
+  /** Each dev account's owner. */
+  private devOwners = new Map<UUID, UUID>();
   /** Revisions, recorded like the database's audit events so tests can check them. */
   readonly auditEvents: Array<{ actorId: UUID; eventType: string; entityId: UUID; details: Record<string, unknown> }> = [];
 
@@ -26,16 +28,21 @@ export class MemoryRepository implements LedgerRepository {
   async checkHealth(): Promise<void> {}
 
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
-    this.requireProfile(userId);
+    this.requireProfile(userId); this.requireAccount(userId);
     const handle = username.trim().toLowerCase();
+    if (handle.endsWith("_dev")) throw new ApiError(400, "username can’t end in _dev", "invalid_input");
     if ([...this.profiles.values()].some((profile) => profile.id !== userId && profile.username === handle)) throw new ApiError(409, "username is already taken", "username_taken");
     const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: handle, displayName: `${firstName.trim()} ${lastName.trim()}` };
-    this.profiles.set(userId, { ...identity, isDeveloper: false }); return identity;
+    this.profiles.set(userId, { ...identity, isDeveloper: false });
+    const devId = this.devAccountOf(userId);
+    if (devId) this.profiles.set(devId, this.devProfile(devId, userId));
+    return identity;
   }
   async searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]> {
     const term = searchTerm(query).toLowerCase();
+    if (this.devOwners.has(userId)) return [];
     return [...this.profiles.values()]
-      .filter((profile): profile is Profile & ProfileIdentity => profile.id !== userId && profile.username !== null)
+      .filter((profile): profile is Profile & ProfileIdentity => profile.id !== userId && profile.username !== null && !this.devOwners.has(profile.id))
       .filter((profile) => [profile.username, profile.firstName, profile.lastName, profile.displayName].some((field) => field.toLowerCase().startsWith(term)))
       .sort((left, right) => left.displayName.localeCompare(right.displayName))
       .slice(0, 20)
@@ -54,8 +61,9 @@ export class MemoryRepository implements LedgerRepository {
     });
   }
   async requestFriend(userId: UUID, username: string): Promise<FriendConnection> {
+    this.requireAccount(userId);
     if (!this.requireProfile(userId).username) throw new ApiError(409, "add your name and username before inviting friends", "profile_incomplete");
-    const target = [...this.profiles.values()].find((profile) => profile.username === username.trim().toLowerCase());
+    const target = [...this.profiles.values()].find((profile) => profile.username === username.trim().toLowerCase() && !this.devOwners.has(profile.id));
     if (!target) throw new ApiError(404, "username not found", "not_found");
     if (target.id === userId) throw new ApiError(400, "you cannot invite yourself", "invalid_input");
     if (this.requestBetween(userId, target.id)) throw new ApiError(409, "a friendship or request already exists", "friend_exists");
@@ -66,31 +74,52 @@ export class MemoryRepository implements LedgerRepository {
   async acceptFriend(userId: UUID, requestId: UUID): Promise<FriendConnection> {
     const request = this.friendRequests.find((item) => item.id === requestId && item.addresseeId === userId && item.status === "pending");
     if (!request) throw new ApiError(404, "pending friend request not found", "not_found");
-    request.status = "accepted";
+    request.status = "accepted"; this.syncDevFriendships();
     return this.connection(request, request.requesterId, "friend");
   }
   async removeFriend(userId: UUID, friendId: UUID): Promise<void> {
+    this.requireAccount(userId);
     const request = this.requestBetween(userId, friendId);
     if (!request) throw new ApiError(404, "friend not found", "not_found");
-    this.friendRequests = this.friendRequests.filter((item) => item !== request);
+    this.friendRequests = this.friendRequests.filter((item) => item !== request); this.syncDevFriendships();
   }
 
   async ensureProfile(userId: UUID): Promise<Profile> {
     const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null, isDeveloper: false };
     this.profiles.set(userId, profile);
     if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "percent", tipSplit: "even" }); this.filters.set(userId, []); }
-    return { ...profile, isDeveloper: this.developerIds.has(userId) };
+    return { ...profile, isDeveloper: this.isDeveloper(userId) };
   }
-  async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.developerIds.has(userId) }; }
+  async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.isDeveloper(userId) }; }
+  async devAccount(accountId: UUID): Promise<UUID> {
+    if (this.devOwners.has(accountId) || !this.developerIds.has(accountId)) throw new ApiError(403, "developer access is required", "forbidden");
+    this.requireProfile(accountId);
+    const existing = this.devAccountOf(accountId);
+    if (existing) return existing;
+    const devId = randomUUID();
+    this.devOwners.set(devId, accountId);
+    this.profiles.set(devId, this.devProfile(devId, accountId));
+    this.settings.set(devId, { currency: "USD", sliderUnit: "percent", tipSplit: "even" }); this.filters.set(devId, []);
+    this.syncDevFriendships();
+    return devId;
+  }
   async getSettings(userId: UUID): Promise<UserSettings> { this.requireProfile(userId); return { ...this.settings.get(userId)! }; }
   async updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">>): Promise<UserSettings> {
     this.requireProfile(userId);
     const updated = { ...this.settings.get(userId)!, ...changes }; this.settings.set(userId, updated); return { ...updated };
   }
-  async resetLedgerData(userId: UUID): Promise<void> {
+  async resetLedgerData(accountId: UUID, userId: UUID): Promise<void> {
     this.requireProfile(userId);
-    if (!this.developerIds.has(userId)) throw new ApiError(403, "developer access is required", "forbidden");
-    this.evidence.clear(); this.expenses = []; this.payments = []; this.requests.clear(); this.auditEvents.length = 0;
+    if (!this.developerIds.has(accountId)) throw new ApiError(403, "developer access is required", "forbidden");
+    const expenses = new Set(this.visibleExpenses(userId));
+    const payments = new Set(this.payments.filter((payment) => payment.fromUserId === userId || payment.toUserId === userId));
+    const removed = new Set<UUID>([...expenses, ...payments].map((entry) => entry.id));
+    this.expenses = this.expenses.filter((expense) => !expenses.has(expense)); this.payments = this.payments.filter((payment) => !payments.has(payment));
+    for (const [key, request] of this.requests) if (removed.has(request.value.id)) this.requests.delete(key);
+    const attached = new Set(this.expenses.flatMap((expense) => expense.evidenceIds));
+    const orphaned = new Set([...expenses].flatMap((expense) => expense.evidenceIds));
+    for (const [id, image] of this.evidence) if (!attached.has(id) && (image.ownerId === userId || orphaned.has(id))) this.evidence.delete(id);
+    for (let index = this.auditEvents.length - 1; index >= 0; index -= 1) if (removed.has(this.auditEvents[index]!.entityId)) this.auditEvents.splice(index, 1);
   }
 
   async putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string> {
@@ -221,6 +250,25 @@ export class MemoryRepository implements LedgerRepository {
   private connection(request: FriendRequest, otherId: UUID, direction: FriendConnection["direction"]): FriendConnection {
     const other = this.requireProfile(otherId);
     return { requestId: request.id, userId: otherId, displayName: other.displayName ?? "", username: other.username ?? "", avatarEtag: this.avatarEtag(otherId), status: request.status, direction };
+  }
+  private isDeveloper(userId: UUID): boolean { return this.developerIds.has(this.devOwners.get(userId) ?? userId); }
+  private devAccountOf(ownerId: UUID): UUID | undefined { return [...this.devOwners].find(([, owner]) => owner === ownerId)?.[0]; }
+  private devProfile(devId: UUID, ownerId: UUID): Profile {
+    const owner = this.requireProfile(ownerId);
+    return { id: devId, firstName: owner.firstName, lastName: owner.lastName, username: owner.username && `${owner.username}_dev`, displayName: owner.displayName && `${owner.displayName} (Dev)`, isDeveloper: false };
+  }
+  /** Dev accounts are friends exactly when their owners are friends and both are developers, and have no other friends. */
+  private syncDevFriendships(): void {
+    const isDev = (id: UUID) => this.devOwners.has(id);
+    this.friendRequests = this.friendRequests.filter((request) => !isDev(request.requesterId) && !isDev(request.addresseeId));
+    for (const request of [...this.friendRequests]) {
+      if (request.status !== "accepted" || !this.developerIds.has(request.requesterId) || !this.developerIds.has(request.addresseeId)) continue;
+      const requesterDev = this.devAccountOf(request.requesterId), addresseeDev = this.devAccountOf(request.addresseeId);
+      if (requesterDev && addresseeDev) this.friendRequests.push({ id: randomUUID(), requesterId: requesterDev, addresseeId: addresseeDev, status: "accepted" });
+    }
+  }
+  private requireAccount(userId: UUID): void {
+    if (this.devOwners.has(userId)) throw new ApiError(403, "switch to your account to change this", "dev_account");
   }
   private avatarEtag(userId: UUID): string | null { return this.avatars.get(userId)?.etag ?? null; }
   private requireProfile(userId: UUID): Profile { const profile = this.profiles.get(userId); if (!profile) throw new ApiError(404, "profile not found", "not_found"); return profile; }

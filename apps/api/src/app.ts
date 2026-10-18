@@ -37,7 +37,10 @@ export function createApp(
   app.use("/v1/*", async (context, next) => {
     const authenticatedId = await authenticate(context);
     if (!authenticatedId) throw new ApiError(401, "authentication is required", "unauthorized");
-    context.set("userId", requireUuid(authenticatedId, "authenticated user id"));
+    const accountId = requireUuid(authenticatedId, "authenticated user id");
+    context.set("accountId", accountId);
+    // A developer acting as their dev account: every request is made as that account instead.
+    context.set("userId", context.req.header("x-identity") === "dev" ? await repository.devAccount(accountId) : accountId);
     await next();
   });
 
@@ -129,7 +132,7 @@ export function createApp(
     await repository.createPayment(userId(context), await jsonBody(context) as unknown as CreatePaymentInput), 201));
   app.post("/v1/developer/reset-ledger", async (context) => {
     if ((await jsonBody(context)).confirm !== "DELETE") throw new ApiError(400, "confirm must be \"DELETE\"", "invalid_input");
-    await repository.resetLedgerData(userId(context));
+    await repository.resetLedgerData(context.get("accountId"), userId(context));
     return context.body(null, 204);
   });
   app.get("/v1/transactions", async (context) => {
@@ -181,4 +184,4 @@ function imageResponse(context: Context, image: { contentType: string; bytes: Ui
   return new Response(image.bytes as BodyInit, { headers: { "Content-Type": image.contentType, "Content-Length": String(image.bytes.length), ETag: image.etag, "Cache-Control": "private, max-age=86400" } });
 }
 
-declare module "hono" { interface ContextVariableMap { userId: UUID; } }
+declare module "hono" { interface ContextVariableMap { accountId: UUID; userId: UUID; } }

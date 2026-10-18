@@ -41,7 +41,7 @@ private struct ConnectedLedgerView: View {
 
     var body: some View {
         Group {
-            if store.activeUserID == userID && store.hasLoadedRemoteData {
+            if store.accountUserID == userID && store.hasLoadedRemoteData {
                 AppTabView()
             } else if let message = store.syncError, !store.isSyncing {
                 ContentUnavailableView {

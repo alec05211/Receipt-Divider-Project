@@ -10,7 +10,7 @@ The main navigation is:
 
 - **Summary:** your overall balance, a one-line adaptive summary of who owes you or whom you owe, and a chronological expense list with participant photos. The whole balance card opens every per-person balance, and each row opens Settle Up for that person.
 - **Add expense:** camera-first receipt flow.
-- **Settings:** your profile and account, Friends, Payments, and app settings.
+- **Settings:** your profile and account, Friends, Payments, and app settings. Developers can also switch to a separate dev account here.
 
 Saved groups are personal named collections of people used only as transaction filters. Each transaction has its own participant list and never enters a group pool. A “Roommates” filter, for example, shows transactions involving any person in that saved collection; creating it sends no invitations and changes no balances or access rights.
 

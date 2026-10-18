@@ -162,7 +162,10 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     private var confirmedBalances: [UUID: Int] = [:]
     private(set) var pendingExpenseIDs: Set<UUID> = []
     private(set) var selfReferenceMode = SelfReferenceMode(rawValue: UserDefaults.standard.string(forKey: SelfReferenceMode.storageKey) ?? "") ?? .fullName
+    /// The signed-in user. `activeUserID` is the account the app acts as: this one, or their dev account.
+    private(set) var accountUserID: UUID?
     private(set) var activeUserID: UUID?
+    private(set) var isDevAccount = false
     private(set) var hasLoadedRemoteData = false
     private(set) var isSyncing = false
     private(set) var friends: [APIFriend] = []
@@ -243,14 +246,23 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             syncError = "The live ledger API is not configured."
             return
         }
-        if activeUserID != userID { activate(userID) }
+        if accountUserID != userID {
+            accountUserID = userID
+            isDevAccount = UserDefaults.standard.bool(forKey: devAccountKey(for: userID))
+        }
         isSyncing = true
         syncError = nil
         do {
-            profile = try await api.ensureProfile(token: accessToken)
-            isDeveloper = profile?.isDeveloper ?? false
+            await api.actAsDevAccount(false)
+            var account = try await api.ensureProfile(token: accessToken)
+            isDeveloper = account.isDeveloper ?? false
+            if let identity { account = try await api.updateIdentity(identity, token: accessToken) }
+            if isDevAccount && !isDeveloper { setDevAccount(false, for: userID) }
+            await api.actAsDevAccount(isDevAccount)
+            let current = isDevAccount ? try await api.ensureProfile(token: accessToken) : account
+            if activeUserID != current.id { activate(current.id) }
+            profile = current
             if let settings = try? await api.settings(token: accessToken) { applySliderUnit(settings.sliderUnit); applyTipSplit(settings.tipSplit) }
-            if let identity { profile = try await api.updateIdentity(identity, token: accessToken) }
             try await refresh(accessToken: accessToken)
             friends = try await api.friends(token: accessToken)
             hasLoadedRemoteData = true
@@ -259,6 +271,19 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         }
         isSyncing = false
     }
+
+    /// Reloads the app as the developer's dev account or as their own.
+    func switchToDevAccount(_ enabled: Bool, accessToken: String) async {
+        guard let accountUserID, isDeveloper, enabled != isDevAccount else { return }
+        hasLoadedRemoteData = false
+        setDevAccount(enabled, for: accountUserID)
+        await synchronize(userID: accountUserID, accessToken: accessToken)
+    }
+    private func setDevAccount(_ enabled: Bool, for userID: UUID) {
+        isDevAccount = enabled
+        UserDefaults.standard.set(enabled, forKey: devAccountKey(for: userID))
+    }
+    private func devAccountKey(for userID: UUID) -> String { "dev-account-\(userID.uuidString.lowercased())" }
 
     func refresh(accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
@@ -501,7 +526,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         try await refresh(accessToken: accessToken)
     }
 
-    /// Developer-only: deletes every account's expenses and payments on the server, then reloads.
+    /// Developer-only: deletes the current account's expenses and payments on the server, then reloads.
     func resetServerLedger(accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         try await api.resetLedgerData(token: accessToken)
@@ -525,6 +550,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     }
 
     func disconnect() {
+        accountUserID = nil
+        isDevAccount = false
         activeUserID = nil
         hasLoadedRemoteData = false
         profile = nil
