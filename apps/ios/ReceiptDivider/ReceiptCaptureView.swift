@@ -347,12 +347,14 @@ struct ReceiptCaptureView: View {
         )
     }
     /// A library photo is cropped and flattened before reading, so the processed image is the only copy parsed and stored.
+    /// Screenshots are read as they are.
     private func load(_ photo: PhotosPickerItem?) {
         guard let photo else { return }
         step = .reading
         Task { @MainActor in
-            guard let data = try? await photo.loadTransferable(type: Data.self), let picture = UIImage(data: data) else { step = .capture; return }
-            image = await Task.detached { ReceiptImageProcessor.flatten(picture) }.value
+            guard let data = try? await photo.loadTransferable(type: Data.self),
+                  let prepared = await Task.detached(operation: { ReceiptImageProcessor.prepare(data) }).value else { step = .capture; return }
+            image = prepared
         }
     }
     /// Recognizes the text, then lets the user choose participants while the items are read.

@@ -120,6 +120,8 @@ Ownership is a yes/no relationship rather than an amount. Starting contributions
 
 The member takes a photo or chooses an existing image. The app shows upload and analysis progress, with recoverable error states.
 
+**Confirmed (2026-10-18):** A chosen camera photo is cropped to the receipt's edges and flattened before it is read and stored. A screenshot, or any image without camera metadata, is read and stored as it is, with no cropping or perspective correction.
+
 ### C. Review and assign items
 
 The app keeps participant selection on its dedicated first screen. Extracted rows remain editable in Assign Items until the arrangement is confirmed. Each row shows an item description, line total, and owner avatars; the assigned total changes immediately as rows are assigned or corrected. Confirming assigns any untouched row to the payer before continuing.
@@ -466,6 +468,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-10-09 | Shifted the transaction addition flow: confirming participants on Select participants advances directly to Review expense with all items split evenly by default across participants. Assign items remains available on-demand via the action row at the bottom of Review expense. Removed vertical and horizontal scroll indicators globally throughout the iOS client. | Confirmed by product owner. |
 | 2026-10-09 | Added Subtotal label to the compact addition table on Review expense; preserved unlabeled Total when additive breakdown is present, but displayed 'Total' label when no additive amounts exist. Moved participant ownership breakdown in ExpenseDetailView above the receipt photo with indented items per person (or combined names on one line when split evenly). Showcased item specifics with category/expense context in Settle Up for amounts owed and owing. | Confirmed by product owner. |
 | 2026-10-18 | Added dev accounts: developers switch the whole app to a derived `username_dev` / "Name (Dev)" account that is friends only with their developer friends' dev accounts (migration 013). The developer reset now deletes only what the current account is on instead of every account's data. | Confirmed by the product owner. API tests pass, the migration and triggers were checked against Postgres (PGlite), and the app builds for the simulator; not yet migrated, deployed, or tried on a device. |
+| 2026-10-18 | Library screenshots skip document cropping and perspective correction; camera photos trace the receipt's straight edges inside the rough document outline so the corners land on the paper rather than what it lies on. | Confirmed by the product owner; simulator tests cover edge tracing and screenshot detection, on-device validation pending. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 
