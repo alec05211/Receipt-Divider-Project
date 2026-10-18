@@ -303,6 +303,7 @@ This describes the committed initial Supabase PostgreSQL model; sharing and extr
 - Primary screens: Summary, capture/upload or manual entry, optional evidence review, allocation, expense detail, and payment entry.
 - Make the chronological expense and payment list the main view. Show purchase dates prominently and keep “added on” timestamps secondary in entry details.
 - Keep receipt item names and monetary amounts readable without horizontal scrolling.
+- **Confirmed (2026-10-18):** every dollar-amount field uses cash-register entry on the number pad. The field shows $0.00 when empty and each digit shifts in from the right, so typing 1, 2, 3, 4 reads $12.34; backspace drops the last digit. A field that already holds an amount keeps it and takes further digits after it. Digits always enter at the right and deletions remove the rightmost digits wherever the cursor is; a pasted amount with a decimal point, such as 12.50, is taken as written. Entry stops at $9,999,999.99.
 - Make selected states, missing allocation, extraction errors, and save success explicit.
 - Preserve draft state when moving between review and allocation.
 - Support accessible labels, adequate contrast, keyboard access, and clear validation messages.
@@ -475,6 +476,7 @@ Each phase should produce usable, reviewable behavior. Record implemented requir
 | 2026-10-18 | Whoever added an expense can now edit, delete, and restore it, as well as its payer (D-04). | Confirmed by the product owner. API tests pass; no migration needed; not yet deployed or tried on a device. |
 | 2026-10-18 | Added expense deletion: the payer deletes an expense for everyone from the title's press-and-hold menu, it stops counting toward balances, and it stays listed as deleted for 30 days where the payer can restore it (migration 015). | Payer-only voiding, restore, and the Summary entry confirmed by the product owner; the 30-day window was chosen in implementation. API tests pass, the migration and queries were checked against Postgres (PGlite), and the app builds for the simulator; not yet migrated, deployed, or tried on a device. |
 | 2026-10-18 | Library screenshots skip document cropping and perspective correction; camera photos trace the receipt's straight edges inside the rough document outline so the corners land on the paper rather than what it lies on. | Confirmed by the product owner; simulator tests cover edge tracing and screenshot detection, on-device validation pending. |
+| 2026-10-18 | Dollar-amount fields switched from free decimal typing to cash-register entry on the number pad (see §8). | Requested by the product owner; holding an existing amount, cursor-independent edits, paste, and the length limit were chosen in implementation. Unit tests cover the entry rules; not yet tried on a device. |
 
 Future entries should briefly explain material scope or behavioral decisions. Update the main requirements to reflect the latest decision rather than leaving contradictory instructions in this log.
 
