@@ -129,6 +129,16 @@ actor LedgerAPIClient {
         try await send(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "PATCH", token: token, body: encoder.encode(changes))
     }
 
+    /// Deletes an expense for everyone on it; only its payer may do this. It stays listed as deleted until restored.
+    func deleteExpense(id: UUID, token: String) async throws {
+        let (data, status) = try await perform(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "DELETE", token: token, contentType: nil, body: nil)
+        try check(data: data, status: status)
+    }
+
+    func restoreExpense(id: UUID, token: String) async throws -> APIExpense {
+        try await send(path: "/v1/expenses/\(id.uuidString.lowercased())/restore", method: "POST", token: token)
+    }
+
     func createPayment(_ request: CreateAPIPayment, token: String) async throws -> APIPayment {
         try await send(path: "/v1/payments", method: "POST", token: token, body: encoder.encode(request))
     }
@@ -243,6 +253,9 @@ struct APIExpense: Decodable, Sendable {
     let allocations: [APIAllocation]
     let evidenceIds: [UUID]
     let createdAt: String
+    /// Only set on a deleted expense.
+    let deletedAt: String?
+    let deletedBy: UUID?
 }
 
 struct CreateAPIPayment: Encodable, Sendable {
@@ -267,6 +280,8 @@ struct APILedgerSnapshot: Decodable, Sendable {
     let currency: String
     let people: [APILedgerPerson]
     let expenses: [APIExpense]
+    /// Expenses deleted recently, never counted in `balances`; nil from a server that predates deleting.
+    let deletedExpenses: [APIExpense]?
     let payments: [APIPayment]
     let balances: [String: Int]
     let netBalance: Int

@@ -6,7 +6,7 @@ struct ActivityView: View {
     @Environment(AuthenticationStore.self) private var authentication
     var body: some View {
         NavigationStack {
-            SummaryContent(balance: store.netBalance, balances: store.openBalances, expenses: store.expenses.sorted { $0.transactionDate > $1.transactionDate })
+            SummaryContent(balance: store.netBalance, balances: store.openBalances, expenses: (store.expenses + store.deletedExpenses).sorted { $0.transactionDate > $1.transactionDate })
                 .navigationTitle("Summary")
                 .navigationBarTitleDisplayMode(.inline)
                 .task { await refresh() }
@@ -193,15 +193,17 @@ private struct ExpenseRow: View {
     let expense: Expense
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: expense.category?.symbol ?? "receipt").foregroundStyle(.secondary).frame(width: 24)
-                .accessibilityLabel(expense.category?.title ?? "Expense")
+            Image(systemName: expense.isDeleted ? "trash" : expense.category?.symbol ?? "receipt").foregroundStyle(.secondary).frame(width: 24)
+                .accessibilityLabel(expense.isDeleted ? "Deleted" : expense.category?.title ?? "Expense")
             VStack(alignment: .leading, spacing: 4) {
-                Text(expense.description).font(.headline)
+                Text(expense.description).font(.headline).foregroundStyle(expense.isDeleted ? .secondary : .primary)
                 HStack(spacing: 6) { AvatarStack(people: expense.participants); Text(expense.transactionDate, style: .date).font(.caption).foregroundStyle(.secondary) }
             }
             Spacer()
             if store.isExpensePending(expense.id) { ProgressView().controlSize(.small).accessibilityLabel("Uploading") }
             Text(expense.total.usd).fontWeight(.semibold)
+                .strikethrough(expense.isDeleted)
+                .foregroundStyle(expense.isDeleted ? .secondary : .primary)
         }
     }
 }

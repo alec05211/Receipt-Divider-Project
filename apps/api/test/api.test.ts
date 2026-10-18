@@ -304,6 +304,50 @@ test("only the payer can edit an expense's name and date, and each change is rec
   assert.equal((await snapshot(app, alex)).expenses[0]!.description, "Farmers market");
 });
 
+test("only the payer can delete an expense, which removes it from everyone's balances until they restore it", async () => {
+  const repository = new MemoryRepository();
+  const app = createApp(repository, async (context) => context.req.header("x-user-id") ?? null);
+  for (const user of [alex, jamie, stranger, morgan]) assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
+  for (const [user, username] of [[alex, "alex"], [jamie, "jamie"], [morgan, "morgan"]] as const) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: username, lastName: "Test", username })).status, 200);
+  for (const username of ["jamie", "morgan"]) {
+    const invite = await jsonRequest(app, "/v1/friend-requests", alex, "POST", { username });
+    assert.equal((await jsonRequest(app, `/v1/friend-requests/${(await invite.json() as { requestId: string }).requestId}/accept`, username === "jamie" ? jamie : morgan, "POST", {})).status, 200);
+  }
+  // Alex records it, Jamie paid; a second expense stays put throughout.
+  const { id } = await (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("60000000-0000-4000-8000-000000000001", jamie, [[alex, 1000], [jamie, 1000]]))).json() as { id: string };
+  assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", expense("60000000-0000-4000-8000-000000000002", alex, [[alex, 500], [jamie, 500]]))).status, 201);
+  type Deleted = { id: string; deletedBy: string; deletedAt: string };
+  const view = async (user: string) => await snapshot(app, user) as Snapshot & { deletedExpenses: Deleted[] };
+
+  // The creator, a stranger, and an unknown ID can't delete it.
+  assert.equal((await request(app, `/v1/expenses/${id}`, alex, { method: "DELETE" })).status, 403);
+  assert.equal((await request(app, `/v1/expenses/${id}`, stranger, { method: "DELETE" })).status, 404);
+  assert.equal((await request(app, "/v1/expenses/60000000-0000-4000-8000-000000000009", jamie, { method: "DELETE" })).status, 404);
+  assert.equal((await view(alex)).balances[jamie], 500 - 1000);
+
+  // The payer deletes it: it leaves everyone's expenses and balances but stays listed as deleted.
+  assert.equal((await request(app, `/v1/expenses/${id.toUpperCase()}`, jamie, { method: "DELETE" })).status, 204);
+  for (const user of [alex, jamie]) {
+    const after = await view(user);
+    assert.equal(after.expenses.length, 1); assert.notEqual(after.expenses[0]!.id, id);
+    assert.deepEqual(after.deletedExpenses.map((e) => [e.id, e.deletedBy]), [[id, jamie]]);
+  }
+  assert.equal((await view(alex)).balances[jamie], 500); assert.equal((await view(jamie)).balances[alex], -500);
+  assert.equal((await view(morgan)).deletedExpenses.length, 0);
+  // Deleting again changes nothing; a deleted expense can't be edited.
+  assert.equal((await request(app, `/v1/expenses/${id}`, jamie, { method: "DELETE" })).status, 204);
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { description: "Gone" })).status, 404);
+
+  // Only the payer can restore it, and it counts again for everyone.
+  assert.equal((await request(app, `/v1/expenses/${id}/restore`, alex, { method: "POST" })).status, 403);
+  assert.equal((await request(app, `/v1/expenses/${id}/restore`, stranger, { method: "POST" })).status, 404);
+  const restored = await request(app, `/v1/expenses/${id}/restore`, jamie, { method: "POST" });
+  assert.equal(restored.status, 200); assert.equal((await restored.json() as { id: string }).id, id);
+  assert.equal((await view(alex)).balances[jamie], 500 - 1000); assert.equal((await view(alex)).deletedExpenses.length, 0);
+  assert.equal((await request(app, `/v1/expenses/${id}/restore`, jamie, { method: "POST" })).status, 200);
+  assert.deepEqual(repository.auditEvents.map((event) => [event.actorId, event.eventType]), [[jamie, "expense.voided"], [jamie, "expense.restored"]]);
+});
+
 test("display name is derived from first and last name", async () => {
   const { app } = await setup();
   let profile = await (await request(app, "/v1/profile", alex)).json() as { displayName: string | null; username: string | null };

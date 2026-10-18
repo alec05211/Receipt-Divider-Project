@@ -12,11 +12,18 @@ struct ExpenseDetailView: View {
     @State private var isEditingDate = false
     @State private var draftDate = Date.now
     @State private var editError: String?
+    @State private var isConfirmingDelete = false
+    @State private var isChangingDeletion = false
 
     /// The store's copy, so an edit (or a refresh) shows here as soon as it happens.
-    private var current: Expense { store.expenses.first { $0.id == expense.id } ?? expense }
-    /// Only the person who paid owns an expense and may edit it.
-    private var canEdit: Bool { current.payer == store.activeUserID }
+    private var current: Expense { store.expenses.first { $0.id == expense.id } ?? store.deletedExpenses.first { $0.id == expense.id } ?? expense }
+    /// Only the person who paid owns an expense and may edit, delete, or restore it.
+    private var isOwner: Bool { current.payer == store.activeUserID }
+    private var canEdit: Bool { isOwner && !current.isDeleted }
+    /// Everyone else a deletion also removes it for.
+    private var otherParticipantNames: String {
+        participants.filter { $0 != store.activeUserID }.map { store.person(for: $0).firstName }.formatted(.list(type: .and))
+    }
     /// You first, then everyone else by name.
     private var participants: [UUID] {
         current.participants.sorted { a, b in a == store.activeUserID ? b != store.activeUserID : b != store.activeUserID && store.name(for: a) < store.name(for: b) }
@@ -73,6 +80,20 @@ struct ExpenseDetailView: View {
                         ForEach(ExpenseEdit.allCases) { edit in
                             Button(edit.title, systemImage: edit.systemImage) { begin(edit) }
                         }
+                        Divider()
+                        Button("Delete", systemImage: "trash", role: .destructive) { isConfirmingDelete = true }
+                    } else if isOwner {
+                        Button("Restore", systemImage: "arrow.uturn.backward") { restore() }
+                    }
+                }
+            }
+
+            if current.isDeleted {
+                Section {
+                    HStack {
+                        Label("Deleted", systemImage: "trash").foregroundStyle(.secondary)
+                        Spacer()
+                        if isOwner { Button("Restore") { restore() }.disabled(isChangingDeletion) }
                     }
                 }
             }
@@ -201,6 +222,11 @@ struct ExpenseDetailView: View {
             }
             .presentationDetents([.medium, .large])
         }
+        .confirmationDialog("Delete this expense?", isPresented: $isConfirmingDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { delete() }
+        } message: {
+            if !otherParticipantNames.isEmpty { Text("It’s also removed for \(otherParticipantNames).") }
+        }
         .alert("Couldn’t save", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -259,6 +285,26 @@ extension ExpenseDetailView {
             } catch {
                 editError = error.localizedDescription
             }
+        }
+    }
+}
+
+extension ExpenseDetailView {
+    private func delete() { changeDeletion { try await store.deleteExpense(expense.id, accessToken: $0) } }
+    private func restore() { changeDeletion { try await store.restoreExpense(expense.id, accessToken: $0) } }
+
+    /// The expense stays on screen either way, so restoring right after deleting undoes it.
+    private func changeDeletion(_ change: @escaping (String) async throws -> Void) {
+        guard !isChangingDeletion else { return }
+        isChangingDeletion = true
+        Task {
+            do {
+                try await change(authentication.accessToken())
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                editError = error.localizedDescription
+            }
+            isChangingDeletion = false
         }
     }
 }

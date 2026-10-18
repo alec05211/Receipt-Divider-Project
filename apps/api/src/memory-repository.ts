@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
-import { ApiError } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, DeletedExpense, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
+import { ApiError, deletedExpenseDays } from "./types.ts";
 
 interface ImageRecord extends StoredImage { ownerId: UUID; kind?: EvidenceKind; createdAt?: string; text?: string; diagnostics?: object | null; }
 interface FriendRequest { id: UUID; requesterId: UUID; addresseeId: UUID; status: "pending" | "accepted"; }
@@ -15,6 +15,8 @@ export class MemoryRepository implements LedgerRepository {
   private evidence = new Map<UUID, ImageRecord>();
   private expenses: Expense[] = [];
   private payments: Payment[] = [];
+  /** Deleted (voided) expenses by ID; they stay in `expenses`. */
+  private deleted = new Map<UUID, { deletedAt: string; deletedBy: UUID }>();
   private requests = new Map<string, { fingerprint: string; value: Expense | Payment }>();
   private friendRequests: FriendRequest[] = [];
   /** Each dev account's owner. */
@@ -109,11 +111,12 @@ export class MemoryRepository implements LedgerRepository {
   async resetLedgerData(accountId: UUID, userId: UUID): Promise<void> {
     this.requireProfile(userId);
     if (!this.developerIds.has(accountId)) throw new ApiError(403, "developer access is required", "forbidden");
-    const expenses = new Set(this.visibleExpenses(userId));
+    const expenses = new Set(this.visibleExpenses(userId, true));
     const payments = new Set(this.payments.filter((payment) => payment.fromUserId === userId || payment.toUserId === userId));
     const removed = new Set<UUID>([...expenses, ...payments].map((entry) => entry.id));
     this.expenses = this.expenses.filter((expense) => !expenses.has(expense)); this.payments = this.payments.filter((payment) => !payments.has(payment));
     for (const [key, request] of this.requests) if (removed.has(request.value.id)) this.requests.delete(key);
+    for (const id of removed) this.deleted.delete(id);
     const attached = new Set(this.expenses.flatMap((expense) => expense.evidenceIds));
     const orphaned = new Set([...expenses].flatMap((expense) => expense.evidenceIds));
     for (const [id, image] of this.evidence) if (!attached.has(id) && (image.ownerId === userId || orphaned.has(id))) this.evidence.delete(id);
@@ -153,7 +156,7 @@ export class MemoryRepository implements LedgerRepository {
   async getEvidence(requesterId: UUID, evidenceId: UUID): Promise<StoredImage | null> {
     const image = this.evidence.get(evidenceId);
     if (!image) return null;
-    const visible = image.ownerId === requesterId || this.visibleExpenses(requesterId).some((expense) => expense.evidenceIds.includes(evidenceId));
+    const visible = image.ownerId === requesterId || this.visibleExpenses(requesterId, true).some((expense) => expense.evidenceIds.includes(evidenceId));
     return visible ? image : null;
   }
   async putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics: object | null = null): Promise<boolean> {
@@ -195,10 +198,23 @@ export class MemoryRepository implements LedgerRepository {
     return structuredClone(expense);
   }
 
+  async deleteExpense(userId: UUID, expenseId: UUID): Promise<void> {
+    const expense = this.ownExpense(userId, expenseId);
+    if (this.deleted.has(expense.id)) return;
+    this.deleted.set(expense.id, { deletedAt: new Date().toISOString(), deletedBy: userId });
+    this.auditEvents.push({ actorId: userId, eventType: "expense.voided", entityId: expense.id, details: {} });
+  }
+
+  async restoreExpense(userId: UUID, expenseId: UUID): Promise<Expense> {
+    const expense = this.ownExpense(userId, expenseId);
+    if (this.deleted.delete(expense.id)) this.auditEvents.push({ actorId: userId, eventType: "expense.restored", entityId: expense.id, details: {} });
+    return structuredClone(expense);
+  }
+
   async createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment> {
     this.requireProfile(recorderId); validatePayment(recorderId, input);
     const otherId = input.fromUserId === recorderId ? input.toUserId : input.fromUserId;
-    const shared = this.expenses.some((expense) => expense.allocations.some((a) => (expense.payerId === recorderId && a.userId === otherId) || (expense.payerId === otherId && a.userId === recorderId)));
+    const shared = this.expenses.some((expense) => !this.deleted.has(expense.id) && expense.allocations.some((a) => (expense.payerId === recorderId && a.userId === otherId) || (expense.payerId === otherId && a.userId === recorderId)));
     if (!shared && this.requestBetween(recorderId, otherId)?.status !== "accepted") throw new ApiError(422, "you can only record payments with friends or people you've shared expenses with", "invalid_person");
     const key = `payment:${recorderId}:${input.clientRequestId}`, requestFingerprint = fingerprint(input), existing = this.requests.get(key);
     if (existing) {
@@ -214,6 +230,11 @@ export class MemoryRepository implements LedgerRepository {
     this.requireProfile(userId);
     const savedFilters = await this.listSavedFilters(userId);
     let expenses = structuredClone(this.visibleExpenses(userId));
+    const cutoff = Date.now() - deletedExpenseDays * 86_400_000;
+    let deletedExpenses: DeletedExpense[] = this.visibleExpenses(userId, true).flatMap((expense) => {
+      const deletion = this.deleted.get(expense.id);
+      return deletion && Date.parse(deletion.deletedAt) > cutoff ? [{ ...structuredClone(expense), ...deletion }] : [];
+    });
     let payments = structuredClone(this.payments.filter((payment) => payment.fromUserId === userId || payment.toUserId === userId));
     const balances = calculateBalances(userId, expenses, payments);
     const peopleIds = new Set<UUID>([userId, ...this.friendIds(userId)]);
@@ -227,14 +248,23 @@ export class MemoryRepository implements LedgerRepository {
       const filter = savedFilters.find((item) => item.id === filterId);
       if (!filter) throw new ApiError(404, "saved filter not found", "not_found");
       ({ expenses, payments } = filterTransactions(filter.userIds, expenses, payments));
+      deletedExpenses = filterTransactions(filter.userIds, deletedExpenses, []).expenses;
     }
-    const snapshot: LedgerSnapshot = { currency: this.settings.get(userId)!.currency, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
+    const snapshot: LedgerSnapshot = { currency: this.settings.get(userId)!.currency, people, savedFilters, expenses, deletedExpenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
     if (filterId) snapshot.appliedFilterId = filterId;
     return snapshot;
   }
 
-  private visibleExpenses(userId: UUID): Expense[] {
-    return this.expenses.filter((expense) => expense.creatorId === userId || expense.payerId === userId || expense.allocations.some((a) => a.userId === userId));
+  /** The expenses `userId` created, paid, or has a share of; deleted ones only if asked for. */
+  private visibleExpenses(userId: UUID, includeDeleted = false): Expense[] {
+    return this.expenses.filter((expense) => (includeDeleted || !this.deleted.has(expense.id)) && (expense.creatorId === userId || expense.payerId === userId || expense.allocations.some((a) => a.userId === userId)));
+  }
+  /** An expense, active or deleted, that `userId` paid for: 404 if they aren't on it, 403 if someone else paid. */
+  private ownExpense(userId: UUID, expenseId: UUID): Expense {
+    const expense = this.visibleExpenses(userId, true).find((candidate) => candidate.id === expenseId);
+    if (!expense) throw new ApiError(404, "expense not found", "not_found");
+    if (expense.payerId !== userId) throw new ApiError(403, "only the payer can change this expense", "forbidden");
+    return expense;
   }
   private requestBetween(left: UUID, right: UUID): FriendRequest | undefined {
     return this.friendRequests.find((request) => (request.requesterId === left && request.addresseeId === right) || (request.requesterId === right && request.addresseeId === left));

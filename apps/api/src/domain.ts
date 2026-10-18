@@ -180,7 +180,7 @@ export function calculateBalances(userId: UUID, expenses: Expense[], payments: P
 }
 
 /** Keeps the transactions involving any of `userIds`; used by saved filters, which never change balances. */
-export function filterTransactions(userIds: UUID[], expenses: Expense[], payments: Payment[]): { expenses: Expense[]; payments: Payment[] } {
+export function filterTransactions<E extends Expense>(userIds: UUID[], expenses: E[], payments: Payment[]): { expenses: E[]; payments: Payment[] } {
   const selected = new Set(userIds);
   return {
     expenses: expenses.filter((expense) => selected.has(expense.payerId) || expense.allocations.some((allocation) => selected.has(allocation.userId))),

@@ -94,6 +94,10 @@ struct Expense: Identifiable, Hashable, Codable {
     var adjustments: [ReceiptAdjustment] = []
     /// How the receipt was read; like `recognizedText`, only set before saving.
     var receiptDiagnostics: ReceiptDiagnostics? = nil
+    /// Set when the payer deleted it for everyone; it then counts toward no balance until they restore it.
+    var deletedAt: Date? = nil
+    var deletedBy: UUID? = nil
+    var isDeleted: Bool { deletedAt != nil }
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     /// The selected items' own discounts.
     var itemDiscountTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.localOffsetCents } }
@@ -184,6 +188,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     /// What each person owes the signed-in user; negative when the signed-in user owes them.
     private(set) var balances: [UUID: Int] = [:]
     var expenses: [Expense] = [] { didSet { persist() } }
+    /// Recently deleted expenses, which their payer can restore.
+    private(set) var deletedExpenses: [Expense] = [] { didSet { persist() } }
     var payments: [Payment] = [] { didSet { persist() } }
 
     init(bundle: Bundle = .main) { api = LedgerAPIClient(bundle: bundle) }
@@ -511,6 +517,19 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         }
     }
 
+    /// Deletes an expense for everyone on it, then reloads so balances and the deleted list come from the server.
+    func deleteExpense(_ expenseID: UUID, accessToken: String) async throws {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        try await api.deleteExpense(id: expenseID, token: accessToken)
+        try await refresh(accessToken: accessToken)
+    }
+
+    func restoreExpense(_ expenseID: UUID, accessToken: String) async throws {
+        guard let api else { throw LedgerAPIClientError.configurationMissing }
+        _ = try await api.restoreExpense(id: expenseID, token: accessToken)
+        try await refresh(accessToken: accessToken)
+    }
+
     func add(_ payment: Payment, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         _ = try await api.createPayment(
@@ -539,6 +558,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
 
     func resetLocalCache() {
         expenses = []
+        deletedExpenses = []
         payments = []
         pendingExpenses = [:]
         pendingExpenseIDs = []
@@ -568,6 +588,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         balances = [:]
         friends = []
         expenses = []
+        deletedExpenses = []
         payments = []
         syncError = nil
         expenseSaveError = nil
@@ -585,38 +606,21 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         balances = [:]
         friends = []
         expenses = []
+        deletedExpenses = []
         payments = []
         activeUserID = userID
         restore(userID: userID)
     }
 
     private func apply(_ snapshot: APILedgerSnapshot) {
-        let acknowledged = Set(snapshot.expenses.map(\.clientRequestId))
+        let deleted = snapshot.deletedExpenses ?? []
+        let acknowledged = Set((snapshot.expenses + deleted).map(\.clientRequestId))
         for id in acknowledged { pendingExpenses[id] = nil; pendingExpenseIDs.remove(id) }
         people = Dictionary(snapshot.people.map { ($0.userId, LedgerPerson(id: $0.userId, displayName: $0.displayName, username: $0.username, avatarEtag: $0.avatarEtag)) }, uniquingKeysWith: { first, _ in first })
         confirmedBalances = Dictionary(snapshot.balances.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } }, uniquingKeysWith: +)
-        let confirmedExpenses = snapshot.expenses.map { remote in
-            Expense(
-                id: remote.id,
-                description: remote.description,
-                transactionDate: Self.dayFormatter.date(from: remote.transactionDate) ?? .now,
-                payer: remote.payerId,
-                items: remote.items.map {
-                    ReceiptItem(name: $0.name, cents: $0.amountCents, localOffsetCents: $0.localOffsetCents ?? 0, globalOffsetCents: $0.globalOffsetCents ?? 0,
-                                kind: $0.kind.flatMap(ReceiptItem.Kind.init(rawValue:)) ?? .item, taxed: $0.taxed ?? true, isSelected: true, ownerIDs: Set($0.ownerIds ?? []))
-                },
-                shares: Dictionary(remote.allocations.map { ($0.userId, $0.amountCents) }, uniquingKeysWith: +),
-                receiptImageData: nil,
-                createdAt: Self.isoDate(remote.createdAt),
-                recordedTotalCents: remote.totalCents,
-                evidenceIDs: remote.evidenceIds,
-                category: remote.category.flatMap(ExpenseCategory.init(rawValue:)),
-                adjustments: (remote.adjustments ?? []).compactMap { adjustment in
-                    ReceiptAdjustment.Kind(rawValue: adjustment.kind).map { ReceiptAdjustment(kind: $0, rate: adjustment.rate ?? 0, amountCents: adjustment.amountCents) }
-                }
-            )
-        }
+        let confirmedExpenses = snapshot.expenses.map(Self.expense(from:))
         expenses = confirmedExpenses + Array(pendingExpenses.values)
+        deletedExpenses = deleted.map(Self.expense(from:))
         payments = snapshot.payments.map { remote in
             Payment(
                 id: remote.id,
@@ -628,6 +632,30 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             )
         }
         rebuildBalances()
+    }
+
+    private static func expense(from remote: APIExpense) -> Expense {
+        Expense(
+            id: remote.id,
+            description: remote.description,
+            transactionDate: Self.dayFormatter.date(from: remote.transactionDate) ?? .now,
+            payer: remote.payerId,
+            items: remote.items.map {
+                ReceiptItem(name: $0.name, cents: $0.amountCents, localOffsetCents: $0.localOffsetCents ?? 0, globalOffsetCents: $0.globalOffsetCents ?? 0,
+                            kind: $0.kind.flatMap(ReceiptItem.Kind.init(rawValue:)) ?? .item, taxed: $0.taxed ?? true, isSelected: true, ownerIDs: Set($0.ownerIds ?? []))
+            },
+            shares: Dictionary(remote.allocations.map { ($0.userId, $0.amountCents) }, uniquingKeysWith: +),
+            receiptImageData: nil,
+            createdAt: Self.isoDate(remote.createdAt),
+            recordedTotalCents: remote.totalCents,
+            evidenceIDs: remote.evidenceIds,
+            category: remote.category.flatMap(ExpenseCategory.init(rawValue:)),
+            adjustments: (remote.adjustments ?? []).compactMap { adjustment in
+                ReceiptAdjustment.Kind(rawValue: adjustment.kind).map { ReceiptAdjustment(kind: $0, rate: adjustment.rate ?? 0, amountCents: adjustment.amountCents) }
+            },
+            deletedAt: remote.deletedAt.map(isoDate),
+            deletedBy: remote.deletedBy
+        )
     }
 
     private func discardPendingExpense(_ id: UUID) {
@@ -653,7 +681,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
 
     private func persist() {
         let confirmedExpenses = expenses.filter { !pendingExpenseIDs.contains($0.id) }
-        guard let activeUserID, let data = try? JSONEncoder().encode(LocalLedger(expenses: confirmedExpenses, payments: payments, people: Array(people.values), balances: confirmedBalances)) else { return }
+        guard let activeUserID, let data = try? JSONEncoder().encode(LocalLedger(expenses: confirmedExpenses, deletedExpenses: deletedExpenses, payments: payments, people: Array(people.values), balances: confirmedBalances)) else { return }
         UserDefaults.standard.set(data, forKey: storageKey(for: activeUserID))
     }
 
@@ -663,6 +691,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         balances = ledger.balances
         confirmedBalances = ledger.balances
         expenses = ledger.expenses
+        deletedExpenses = ledger.deletedExpenses ?? []
         payments = ledger.payments
     }
 
@@ -685,5 +714,5 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) ?? .now
     }
 }
-private struct LocalLedger: Codable { var expenses: [Expense]; var payments: [Payment]; var people: [LedgerPerson]; var balances: [UUID: Int] }
+private struct LocalLedger: Codable { var expenses: [Expense]; var deletedExpenses: [Expense]?; var payments: [Payment]; var people: [LedgerPerson]; var balances: [UUID: Int] }
 extension Int { var usd: String { (Decimal(self) / 100).formatted(.currency(code: "USD")) } }
