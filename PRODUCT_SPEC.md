@@ -226,6 +226,16 @@ These are proposed implementation rules. They should be settled before implement
 
 `expense total = sum over items of (printed price + local offset + global offset) + tip + surcharge on the tip`, which equals the printed total when every row is kept and the reading is correct. Split All may still use the printed total.
 
+**Final review amounts (proposed 2026-10-18, pending product-owner confirmation).** The items and adjustments are the only source of truth; every line on final review is derived from them and the lines add up to the total: Subtotal (the kept items' printed prices) + Item discounts + each Tax − Discounts + Surcharges + Tip = Total. The tip line is the tip as entered; any surcharge on it is part of the surcharge line.
+
+- Editing the subtotal sets the price of the expense's single item; rates stay, so tax follows.
+- Editing a tax sets that amount and works out its rate from the taxed running cost; the subtotal stays and the total follows. A tax with nothing taxed to apply to comes to $0. Clearing a tax or the tip keeps it, at $0, in its receipt position.
+- Editing the tip sets its amount; the subtotal and rates stay.
+- Editing the total finds the subtotal that, with the same rates and tip, comes to it; when rounding makes the exact total unreachable, the last rate-based adjustment absorbs the cent or two. A total below what a $0 subtotal comes to leaves the subtotal at $0.
+- The subtotal and total are typed only for an expense with at most one item. For an itemized receipt they are derived from the items (edited in Assign Items) and the adjustments; editing them never rewrites printed prices or invents a balancing adjustment.
+- On a saved expense the amounts are shown but not editable, since only the name and date can be saved (D-04).
+- Contributions on final review are recalculated from ownership whenever an amount edit leaves them not adding up to the total.
+
 ### Allocation
 
 - The sum of member shares must exactly equal the expense total before saving.

@@ -47,8 +47,11 @@ struct ExpenseReviewEditorView: View {
     @State private var internalSaveError: String?
     @State private var balancer = ContributionBalancer()
     @State private var isSubtotalFocused = false
-    @State private var isTaxFocused = false
+    /// The tax field being edited, and one just added that shows until it's left.
+    @State private var focusedTaxID: UUID?
+    @State private var revealedTaxID: UUID?
     @State private var isTipFocused = false
+    @State private var isAddingTip = false
     @State private var isTotalFocused = false
     let existingExpenseID: UUID?
 
@@ -117,185 +120,80 @@ struct ExpenseReviewEditorView: View {
         return !name.isEmpty
     }
 
-    private var subtotalCents: Int {
-        let selectedItems = itemsBinding.wrappedValue.filter { $0.kind == .item && $0.isSelected }
-        if selectedItems.isEmpty {
-            return max(0, totalBinding.wrappedValue - taxCents - tipCents)
-        }
-        return selectedItems.reduce(0) { $0 + $1.netCents }
+    /// Amounts are only edited before saving: a saved expense saves just its name and date.
+    private var canEditAmounts: Bool { isEditable && mode == .draft }
+
+    private var amounts: ExpenseAmounts {
+        ExpenseAmounts(items: itemsBinding.wrappedValue, adjustments: adjustmentsBinding.wrappedValue)
     }
 
-    private var taxRate: Double? {
-        adjustmentsBinding.wrappedValue.first(where: { $0.kind == .tax && $0.rate > 0 })?.rate
-    }
-
-    private var taxCents: Int {
-        if let taxAdj = adjustmentsBinding.wrappedValue.first(where: { $0.kind == .tax }) {
-            return taxAdj.amountCents
-        }
-        if adjustmentsBinding.wrappedValue.isEmpty, mode == .existing {
-            let offset = itemsBinding.wrappedValue.filter(\.isSelected).reduce(0) { $0 + $1.globalOffsetCents }
-            return max(0, offset)
-        }
-        return 0
-    }
-
-    private var tipCents: Int {
-        adjustmentsBinding.wrappedValue.tipCents
-    }
-
-    private var otherAdjustments: [ReceiptAdjustment] {
-        adjustmentsBinding.wrappedValue.filter { $0.kind != .tax && $0.kind != .tip }
-    }
-
-    private var itemDiscountTotal: Int {
-        itemsBinding.wrappedValue.filter(\.isSelected).reduce(0) { $0 + $1.localOffsetCents }
+    /// Applies an amount edit to the items and adjustments, then sets the total they come to.
+    private func editAmounts(_ change: (inout ExpenseAmounts) -> Void) {
+        guard canEditAmounts else { return }
+        var edited = amounts
+        change(&edited)
+        if edited.items != itemsBinding.wrappedValue { itemsBinding.wrappedValue = edited.items }
+        if edited.adjustments != adjustmentsBinding.wrappedValue { adjustmentsBinding.wrappedValue = edited.adjustments }
+        totalBinding.wrappedValue = edited.totalCents
     }
 
     private var subtotalBinding: Binding<Int> {
+        Binding(get: { amounts.subtotalCents }, set: { cents in editAmounts { $0.setSubtotal(cents) } })
+    }
+
+    private func taxBinding(_ id: UUID) -> Binding<Int> {
         Binding(
-            get: { subtotalCents },
-            set: { newSubtotal in
-                guard isEditable else { return }
-                let cents = max(0, newSubtotal)
-                if itemsBinding.wrappedValue.isEmpty {
-                    itemsBinding.wrappedValue = [ReceiptItem(name: "", cents: cents, isSelected: true)]
-                } else if itemsBinding.wrappedValue.count == 1 {
-                    itemsBinding.wrappedValue[0].cents = cents
-                    itemsBinding.wrappedValue[0].localOffsetCents = 0
-                } else {
-                    let oldSubtotal = subtotalCents
-                    if oldSubtotal > 0 {
-                        var accumulated = 0
-                        for i in 0..<itemsBinding.wrappedValue.count - 1 {
-                            let proportion = Double(itemsBinding.wrappedValue[i].cents) / Double(oldSubtotal)
-                            let newCents = Int((Double(cents) * proportion).rounded())
-                            itemsBinding.wrappedValue[i].cents = newCents
-                            accumulated += newCents
-                        }
-                        itemsBinding.wrappedValue[itemsBinding.wrappedValue.count - 1].cents = max(0, cents - accumulated)
-                    } else {
-                        let share = cents / itemsBinding.wrappedValue.count
-                        let rem = cents % itemsBinding.wrappedValue.count
-                        for i in 0..<itemsBinding.wrappedValue.count {
-                            itemsBinding.wrappedValue[i].cents = share + (i < rem ? 1 : 0)
-                        }
-                    }
-                }
-                recalculateTotal()
-            }
+            get: { amounts.taxes.first { $0.id == id }?.amountCents ?? 0 },
+            set: { cents in editAmounts { $0.setTax(cents, id: id) } }
         )
     }
 
-    private var taxBinding: Binding<Int> {
+    private func taxFocusBinding(_ id: UUID) -> Binding<Bool> {
         Binding(
-            get: { taxCents },
-            set: { newTax in
-                guard isEditable else { return }
-                let cents = max(0, newTax)
-                if let idx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tax }) {
-                    if cents == 0 {
-                        adjustmentsBinding.wrappedValue.remove(at: idx)
-                    } else {
-                        adjustmentsBinding.wrappedValue[idx].amountCents = cents
-                        adjustmentsBinding.wrappedValue[idx].rate = 0
-                    }
-                } else if cents > 0 {
-                    if let tipIdx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) {
-                        adjustmentsBinding.wrappedValue.insert(ReceiptAdjustment(kind: .tax, amountCents: cents), at: tipIdx)
-                    } else {
-                        adjustmentsBinding.wrappedValue.append(ReceiptAdjustment(kind: .tax, amountCents: cents))
-                    }
-                }
-                recalculateTotal()
+            get: { focusedTaxID == id },
+            set: { focused in
+                if focused { focusedTaxID = id } else if focusedTaxID == id { focusedTaxID = nil }
             }
         )
     }
 
     private var tipBinding: Binding<Int> {
-        Binding(
-            get: { tipCents },
-            set: { newTip in
-                guard isEditable else { return }
-                let cents = max(0, newTip)
-                if let idx = adjustmentsBinding.wrappedValue.firstIndex(where: { $0.kind == .tip }) {
-                    if cents == 0 {
-                        adjustmentsBinding.wrappedValue.remove(at: idx)
-                    } else {
-                        adjustmentsBinding.wrappedValue[idx].amountCents = cents
-                    }
-                } else if cents > 0 {
-                    adjustmentsBinding.wrappedValue.append(ReceiptAdjustment(kind: .tip, amountCents: cents))
-                }
-                recalculateTotal()
-            }
-        )
+        Binding(get: { amounts.tipCents }, set: { cents in editAmounts { $0.setTip(cents) } })
     }
 
     private var editableTotalBinding: Binding<Int> {
-        Binding(
-            get: { totalBinding.wrappedValue },
-            set: { newTotal in
-                guard isEditable else { return }
-                let cents = max(0, newTotal)
-                let adjNet = adjustmentsBinding.wrappedValue.reduce(0) { sum, adj in
-                    sum + (adj.kind == .discount ? -adj.amountCents : adj.amountCents)
-                }
-                let targetSubtotal = max(0, cents - adjNet)
-                if itemsBinding.wrappedValue.isEmpty {
-                    itemsBinding.wrappedValue = [ReceiptItem(name: "", cents: targetSubtotal, isSelected: true)]
-                } else if itemsBinding.wrappedValue.count == 1 {
-                    itemsBinding.wrappedValue[0].cents = targetSubtotal
-                    itemsBinding.wrappedValue[0].localOffsetCents = 0
-                } else {
-                    let oldSubtotal = subtotalCents
-                    if oldSubtotal > 0 {
-                        var accumulated = 0
-                        for i in 0..<itemsBinding.wrappedValue.count - 1 {
-                            let proportion = Double(itemsBinding.wrappedValue[i].cents) / Double(oldSubtotal)
-                            let newCents = Int((Double(targetSubtotal) * proportion).rounded())
-                            itemsBinding.wrappedValue[i].cents = newCents
-                            accumulated += newCents
-                        }
-                        itemsBinding.wrappedValue[itemsBinding.wrappedValue.count - 1].cents = max(0, targetSubtotal - accumulated)
-                    } else {
-                        let share = targetSubtotal / itemsBinding.wrappedValue.count
-                        let rem = targetSubtotal % itemsBinding.wrappedValue.count
-                        for i in 0..<itemsBinding.wrappedValue.count {
-                            itemsBinding.wrappedValue[i].cents = share + (i < rem ? 1 : 0)
-                        }
-                    }
-                }
-                recalculateTotal()
-            }
-        )
+        Binding(get: { totalBinding.wrappedValue }, set: { cents in editAmounts { $0.setTotal(cents) } })
     }
+
+    /// Taxes with an amount, plus one being added or edited.
+    private var shownTaxes: [ReceiptAdjustment] {
+        amounts.taxes.filter { $0.amountCents > 0 || $0.id == focusedTaxID || $0.id == revealedTaxID }
+    }
+
+    private var showsTip: Bool { amounts.tipCents > 0 || isTipFocused || isAddingTip }
 
     private var hasAdditiveAmounts: Bool {
-        (taxCents > 0 || isTaxFocused) ||
-        (tipCents > 0 || isTipFocused) ||
-        itemDiscountTotal != 0 ||
-        otherAdjustments.contains { $0.amountCents != 0 }
+        let lines = amounts
+        return !shownTaxes.isEmpty || showsTip || lines.itemOffsetCents != 0 || lines.unlistedOffsetCents != 0
+            || lines.otherAdjustments.contains { $0.amountCents != 0 }
     }
 
-    private func recalculateTotal() {
-        var items = itemsBinding.wrappedValue
-        let applied = items.applyAdjustments(adjustmentsBinding.wrappedValue)
-        itemsBinding.wrappedValue = items
-        adjustmentsBinding.wrappedValue = applied
-        let newTotal = items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents } + applied.tipCents
-        totalBinding.wrappedValue = max(0, newTotal)
-        if items.count <= 1 {
-            guard newTotal > 0, !participants.isEmpty else { return }
-            let base = newTotal / participants.count
-            let remainder = newTotal % participants.count
-            sharesBinding.wrappedValue = Dictionary(uniqueKeysWithValues: participants.enumerated().map { index, person in
-                (person, base + (index < remainder ? 1 : 0))
-            })
-            balancer = ContributionBalancer()
-        } else {
-            recomputeAssignedShares()
-        }
+    private func addTax() {
+        var id = amounts.taxes.first?.id
+        if id == nil { editAmounts { id = $0.addTax() } }
+        guard let id else { return }
+        revealedTaxID = id
+        // The field has to exist before it can take focus.
+        Task { @MainActor in focusedTaxID = id }
+    }
+
+    private func addTip() {
+        isAddingTip = true
+        Task { @MainActor in isTipFocused = true }
+    }
+
+    private func signed(_ cents: Int) -> String {
+        cents < 0 ? "−\((-cents).usd)" : cents.usd
     }
 
     private func signedAdjustment(_ adjustment: ReceiptAdjustment) -> String {
@@ -480,87 +378,92 @@ struct ExpenseReviewEditorView: View {
             }
 
             Section {
+                let lines = amounts
+                let editsTotal = canEditAmounts && lines.isSubtotalEditable
                 VStack(spacing: 3) {
                     if hasAdditiveAmounts {
-                        // Subtotal
                         HStack {
                             Text("Subtotal")
                             Spacer()
-                            if isEditable {
+                            if editsTotal {
                                 CentsField(title: "0.00", cents: subtotalBinding, isFocusedBinding: $isSubtotalFocused)
                                     .accessibilityLabel("Subtotal")
                             } else {
-                                Text(subtotalCents.usd)
+                                Text(lines.subtotalCents.usd)
                                     .accessibilityLabel("Subtotal")
                             }
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            if isEditable { isSubtotalFocused = true }
+                            if editsTotal { isSubtotalFocused = true }
                         }
 
-                        // Tax
-                        if taxCents > 0 || isTaxFocused {
+                        if lines.itemOffsetCents != 0 {
+                            HStack {
+                                Text("Item discounts")
+                                Spacer()
+                                Text(signed(lines.itemOffsetCents))
+                            }
+                        }
+
+                        ForEach(shownTaxes) { tax in
                             HStack {
                                 HStack(spacing: 4) {
                                     Text("Tax")
-                                    if let taxRate, taxRate > 0 {
-                                        Text("(\(RateField.format(taxRate))%)")
+                                    if tax.rate > 0 {
+                                        Text("(\(RateField.format(tax.rate))%)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
-                                if isEditable {
-                                    CentsField(title: "0.00", cents: taxBinding, isFocusedBinding: $isTaxFocused)
+                                if canEditAmounts {
+                                    CentsField(title: "0.00", cents: taxBinding(tax.id), isFocusedBinding: taxFocusBinding(tax.id))
                                         .accessibilityLabel("Tax")
                                 } else {
-                                    Text(taxCents.usd)
+                                    Text(tax.amountCents.usd)
                                         .accessibilityLabel("Tax")
                                 }
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if isEditable { isTaxFocused = true }
+                                if canEditAmounts { focusedTaxID = tax.id }
                             }
                         }
 
-                        // Tip
-                        if tipCents > 0 || isTipFocused {
-                            HStack {
-                                Text("Tip")
-                                Spacer()
-                                if isEditable {
-                                    CentsField(title: "0.00", cents: tipBinding, isFocusedBinding: $isTipFocused)
-                                        .accessibilityLabel("Tip")
-                                } else {
-                                    Text(tipCents.usd)
-                                        .accessibilityLabel("Tip")
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if isEditable { isTipFocused = true }
-                            }
-                        }
-
-                        // Item discounts
-                        if itemDiscountTotal != 0 {
-                            HStack {
-                                Text("Item discounts")
-                                Spacer()
-                                Text(itemDiscountTotal < 0 ? "−\((-itemDiscountTotal).usd)" : itemDiscountTotal.usd)
-                            }
-                        }
-
-                        // Other adjustments
-                        ForEach(otherAdjustments) { adjustment in
+                        ForEach(lines.otherAdjustments) { adjustment in
                             if adjustment.amountCents != 0 {
                                 HStack {
                                     Text(adjustment.kind.title)
                                     Spacer()
                                     Text(signedAdjustment(adjustment))
                                 }
+                            }
+                        }
+
+                        if lines.unlistedOffsetCents != 0 {
+                            HStack {
+                                Text("Adjustments")
+                                Spacer()
+                                Text(signed(lines.unlistedOffsetCents))
+                            }
+                        }
+
+                        if showsTip {
+                            HStack {
+                                Text("Tip")
+                                Spacer()
+                                if canEditAmounts {
+                                    CentsField(title: "0.00", cents: tipBinding, isFocusedBinding: $isTipFocused)
+                                        .accessibilityLabel("Tip")
+                                } else {
+                                    Text(lines.tipCents.usd)
+                                        .accessibilityLabel("Tip")
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if canEditAmounts { isTipFocused = true }
                             }
                         }
 
@@ -576,7 +479,7 @@ struct ExpenseReviewEditorView: View {
                             Text("Total")
                         }
                         Spacer()
-                        if isEditable {
+                        if editsTotal {
                             CentsField(title: "0.00", cents: editableTotalBinding, isFocusedBinding: $isTotalFocused, fontWeight: .semibold)
                                 .accessibilityLabel("Total")
                         } else {
@@ -587,25 +490,25 @@ struct ExpenseReviewEditorView: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if isEditable { isTotalFocused = true }
+                        if editsTotal { isTotalFocused = true }
                     }
                 }
                 .padding(.vertical, 3)
                 .contextMenu {
-                    if isEditable {
-                        if taxCents == 0 {
-                            Button("Add tax", systemImage: "percent") {
-                                taxBinding.wrappedValue = 1
-                                isTaxFocused = true
-                            }
+                    if canEditAmounts {
+                        if shownTaxes.isEmpty {
+                            Button("Add tax", systemImage: "percent") { addTax() }
                         }
-                        if tipCents == 0 {
-                            Button("Add tip", systemImage: "heart") {
-                                tipBinding.wrappedValue = 1
-                                isTipFocused = true
-                            }
+                        if !showsTip {
+                            Button("Add tip", systemImage: "heart") { addTip() }
                         }
                     }
+                }
+                .onChange(of: focusedTaxID) { _, focused in
+                    if focused == nil { revealedTaxID = nil }
+                }
+                .onChange(of: isTipFocused) { _, focused in
+                    if !focused { isAddingTip = false }
                 }
             }
 
@@ -752,11 +655,5 @@ struct ExpenseReviewEditorView: View {
             ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id, default: []]
         }
         sharesBinding.wrappedValue = (ownedItems + tipRows(for: ownedItems)).ownerShares(for: participants)
-        let newTotal = itemsBinding.wrappedValue.filter {
-            !(itemAssignmentsBinding.wrappedValue[$0.id]?.isEmpty ?? true)
-        }.reduce(0) { $0 + $1.totalCents } + adjustmentsBinding.wrappedValue.tipCents
-        if newTotal > 0 {
-            totalBinding.wrappedValue = newTotal
-        }
     }
 }
