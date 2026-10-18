@@ -103,6 +103,22 @@ struct Expense: Identifiable, Hashable, Codable {
     var globalOffsetTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.globalOffsetCents } }
     var participants: [UUID] { Array(shares.keys) }
 }
+extension Expense {
+    /// The selected items `person` owns, each with what it costs them in full. Their share is divided over these items in
+    /// proportion to each item's total (its price after its own discount and its part of the receipt's discounts, taxes
+    /// and surcharges) divided among its owners, so the parts include the tip and any hand-adjusted contribution and add
+    /// up to the share exactly. An item without owners counts as everyone's. A listed tip isn't an item of its own.
+    func itemCharges(for person: UUID) -> [(item: ReceiptItem, cents: Int)] {
+        let listsTip = adjustments.contains { $0.kind == .tip }
+        let owned = items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) && ($0.ownerIDs.isEmpty || $0.ownerIDs.contains(person)) }
+        let weights = owned.map { item in
+            Swift.max(0, item.totalCents) * 1_000 / Swift.max(1, item.ownerIDs.isEmpty ? participants.count : item.ownerIDs.count)
+        }
+        let share = shares[person, default: 0]
+        guard share > 0, weights.contains(where: { $0 > 0 }) else { return owned.map { ($0, 0) } }
+        return Array(zip(owned, ReceiptMath.distribute(share, over: weights)))
+    }
+}
 /// What an expense was for, chosen by hand. Optional; older expenses have none.
 enum ExpenseCategory: String, CaseIterable, Identifiable, Hashable, Codable, Sendable {
     case groceries, restaurant, movie, concert

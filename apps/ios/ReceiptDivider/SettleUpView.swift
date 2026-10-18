@@ -176,28 +176,17 @@ struct SettleUpView: View {
             credit = 0
             totalCents += remainingExpenseShare
 
-            let listsTip = expense.adjustments.contains { $0.kind == .tip }
-            let selected = expense.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }
             var expenseItems: [SettleUpItem] = []
-            if !selected.isEmpty {
-                for item in selected {
-                    let isOwner = item.ownerIDs.isEmpty || item.ownerIDs.contains(debtor)
-                    if isOwner {
-                        let ownersCount = max(1, item.ownerIDs.isEmpty ? expense.participants.count : item.ownerIDs.count)
-                        let share = item.cents / ownersCount
-                        if share > 0 {
-                            if itemCredit >= share {
-                                itemCredit -= share
-                            } else {
-                                let remaining = share - itemCredit
-                                itemCredit = 0
-                                expenseItems.append(SettleUpItem(
-                                    descriptor: itemDescriptor(itemName: item.name, expense: expense),
-                                    cents: remaining
-                                ))
-                            }
-                        }
-                    }
+            for (item, share) in expense.itemCharges(for: debtor) where share > 0 {
+                if itemCredit >= share {
+                    itemCredit -= share
+                } else {
+                    let remaining = share - itemCredit
+                    itemCredit = 0
+                    expenseItems.append(SettleUpItem(
+                        descriptor: itemDescriptor(itemName: item.name, expense: expense),
+                        cents: remaining
+                    ))
                 }
             }
             if expenseItems.isEmpty {
