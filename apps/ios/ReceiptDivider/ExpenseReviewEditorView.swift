@@ -383,8 +383,10 @@ struct ExpenseReviewEditorView: View {
 
     private var payerDateRow: some View {
         let payer = payerBinding.wrappedValue.map { store.person(for: $0) }
-        return HStack(spacing: 4) {
-            Text("Paid by").foregroundStyle(.secondary)
+        return HStack(spacing: 6) {
+            Text("Paid by")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             Menu {
                 Picker("Paid by", selection: payerBinding) {
                     ForEach(participants, id: \.self) { person in
@@ -392,11 +394,12 @@ struct ExpenseReviewEditorView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     if let payer {
-                        AvatarView(userID: payer.id, name: payer.name, etag: payer.avatarEtag, size: 20)
+                        AvatarView(userID: payer.id, name: payer.name, etag: payer.avatarEtag, size: 22)
                     }
                     Text(payer?.firstName ?? "Choose")
+                        .font(.body)
                     if isEditable {
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.caption2)
@@ -408,8 +411,11 @@ struct ExpenseReviewEditorView: View {
             }
             .disabled(!isEditable)
             .accessibilityLabel("Paid by \(payer?.name ?? "")")
-            Text("on").foregroundStyle(.secondary)
+            Text("on")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             let dateText = Text(dateBinding.wrappedValue.formatted(date: .abbreviated, time: .omitted))
+                .font(.body)
             if isEditable {
                 Button {
                     isPickingDate = true
@@ -433,10 +439,11 @@ struct ExpenseReviewEditorView: View {
             } else {
                 dateText
             }
-            Spacer(minLength: 0)
         }
-        .font(.subheadline)
         .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .allowsTightening(true)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     var body: some View {

@@ -124,9 +124,11 @@ private struct BalancesView: View {
                         BalanceRow(person: entry.person, cents: entry.cents)
                     }
                     .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
             }
         }
+        .environment(\.defaultMinListRowHeight, 36)
         .scrollIndicators(.hidden)
         .navigationTitle("Balances")
         .navigationBarTitleDisplayMode(.inline)
@@ -142,8 +144,8 @@ private struct BalanceRow: View {
     let person: LedgerPerson
     let cents: Int
     var body: some View {
-        HStack(spacing: 12) {
-            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 30)
+        HStack(spacing: 10) {
+            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 26)
             Text(relationship)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -151,7 +153,6 @@ private struct BalanceRow: View {
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
 
@@ -196,14 +197,67 @@ private struct ExpenseRow: View {
             Image(systemName: expense.isDeleted ? "trash" : expense.category?.symbol ?? "receipt").foregroundStyle(.secondary).frame(width: 24)
                 .accessibilityLabel(expense.isDeleted ? "Deleted" : expense.category?.title ?? "Expense")
             VStack(alignment: .leading, spacing: 4) {
-                Text(expense.description).font(.headline).foregroundStyle(expense.isDeleted ? .secondary : .primary)
-                HStack(spacing: 6) { AvatarStack(people: expense.participants); Text(expense.transactionDate, style: .date).font(.caption).foregroundStyle(.secondary) }
+                FadingSingleLineText(
+                    text: expense.description,
+                    font: .headline,
+                    color: expense.isDeleted ? .secondary : .primary
+                )
+                HStack(spacing: 6) {
+                    AvatarStack(people: expense.participants)
+                    Text(expense.transactionDate, style: .date)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
             if store.isExpensePending(expense.id) { ProgressView().controlSize(.small).accessibilityLabel("Uploading") }
             Text(expense.total.usd).fontWeight(.semibold)
                 .strikethrough(expense.isDeleted)
                 .foregroundStyle(expense.isDeleted ? .secondary : .primary)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+}
+
+/// Renders text on a single line without wrapping; if the text exceeds the available width, it extends to the trailing edge and fades out.
+private struct FadingSingleLineText: View {
+    let text: String
+    let font: Font
+    let color: Color
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Text(text)
+                .font(font)
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Text(text)
+                .font(font)
+                .lineLimit(1)
+                .hidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .leading) {
+                    Text(text)
+                        .font(font)
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .clipped()
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.8),
+                            .init(color: .clear, location: 1.0)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
         }
     }
 }

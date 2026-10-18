@@ -10,6 +10,7 @@ struct FriendsView: View {
     @State private var busyIDs: Set<UUID> = []
     /// Bumped after a friend is removed, to play the confirming haptic.
     @State private var removals = 0
+    @FocusState private var isSearchFocused: Bool
 
     /// How often the open Friends screen checks for new requests and acceptances.
     private static let pollInterval: Duration = .seconds(5)
@@ -23,14 +24,21 @@ struct FriendsView: View {
     private var isSearchActive: Bool { trimmedQuery.count >= 2 }
 
     var body: some View {
-        List {
-            if let errorMessage { Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) } }
-            if isSearchActive { searchResults } else { friendSections }
+        VStack(spacing: 0) {
+            if !store.isDevAccount {
+                searchBar
+            }
+            List {
+                if let errorMessage { Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) } }
+                if isSearchActive && (hasSearched || !results.isEmpty) { searchResults } else { friendSections }
+            }
+            .contentMargins(.top, 8, for: .scrollContent)
+            .scrollIndicators(.hidden)
+            .refreshable { await reload() }
         }
-        .scrollIndicators(.hidden)
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Friends")
-        .friendSearch(text: $query, isEnabled: !store.isDevAccount)
-        .refreshable { await reload() }
+        .navigationBarTitleDisplayMode(.inline)
         .task {
             while !Task.isCancelled {
                 await reload()
@@ -39,6 +47,47 @@ struct FriendsView: View {
         }
         .task(id: trimmedQuery) { await search() }
         .sensoryFeedback(.success, trigger: removals)
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search by name or username", text: $query)
+                    .focused($isSearchFocused)
+                    .submitLabel(.done)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !query.isEmpty {
+                    Button("Clear", systemImage: "xmark.circle.fill") {
+                        query = ""
+                        results = []
+                        hasSearched = false
+                    }
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            if isSearchFocused || !query.isEmpty {
+                Button("Cancel") {
+                    query = ""
+                    results = []
+                    hasSearched = false
+                    isSearchFocused = false
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+        .animation(.snappy(duration: 0.2), value: isSearchFocused || !query.isEmpty)
     }
 
     @ViewBuilder private var searchResults: some View {
@@ -182,19 +231,5 @@ struct FriendsView: View {
     private func reload() async {
         guard let token = try? await authentication.accessToken() else { return }
         try? await store.refreshFriends(accessToken: token)
-    }
-}
-
-private extension View {
-    /// Dev accounts' friends follow their owner's, so a dev account has no search.
-    @ViewBuilder func friendSearch(text: Binding<String>, isEnabled: Bool) -> some View {
-        if isEnabled {
-            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search by name or username")
-                .submitLabel(.done)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-        } else {
-            self
-        }
     }
 }

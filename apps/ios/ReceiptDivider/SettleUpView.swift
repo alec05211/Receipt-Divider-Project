@@ -33,30 +33,16 @@ struct SettleUpView: View {
                     if let other { LabeledContent("Current balance", value: store.describeBalance(balance, with: store.person(for: other).name)) }
                 }
 
-                if let other {
-                    let itemsTheyOwe = itemsTheyOweMe(other: other)
-                    if !itemsTheyOwe.isEmpty {
-                        Section("\(store.person(for: other).firstName) owes \(store.selfReferenceObject)") {
-                            ForEach(itemsTheyOwe) { item in
-                                HStack {
-                                    Text(item.descriptor)
-                                    Spacer()
-                                    Text(item.cents.usd)
-                                }
+                if let other, let me = store.activeUserID {
+                    let theirBreakdown = owedBreakdown(debtor: other, creditor: me)
+                    let myBreakdown = owedBreakdown(debtor: me, creditor: other)
+                    if !theirBreakdown.items.isEmpty || !myBreakdown.items.isEmpty {
+                        Section {
+                            if !theirBreakdown.items.isEmpty {
+                                personSummaryRow(person: other, totalCents: theirBreakdown.totalCents, items: theirBreakdown.items)
                             }
-                        }
-                    }
-
-                    let itemsIOwe = itemsIOweThem(other: other)
-                    if !itemsIOwe.isEmpty {
-                        let verb = store.selfReferenceMode == .fullName ? "owes" : "owe"
-                        Section("\(store.selfReferenceSubject) \(verb) \(store.person(for: other).firstName)") {
-                            ForEach(itemsIOwe) { item in
-                                HStack {
-                                    Text(item.descriptor)
-                                    Spacer()
-                                    Text(item.cents.usd)
-                                }
+                            if !myBreakdown.items.isEmpty {
+                                personSummaryRow(person: me, totalCents: myBreakdown.totalCents, items: myBreakdown.items)
                             }
                         }
                     }
@@ -116,6 +102,41 @@ struct SettleUpView: View {
         let cents: Int
     }
 
+    private struct OwedBreakdown {
+        let totalCents: Int
+        let items: [SettleUpItem]
+    }
+
+    private func personSummaryRow(person: UUID, totalCents: Int, items: [SettleUpItem]) -> some View {
+        let details = store.person(for: person)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                HStack(spacing: 6) {
+                    AvatarView(userID: person, name: details.name, etag: details.avatarEtag, size: 24)
+                    Text(store.name(for: person))
+                }
+                Spacer()
+                Text(totalCents.usd).fontWeight(.semibold)
+            }
+            if !items.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(items) { item in
+                        HStack {
+                            Text(item.descriptor)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(item.cents.usd)
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.leading, 30)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
     private func itemDescriptor(itemName: String, expense: Expense) -> String {
         let name = itemName.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseName = name.isEmpty ? expense.description : name
@@ -131,47 +152,46 @@ struct SettleUpView: View {
         return baseName
     }
 
-    private func itemsTheyOweMe(other: UUID) -> [SettleUpItem] {
-        guard let me = store.activeUserID, balance != 0 else { return [] }
+    private func owedBreakdown(debtor: UUID, creditor: UUID) -> OwedBreakdown {
+        guard balance != 0 else { return OwedBreakdown(totalCents: 0, items: []) }
         let expenses = store.expenses
-            .filter { $0.payer == me && $0.participants.contains(other) }
+            .filter { $0.payer == creditor && $0.participants.contains(debtor) }
             .sorted { $0.transactionDate < $1.transactionDate }
 
         var credit = store.payments
-            .filter { $0.from == other && $0.to == me }
+            .filter { $0.from == debtor && $0.to == creditor }
             .reduce(0) { $0 + $1.amount }
 
+        var totalCents = 0
         var result: [SettleUpItem] = []
         for expense in expenses {
+            let expenseShare = expense.shares[debtor, default: 0]
+            guard expenseShare > 0 else { continue }
+            if credit >= expenseShare {
+                credit -= expenseShare
+                continue
+            }
+            let remainingExpenseShare = expenseShare - credit
+            var itemCredit = credit
+            credit = 0
+            totalCents += remainingExpenseShare
+
             let listsTip = expense.adjustments.contains { $0.kind == .tip }
             let selected = expense.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }
-            if selected.isEmpty {
-                let share = expense.shares[other, default: 0]
-                if share > 0 {
-                    if credit >= share {
-                        credit -= share
-                    } else {
-                        let remaining = share - credit
-                        credit = 0
-                        result.append(SettleUpItem(
-                            descriptor: itemDescriptor(itemName: expense.description, expense: expense),
-                            cents: remaining
-                        ))
-                    }
-                }
-            } else {
+            var expenseItems: [SettleUpItem] = []
+            if !selected.isEmpty {
                 for item in selected {
-                    let isOwner = item.ownerIDs.isEmpty || item.ownerIDs.contains(other)
+                    let isOwner = item.ownerIDs.isEmpty || item.ownerIDs.contains(debtor)
                     if isOwner {
                         let ownersCount = max(1, item.ownerIDs.isEmpty ? expense.participants.count : item.ownerIDs.count)
                         let share = item.cents / ownersCount
                         if share > 0 {
-                            if credit >= share {
-                                credit -= share
+                            if itemCredit >= share {
+                                itemCredit -= share
                             } else {
-                                let remaining = share - credit
-                                credit = 0
-                                result.append(SettleUpItem(
+                                let remaining = share - itemCredit
+                                itemCredit = 0
+                                expenseItems.append(SettleUpItem(
                                     descriptor: itemDescriptor(itemName: item.name, expense: expense),
                                     cents: remaining
                                 ))
@@ -180,60 +200,14 @@ struct SettleUpView: View {
                     }
                 }
             }
-        }
-        return result.reversed()
-    }
-
-    private func itemsIOweThem(other: UUID) -> [SettleUpItem] {
-        guard let me = store.activeUserID, balance != 0 else { return [] }
-        let expenses = store.expenses
-            .filter { $0.payer == other && $0.participants.contains(me) }
-            .sorted { $0.transactionDate < $1.transactionDate }
-
-        var credit = store.payments
-            .filter { $0.from == me && $0.to == other }
-            .reduce(0) { $0 + $1.amount }
-
-        var result: [SettleUpItem] = []
-        for expense in expenses {
-            let listsTip = expense.adjustments.contains { $0.kind == .tip }
-            let selected = expense.items.filter { $0.isSelected && !(listsTip && $0.kind == .tip) }
-            if selected.isEmpty {
-                let share = expense.shares[me, default: 0]
-                if share > 0 {
-                    if credit >= share {
-                        credit -= share
-                    } else {
-                        let remaining = share - credit
-                        credit = 0
-                        result.append(SettleUpItem(
-                            descriptor: itemDescriptor(itemName: expense.description, expense: expense),
-                            cents: remaining
-                        ))
-                    }
-                }
-            } else {
-                for item in selected {
-                    let isOwner = item.ownerIDs.isEmpty || item.ownerIDs.contains(me)
-                    if isOwner {
-                        let ownersCount = max(1, item.ownerIDs.isEmpty ? expense.participants.count : item.ownerIDs.count)
-                        let share = item.cents / ownersCount
-                        if share > 0 {
-                            if credit >= share {
-                                credit -= share
-                            } else {
-                                let remaining = share - credit
-                                credit = 0
-                                result.append(SettleUpItem(
-                                    descriptor: itemDescriptor(itemName: item.name, expense: expense),
-                                    cents: remaining
-                                ))
-                            }
-                        }
-                    }
-                }
+            if expenseItems.isEmpty {
+                expenseItems.append(SettleUpItem(
+                    descriptor: itemDescriptor(itemName: expense.description, expense: expense),
+                    cents: remainingExpenseShare
+                ))
             }
+            result.append(contentsOf: expenseItems)
         }
-        return result.reversed()
+        return OwedBreakdown(totalCents: totalCents, items: result.reversed())
     }
 }

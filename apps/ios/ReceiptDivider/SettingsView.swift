@@ -14,20 +14,6 @@ struct SettingsView: View {
             List {
                 Section {
                     if store.isDevAccount { profileHeader } else { NavigationLink { EditProfileView() } label: { profileHeader } }
-                    HStack {
-                        if let email = authentication.email {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Signed in as").font(.caption).foregroundStyle(.secondary)
-                                Text(email).lineLimit(1).truncationMode(.middle)
-                            }
-                        }
-                        Spacer()
-                        Button("Sign out") { Task { await authentication.signOut() } }
-                            .buttonStyle(.bordered).controlSize(.small)
-                            .disabled(authentication.isWorking)
-                    }
-                }
-                Section {
                     NavigationLink { FriendsView() } label: {
                         LabeledContent { Text("\(store.friendCount)") } label: { Label("Friends", systemImage: "person.2") }
                     }
@@ -39,8 +25,6 @@ struct SettingsView: View {
                         get: { store.selfReferenceMode },
                         set: { store.updateSelfReference($0) }
                     )) { ForEach(SelfReferenceMode.allCases) { Text($0.title).tag($0) } }
-                }
-                Section("Contribution sliders") {
                     Picker("Slider unit", selection: $sliderUnit) { ForEach(ContributionSliderUnit.allCases) { Text($0.title).tag($0) } }
                         .onChange(of: sliderUnit) { _, unit in
                             Task { if let token = try? await authentication.accessToken() { await store.updateSliderUnit(unit, accessToken: token) } }
@@ -49,11 +33,11 @@ struct SettingsView: View {
                         .onChange(of: tipSplit) { _, split in
                             Task { if let token = try? await authentication.accessToken() { await store.updateTipSplit(split, accessToken: token) } }
                         }
+                    Button("Clear cached data", role: .destructive) { showResetConfirmation = true }
                 }
-                Section("Data") { Button("Clear cached data", role: .destructive) { showResetConfirmation = true } }
                 if store.isDeveloper {
                     Section("Developer") {
-                        Button(store.isDevAccount ? "Switch to main account" : "Switch to dev account") {
+                        Button(store.isDevAccount ? "Switch to main account" : "Switch to Developer Account") {
                             Task { if let token = try? await authentication.accessToken() { await store.switchToDevAccount(!store.isDevAccount, accessToken: token) } }
                         }
                         LabeledContent("Build", value: ReceiptDiagnostics.buildCommit ?? "Local")

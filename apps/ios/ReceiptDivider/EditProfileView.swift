@@ -48,6 +48,20 @@ struct EditProfileView: View {
                 TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.done)
             } footer: { Text("3–24 lowercase letters, numbers, or underscores.") }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
+            Section {
+                HStack {
+                    if let email = authentication.email {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Signed in as").font(.caption).foregroundStyle(.secondary)
+                            Text(email).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
+                    Spacer()
+                    Button("Sign out") { Task { await authentication.signOut() } }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(authentication.isWorking)
+                }
+            }
         }
         .scrollIndicators(.hidden)
         .onChange(of: photoItem) { _, item in if let item { uploadPhoto(item) } }
