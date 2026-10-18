@@ -405,6 +405,25 @@ struct ExpenseReviewEditorView: View {
                     TextField("What was this for?", text: descriptionBinding).submitLabel(.done)
                         .disabled(!isEditable)
                 }
+
+                HStack(spacing: 6) {
+                    Text("Paid by")
+                    Picker("Paid by", selection: payerBinding) {
+                        ForEach(participants, id: \.self) { person in
+                            Text(store.name(for: person)).tag(Optional(person))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    Text("on")
+                    DatePicker("Date of expense", selection: dateBinding, displayedComponents: .date)
+                        .labelsHidden()
+                        .frame(maxHeight: 32)
+                    Spacer(minLength: 0)
+                }
+                .lineLimit(1)
+                .disabled(!isEditable)
             }
 
             Section {
@@ -535,22 +554,6 @@ struct ExpenseReviewEditorView: View {
                         }
                     }
                 }
-            }
-
-            Section {
-                Picker("Paid by", selection: payerBinding) {
-                    ForEach(participants, id: \.self) { person in
-                        Text(store.name(for: person)).tag(Optional(person))
-                    }
-                }
-                .disabled(!isEditable)
-
-                LabeledContent("Date of expense") {
-                    DatePicker("", selection: dateBinding, displayedComponents: .date)
-                        .labelsHidden()
-                        .frame(maxHeight: 32)
-                }
-                .disabled(!isEditable)
             }
 
             Section {

@@ -23,7 +23,7 @@ struct ExpenseDetailView: View {
     }
     private var relatedExpenses: [Expense] {
         store.expenses.filter { candidate in
-            candidate.id != current.id && !Set(candidate.shares.keys).isDisjoint(with: Set(participants))
+            candidate.id != current.id && Set(candidate.shares.keys) == Set(participants)
         }.sorted { $0.transactionDate > $1.transactionDate }
     }
 
