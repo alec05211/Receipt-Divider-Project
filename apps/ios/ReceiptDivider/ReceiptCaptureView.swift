@@ -52,6 +52,8 @@ struct ReceiptCaptureView: View {
     @State private var isExtracting = false
     /// Set when the user confirms participants before the items are read; the flow continues once they are.
     @State private var continuesAfterExtraction = false
+    /// Manual entries have no total until Review expense, so participant selection can't require one.
+    @State private var isManualEntry = false
     /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
     @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
 
@@ -134,7 +136,7 @@ struct ReceiptCaptureView: View {
                                 .fontWeight(.semibold)
                                 .accessibilityLabel("Continue")
                         }
-                        .disabled(selectedPeople.isEmpty || (!isExtracting && total == 0))
+                        .disabled(selectedPeople.isEmpty || (!isExtracting && !isManualEntry && total == 0))
                     }
                 }
                 if step == .assign {
@@ -190,7 +192,7 @@ struct ReceiptCaptureView: View {
         } description: { EmptyView() } actions: {
             Button { showCamera = true } label: { Label("Scan receipt", systemImage: "doc.viewfinder").prominentLabel() }.buttonStyle(.borderedProminent).disabled(!canScan)
             PhotosPicker(selection: $selectedPhoto, matching: .images) { Label("Choose photo", systemImage: "photo") }.padding(.top, 8)
-            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; step = .review }.padding(.top, 12)
+            Button("Enter manually") { items = [ReceiptItem(name: "", cents: 0, isSelected: true)]; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; isManualEntry = true; step = .review }.padding(.top, 12)
         }
         .onAppear { ReceiptReader.prewarm() }
     }
@@ -363,6 +365,7 @@ struct ReceiptCaptureView: View {
         step = .reading
         let analysisID = UUID()
         receiptAnalysisID = analysisID
+        isManualEntry = false
         isExtracting = true
         continuesAfterExtraction = false
         Task { @MainActor in
@@ -592,7 +595,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func reset() { receiptAnalysisID = nil; isExtracting = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
     private func triggerScannerShortcut() {
         guard canScan else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
