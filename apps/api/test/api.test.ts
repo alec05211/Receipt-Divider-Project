@@ -379,7 +379,7 @@ test("a developer can reset the expenses and payments they're on while accounts 
   assert.equal((await (await request(app, "/v1/profile", jamie)).json() as { username: string }).username, "jamie");
 });
 
-test("a developer's dev account is a separate identity befriended only by their developer friends' dev accounts", async () => {
+test("every account has a dev account that mirrors it and its friendships, and only developers can act as theirs", async () => {
   const { app } = await setupFriends(new Set([alex, jamie]));
   const dev = { "x-identity": "dev" };
   const asDev = (path: string, user: string, init: RequestInit = {}) => request(app, path, user, { ...init, headers: { ...dev, ...init.headers } });
@@ -391,9 +391,13 @@ test("a developer's dev account is a separate identity befriended only by their 
   assert.deepEqual([alexDev.username, alexDev.displayName, alexDev.isDeveloper], ["alex_dev", "Alex Test (Dev)", true]);
   const jamieDev = await (await asDev("/v1/profile", jamie, { method: "PUT" })).json() as { id: string };
 
-  // Dev accounts are friends because their owners are; Morgan isn't a developer, so has no dev account to befriend.
+  // Dev accounts are friends because their owners are, whether or not the friend is a developer.
   const devFriends = await (await asDev("/v1/friends", alex)).json() as Array<{ userId: string; displayName: string; status: string }>;
-  assert.deepEqual(devFriends.map((f) => [f.userId, f.displayName, f.status]), [[jamieDev.id, "Jamie Test (Dev)", "accepted"]]);
+  assert.deepEqual(devFriends.map((f) => [f.displayName, f.status]).sort(), [["Jamie Test (Dev)", "accepted"], ["Morgan Test (Dev)", "accepted"]]);
+  assert.ok(devFriends.some((f) => f.userId === jamieDev.id));
+  const morganDev = devFriends.find((f) => f.displayName === "Morgan Test (Dev)")!.userId;
+  assert.equal((await jsonAsDev("/v1/expenses", alex, "POST", expense("10000000-0000-4000-8000-000000000054", alexDev.id, [[morganDev, 400]]))).status, 201);
+  assert.equal((await snapshot(app, morgan)).expenses.length, 0);
   assert.equal((await (await request(app, "/v1/friends", alex)).json() as unknown[]).length, 2);
 
   // Expenses made as a dev account stay between dev accounts.
@@ -425,7 +429,13 @@ test("a developer's dev account is a separate identity befriended only by their 
 
   // Ending the owners' friendship ends their dev accounts'.
   assert.equal((await request(app, `/v1/friends/${jamie}`, alex, { method: "DELETE" })).status, 204);
-  assert.equal((await (await asDev("/v1/friends", alex)).json() as unknown[]).length, 0);
+  assert.deepEqual((await (await asDev("/v1/friends", alex)).json() as Array<{ userId: string }>).map((f) => f.userId), [morganDev]);
+
+  // The dev account's picture is its owner's, and only the owner can change it.
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  assert.equal((await request(app, "/v1/profile/avatar", alex, { method: "PUT", headers: { "content-type": "image/png" }, body: png })).status, 200);
+  assert.equal((await request(app, `/v1/users/${alexDev.id}/avatar`, jamie)).status, 200);
+  assert.equal((await asDev("/v1/profile/avatar", alex, { method: "PUT", headers: { "content-type": "image/png" }, body: png })).status, 403);
 });
 
 test("Supabase JWT authentication accepts only signed authenticated-user tokens", async () => {

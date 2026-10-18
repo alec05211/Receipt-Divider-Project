@@ -91,19 +91,9 @@ export class PostgresRepository implements LedgerRepository {
     return mapSettings(rows[0]!);
   }
   async devAccount(accountId: UUID): Promise<UUID> {
-    const [existing] = await this.sql`SELECT d.id FROM user_profiles d JOIN user_profiles o ON o.id=d.dev_owner_id WHERE o.id=${accountId} AND o.is_developer`;
-    if (existing) return existing.id;
-    return this.sql.begin(async (tx) => {
-      const [owner] = await tx`SELECT first_name, last_name, username, is_developer FROM user_profiles WHERE id=${accountId} AND dev_owner_id IS NULL FOR UPDATE`;
-      if (!owner?.is_developer) throw new ApiError(403, "developer access is required", "forbidden");
-      const [row] = await tx`
-        INSERT INTO user_profiles (id, dev_owner_id, first_name, last_name, username)
-        VALUES (gen_random_uuid(), ${accountId}, ${owner.first_name}, ${owner.last_name}, ${owner.username === null ? null : `${owner.username}_dev`})
-        ON CONFLICT (dev_owner_id) DO UPDATE SET dev_owner_id=EXCLUDED.dev_owner_id RETURNING id`;
-      await tx`INSERT INTO user_settings (user_id) VALUES (${row!.id}) ON CONFLICT (user_id) DO NOTHING`;
-      await tx`SELECT sync_dev_friendships()`;
-      return row!.id;
-    });
+    const [row] = await this.sql`SELECT d.id FROM user_profiles d JOIN user_profiles o ON o.id=d.dev_owner_id WHERE o.id=${accountId} AND o.is_developer`;
+    if (!row) throw new ApiError(403, "developer access is required", "forbidden");
+    return row.id;
   }
   async resetLedgerData(accountId: UUID, userId: UUID): Promise<void> {
     const [row] = await this.sql`SELECT is_developer FROM user_profiles WHERE id=${accountId}`;
@@ -128,6 +118,7 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   async putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string> {
+    await requireAccount(this.sql, userId);
     const etag = imageEtag(bytes), rows = await this.sql`UPDATE user_profiles SET avatar_content_type=${contentType}, avatar_data=${bytes}, avatar_etag=${etag}, avatar_updated_at=now(), updated_at=now() WHERE id=${userId} RETURNING id`;
     if (!rows.length) throw new ApiError(404, "profile not found", "not_found"); return etag;
   }
@@ -282,7 +273,7 @@ async function isDevAccount(sql: any, userId: UUID): Promise<boolean> {
   return row?.dev === true;
 }
 
-/** Dev accounts take their names from their owner and their friends from their owner's developer friends. */
+/** Dev accounts take their names and picture from their owner and their friends from their owner's friends. */
 async function requireAccount(sql: any, userId: UUID): Promise<void> {
   if (await isDevAccount(sql, userId)) throw new ApiError(403, "switch to your account to change this", "dev_account");
 }

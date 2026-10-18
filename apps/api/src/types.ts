@@ -2,7 +2,7 @@ export type UUID = string;
 
 /**
  * A profile exists as soon as the user signs in; the name fields stay null until they set them. A dev account's
- * profile carries its owner's names, with "_dev" after the username and " (Dev)" after the display name, and its
+ * profile carries its owner's names and picture, with "_dev" after the username and " (Dev)" after the display name, and its
  * owner's developer flag.
  */
 export interface Profile { id: UUID; firstName: string | null; lastName: string | null; username: string | null; displayName: string | null; isDeveloper: boolean; }
@@ -168,8 +168,8 @@ export interface LedgerRepository {
   ensureProfile(userId: UUID): Promise<Profile>;
   getProfile(userId: UUID): Promise<Profile>;
   /**
-   * The developer's dev account, created on first use with its owner's names and friendships with their developer
-   * friends' dev accounts. 403 unless `accountId` is a developer.
+   * The account's dev account. Every account has one, created with it, mirroring its names and picture and friends
+   * with the dev accounts of its friends; only a developer may act as theirs (403 otherwise).
    */
   devAccount(accountId: UUID): Promise<UUID>;
   getSettings(userId: UUID): Promise<UserSettings>;

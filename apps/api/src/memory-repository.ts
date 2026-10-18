@@ -87,20 +87,18 @@ export class MemoryRepository implements LedgerRepository {
   async ensureProfile(userId: UUID): Promise<Profile> {
     const profile = this.profiles.get(userId) ?? { id: userId, firstName: null, lastName: null, username: null, displayName: null, isDeveloper: false };
     this.profiles.set(userId, profile);
+    if (!this.devOwners.has(userId) && !this.devAccountOf(userId)) {
+      const devId = randomUUID();
+      this.devOwners.set(devId, userId); this.profiles.set(devId, this.devProfile(devId, userId));
+      this.settings.set(devId, { currency: "USD", sliderUnit: "percent", tipSplit: "even" }); this.filters.set(devId, []);
+    }
     if (!this.settings.has(userId)) { this.settings.set(userId, { currency: "USD", sliderUnit: "percent", tipSplit: "even" }); this.filters.set(userId, []); }
     return { ...profile, isDeveloper: this.isDeveloper(userId) };
   }
   async getProfile(userId: UUID): Promise<Profile> { return { ...this.requireProfile(userId), isDeveloper: this.isDeveloper(userId) }; }
   async devAccount(accountId: UUID): Promise<UUID> {
-    if (this.devOwners.has(accountId) || !this.developerIds.has(accountId)) throw new ApiError(403, "developer access is required", "forbidden");
-    this.requireProfile(accountId);
-    const existing = this.devAccountOf(accountId);
-    if (existing) return existing;
-    const devId = randomUUID();
-    this.devOwners.set(devId, accountId);
-    this.profiles.set(devId, this.devProfile(devId, accountId));
-    this.settings.set(devId, { currency: "USD", sliderUnit: "percent", tipSplit: "even" }); this.filters.set(devId, []);
-    this.syncDevFriendships();
+    const devId = this.devAccountOf(accountId);
+    if (!devId || !this.developerIds.has(accountId)) throw new ApiError(403, "developer access is required", "forbidden");
     return devId;
   }
   async getSettings(userId: UUID): Promise<UserSettings> { this.requireProfile(userId); return { ...this.settings.get(userId)! }; }
@@ -123,9 +121,11 @@ export class MemoryRepository implements LedgerRepository {
   }
 
   async putAvatar(userId: UUID, contentType: string, bytes: Uint8Array): Promise<string> {
-    this.requireProfile(userId);
+    this.requireProfile(userId); this.requireAccount(userId);
     const etag = imageEtag(bytes);
     this.avatars.set(userId, { ownerId: userId, contentType, bytes: Uint8Array.from(bytes), etag });
+    const devId = this.devAccountOf(userId);
+    if (devId) this.avatars.set(devId, { ownerId: devId, contentType, bytes: Uint8Array.from(bytes), etag });
     return etag;
   }
   async getAvatar(requesterId: UUID, userId: UUID): Promise<StoredImage | null> {
@@ -257,12 +257,12 @@ export class MemoryRepository implements LedgerRepository {
     const owner = this.requireProfile(ownerId);
     return { id: devId, firstName: owner.firstName, lastName: owner.lastName, username: owner.username && `${owner.username}_dev`, displayName: owner.displayName && `${owner.displayName} (Dev)`, isDeveloper: false };
   }
-  /** Dev accounts are friends exactly when their owners are friends and both are developers, and have no other friends. */
+  /** Dev accounts are friends exactly when their owners are, and have no other friends. */
   private syncDevFriendships(): void {
     const isDev = (id: UUID) => this.devOwners.has(id);
     this.friendRequests = this.friendRequests.filter((request) => !isDev(request.requesterId) && !isDev(request.addresseeId));
     for (const request of [...this.friendRequests]) {
-      if (request.status !== "accepted" || !this.developerIds.has(request.requesterId) || !this.developerIds.has(request.addresseeId)) continue;
+      if (request.status !== "accepted") continue;
       const requesterDev = this.devAccountOf(request.requesterId), addresseeDev = this.devAccountOf(request.addresseeId);
       if (requesterDev && addresseeDev) this.friendRequests.push({ id: randomUUID(), requesterId: requesterDev, addresseeId: addresseeDev, status: "accepted" });
     }

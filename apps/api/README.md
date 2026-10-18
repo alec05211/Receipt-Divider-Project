@@ -38,7 +38,7 @@ The adapter uses one encrypted database connection and disables prepared stateme
 
 ## HTTP contract
 
-Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in production. A developer sends `X-Identity: dev` to make the request as their dev account (created on first use; 403 for anyone else). Dev accounts take their names from their owner, can't edit them or change friends (403 `dev_account`), never appear in search or accept invites, and are friends only with the dev accounts of their owner's developer friends.
+Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in production. A developer sends `X-Identity: dev` to make the request as their dev account (403 for anyone else). Every account has a dev account, created with it, that mirrors its names and picture; dev accounts can't edit those or change friends (403 `dev_account`), never appear in search or accept invites, and are friends only with the dev accounts of their owner's friends.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
