@@ -24,7 +24,7 @@ struct ActivityView: View {
         try? await store.refresh(accessToken: token)
     }
 }
-/// The balance card above the expenses, laid out like a grouped list.
+/// The balance card attached to the top of the expenses list.
 private struct SummaryContent: View {
     let balance: Int
     let balances: [(person: LedgerPerson, cents: Int)]
@@ -35,9 +35,10 @@ private struct SummaryContent: View {
                 NavigationLink { BalancesView() } label: { BalanceCard(balance: balance, balances: balances) }
                     .buttonStyle(.plain)
                     .simultaneousGesture(TapGesture().onEnded { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.55) })
-                Text("Expenses").font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 8)
-                if expenses.isEmpty { ContentUnavailableView("No shared expenses", systemImage: "receipt").groupedCard() }
-                else {
+                if expenses.isEmpty {
+                    ContentUnavailableView("No shared expenses", systemImage: "receipt")
+                        .frame(maxWidth: .infinity)
+                } else {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(expenses.enumerated()), id: \.element.id) { index, expense in
                             if index > 0 { Divider().padding(.leading, 50) }
@@ -46,9 +47,10 @@ private struct SummaryContent: View {
                                 .simultaneousGesture(TapGesture().onEnded { UISelectionFeedbackGenerator().selectionChanged() })
                         }
                     }
-                    .groupedCard()
                 }
             }
+            .groupedCard()
+            .padding(.top, 12)
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -73,33 +75,50 @@ private struct RowButtonStyle: ButtonStyle {
         configuration.label.foregroundStyle(.primary).background(configuration.isPressed ? Color(.systemGray4) : .clear)
     }
 }
-/// The overall balance and a one-line, width-aware summary. The enclosing NavigationLink makes the entire card a button.
+/// The overall balance and a one-line, width-aware summary positioned to its right. The enclosing NavigationLink makes the entire header a button.
 private struct BalanceCard: View {
     let balance: Int
     let balances: [(person: LedgerPerson, cents: Int)]
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(balance.usd).font(.title.bold()).foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
+        HStack(spacing: 12) {
+            Text(balance.usd)
+                .font(.title.bold())
+                .foregroundStyle(balance > 0 ? .green : balance < 0 ? .red : .primary)
+                .fixedSize(horizontal: true, vertical: false)
+
             if balances.isEmpty {
-                Text("All settled up").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                Text("All settled up")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             } else {
                 ViewThatFits(in: .horizontal) {
-                    summary(BalanceSummary.full(for: balances))
-                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 3))
-                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 2))
-                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 1))
-                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 0))
+                    summary(BalanceSummary.full(for: balances, balance: balance))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 3, balance: balance))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 2, balance: balance))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 1, balance: balance))
+                    summary(BalanceSummary.limited(for: balances, namesPerGroup: 0, balance: balance))
+                    Text(BalanceSummary.limited(for: balances, namesPerGroup: 0, balance: balance))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 .font(.footnote.weight(.medium))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel(BalanceSummary.full(for: balances))
+                .accessibilityLabel(BalanceSummary.full(for: balances, balance: balance))
             }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .groupedCard(Color(.systemGray5))
+        .background(Color(.systemGray5))
     }
 
     private func summary(_ value: String) -> some View {
@@ -124,11 +143,9 @@ private struct BalancesView: View {
                         BalanceRow(person: entry.person, cents: entry.cents)
                     }
                     .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
             }
         }
-        .environment(\.defaultMinListRowHeight, 36)
         .scrollIndicators(.hidden)
         .navigationTitle("Balances")
         .navigationBarTitleDisplayMode(.inline)
@@ -144,8 +161,8 @@ private struct BalanceRow: View {
     let person: LedgerPerson
     let cents: Int
     var body: some View {
-        HStack(spacing: 10) {
-            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 26)
+        HStack(spacing: 12) {
+            AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 28)
             Text(relationship)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -153,6 +170,7 @@ private struct BalanceRow: View {
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
+        .padding(.vertical, 1)
         .contentShape(Rectangle())
     }
 
@@ -164,21 +182,42 @@ private struct BalanceRow: View {
 }
 
 private enum BalanceSummary {
-    static func full(for balances: [(person: LedgerPerson, cents: Int)]) -> String {
+    static func full(for balances: [(person: LedgerPerson, cents: Int)], balance: Int) -> String {
         let owedBy = balances.filter { $0.cents > 0 }.map(\.person.firstName)
         let owedTo = balances.filter { $0.cents < 0 }.map(\.person.firstName)
-        return render(owedBy: owedBy, owedTo: owedTo, byLimit: owedBy.count, toLimit: owedTo.count)
+        return render(owedBy: owedBy, owedTo: owedTo, byLimit: owedBy.count, toLimit: owedTo.count, owedByFirst: balance >= 0)
     }
 
-    static func limited(for balances: [(person: LedgerPerson, cents: Int)], namesPerGroup: Int) -> String {
+    static func limited(for balances: [(person: LedgerPerson, cents: Int)], namesPerGroup: Int, balance: Int) -> String {
         let owedBy = balances.filter { $0.cents > 0 }.map(\.person.firstName)
         let owedTo = balances.filter { $0.cents < 0 }.map(\.person.firstName)
-        return render(owedBy: owedBy, owedTo: owedTo, byLimit: min(namesPerGroup, owedBy.count), toLimit: min(namesPerGroup, owedTo.count))
+        return render(
+            owedBy: owedBy,
+            owedTo: owedTo,
+            byLimit: min(namesPerGroup, owedBy.count),
+            toLimit: min(namesPerGroup, owedTo.count),
+            owedByFirst: balance >= 0
+        )
     }
 
-    private static func render(owedBy: [String], owedTo: [String], byLimit: Int, toLimit: Int) -> String {
-        [segment("Owed by", names: owedBy, limit: byLimit), segment("Owed to", names: owedTo, limit: toLimit)]
-            .compactMap { $0 }.joined(separator: " · ")
+    private static func render(owedBy: [String], owedTo: [String], byLimit: Int, toLimit: Int, owedByFirst: Bool) -> String {
+        if owedByFirst {
+            if let first = segment("Owed by", names: owedBy, limit: byLimit) {
+                if let second = segment("to", names: owedTo, limit: toLimit) {
+                    return "\(first) & \(second)"
+                }
+                return first
+            }
+            return segment("Owed to", names: owedTo, limit: toLimit) ?? ""
+        } else {
+            if let first = segment("Owed to", names: owedTo, limit: toLimit) {
+                if let second = segment("by", names: owedBy, limit: byLimit) {
+                    return "\(first) & \(second)"
+                }
+                return first
+            }
+            return segment("Owed by", names: owedBy, limit: byLimit) ?? ""
+        }
     }
 
     private static func segment(_ label: String, names: [String], limit: Int) -> String? {

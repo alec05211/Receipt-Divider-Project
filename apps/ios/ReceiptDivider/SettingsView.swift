@@ -48,6 +48,7 @@ struct SettingsView: View {
             }
             .scrollIndicators(.hidden)
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
             .confirmationDialog("Clear this device's cached ledger?", isPresented: $showResetConfirmation, titleVisibility: .visible) { Button("Clear cached data", role: .destructive) { store.resetLocalCache() } }
             .sheet(isPresented: $showServerReset) { ServerResetView() }
             .task {
