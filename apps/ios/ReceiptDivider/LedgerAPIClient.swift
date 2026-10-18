@@ -124,19 +124,15 @@ actor LedgerAPIClient {
         try await send(path: "/v1/expenses", method: "POST", token: token, body: encoder.encode(request))
     }
 
-    /// Edits an expense for everyone on it; only its payer may do this. Omitted fields stay as they are.
+    /// Edits an expense for everyone on it; only its payer or creator may do this. Omitted fields stay as they are.
     func updateExpense(id: UUID, changes: UpdateAPIExpense, token: String) async throws -> APIExpense {
         try await send(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "PATCH", token: token, body: encoder.encode(changes))
     }
 
-    /// Deletes an expense for everyone on it; only its payer may do this. It stays listed as deleted until restored.
+    /// Permanently deletes an expense for everyone on it; only its payer or creator may do this.
     func deleteExpense(id: UUID, token: String) async throws {
         let (data, status) = try await perform(path: "/v1/expenses/\(id.uuidString.lowercased())", method: "DELETE", token: token, contentType: nil, body: nil)
         try check(data: data, status: status)
-    }
-
-    func restoreExpense(id: UUID, token: String) async throws -> APIExpense {
-        try await send(path: "/v1/expenses/\(id.uuidString.lowercased())/restore", method: "POST", token: token)
     }
 
     func createPayment(_ request: CreateAPIPayment, token: String) async throws -> APIPayment {
@@ -240,6 +236,8 @@ struct UpdateAPIExpense: Encodable, Sendable {
 
 struct APIExpense: Decodable, Sendable {
     let id: UUID
+    /// Who added it with the app.
+    let creatorId: UUID
     let clientRequestId: UUID
     let description: String
     /// Kept as a string so a category this build doesn't know shows as uncategorized instead of failing the snapshot.
@@ -253,9 +251,6 @@ struct APIExpense: Decodable, Sendable {
     let allocations: [APIAllocation]
     let evidenceIds: [UUID]
     let createdAt: String
-    /// Only set on a deleted expense.
-    let deletedAt: String?
-    let deletedBy: UUID?
 }
 
 struct CreateAPIPayment: Encodable, Sendable {
@@ -280,8 +275,6 @@ struct APILedgerSnapshot: Decodable, Sendable {
     let currency: String
     let people: [APILedgerPerson]
     let expenses: [APIExpense]
-    /// Expenses deleted recently, never counted in `balances`; nil from a server that predates deleting.
-    let deletedExpenses: [APIExpense]?
     let payments: [APIPayment]
     let balances: [String: Int]
     let netBalance: Int

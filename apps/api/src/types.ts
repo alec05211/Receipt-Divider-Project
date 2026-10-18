@@ -128,9 +128,6 @@ export interface Expense extends Omit<CreateExpenseInput, "items" | "adjustments
   createdAt: string;
 }
 
-/** An expense its payer deleted. It no longer counts toward anyone's balance, and its payer can restore it. */
-export interface DeletedExpense extends Expense { deletedAt: string; deletedBy: UUID; }
-
 /** One side of the payment must be the person recording it. */
 export interface CreatePaymentInput {
   clientRequestId: UUID;
@@ -144,8 +141,7 @@ export interface Payment extends CreatePaymentInput { id: UUID; recorderId: UUID
 
 /**
  * Everything visible to one user. `balances` is from the caller's side: a positive amount means that person owes
- * the caller, a negative one that the caller owes them. `netBalance` is their sum. `deletedExpenses` are those deleted
- * in the last `deletedExpenseDays` days, newest transaction first; they're never in `balances`.
+ * the caller, a negative one that the caller owes them. `netBalance` is their sum.
  */
 export interface LedgerSnapshot {
   currency: string;
@@ -153,14 +149,10 @@ export interface LedgerSnapshot {
   people: LedgerPerson[];
   savedFilters: SavedFilter[];
   expenses: Expense[];
-  deletedExpenses: DeletedExpense[];
   payments: Payment[];
   balances: Record<UUID, number>;
   netBalance: number;
 }
-
-/** How long a deleted expense stays in everyone's list, where its payer can restore it. */
-export const deletedExpenseDays = 30;
 
 export type SliderUnit = "dollars" | "percent";
 /** Account-wide preferences. Currency is fixed for now; the slider unit is how contributions are entered. */
@@ -206,18 +198,16 @@ export interface LedgerRepository {
   putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics?: object | null): Promise<boolean>;
   createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
   /**
-   * Edits an active expense's name and/or transaction date. Only its payer may edit it (403 for anyone else on it); to
-   * anyone not on it, it doesn't exist (404). Each changed field is recorded as an attributable revision holding the
+   * Edits an active expense's name and/or transaction date. Only its payer or creator may edit it (403 for anyone else
+   * on it); to anyone not on it, it doesn't exist (404). Each changed field is recorded as an attributable revision holding the
    * old and new values. Amounts and allocations are untouched, so balances don't change.
    */
   updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense>;
   /**
-   * Deletes an expense for everyone on it by voiding it: it stays on record but stops counting toward balances. Same
-   * permissions as `updateExpense`. Deleting a deleted expense does nothing.
+   * Permanently deletes an expense for everyone on it, with its items, allocations, adjustments, revision history, and
+   * its receipt image unless another expense still shows it. Same permissions as `updateExpense`; nothing is kept.
    */
   deleteExpense(userId: UUID, expenseId: UUID): Promise<void>;
-  /** Undoes `deleteExpense`, with the same permissions. Restoring an active expense does nothing. */
-  restoreExpense(userId: UUID, expenseId: UUID): Promise<Expense>;
   createPayment(recorderId: UUID, input: CreatePaymentInput): Promise<Payment>;
   getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot>;
   /**

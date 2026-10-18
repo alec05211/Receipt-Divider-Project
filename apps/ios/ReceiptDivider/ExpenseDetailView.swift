@@ -4,6 +4,7 @@ import UIKit
 struct ExpenseDetailView: View {
     @Environment(ExpenseStore.self) private var store
     @Environment(AuthenticationStore.self) private var authentication
+    @Environment(\.dismiss) private var dismiss
     let expense: Expense
     @State private var receipt: UIImage?
     @State private var isLoadingReceipt = false
@@ -13,13 +14,12 @@ struct ExpenseDetailView: View {
     @State private var draftDate = Date.now
     @State private var editError: String?
     @State private var isConfirmingDelete = false
-    @State private var isChangingDeletion = false
+    @State private var isDeleting = false
 
     /// The store's copy, so an edit (or a refresh) shows here as soon as it happens.
-    private var current: Expense { store.expenses.first { $0.id == expense.id } ?? store.deletedExpenses.first { $0.id == expense.id } ?? expense }
-    /// Only the person who paid owns an expense and may edit, delete, or restore it.
-    private var isOwner: Bool { current.payer == store.activeUserID }
-    private var canEdit: Bool { isOwner && !current.isDeleted }
+    private var current: Expense { store.expenses.first { $0.id == expense.id } ?? expense }
+    /// The payer and whoever added the expense may edit or delete it.
+    private var canEdit: Bool { store.activeUserID.map { $0 == current.payer || $0 == current.creator } ?? false }
     /// Everyone else a deletion also removes it for.
     private var otherParticipantNames: String {
         participants.filter { $0 != store.activeUserID }.map { store.person(for: $0).firstName }.formatted(.list(type: .and))
@@ -74,7 +74,7 @@ struct ExpenseDetailView: View {
                     .foregroundStyle(.primary)
                 }
                 .contentShape(Rectangle())
-                // Press and hold to edit. An empty menu builder disables the menu, so only the payer gets one.
+                // Press and hold to edit. An empty menu builder disables the menu, so only the payer and creator get one.
                 .contextMenu {
                     if canEdit {
                         ForEach(ExpenseEdit.allCases) { edit in
@@ -82,18 +82,6 @@ struct ExpenseDetailView: View {
                         }
                         Divider()
                         Button("Delete", systemImage: "trash", role: .destructive) { isConfirmingDelete = true }
-                    } else if isOwner {
-                        Button("Restore", systemImage: "arrow.uturn.backward") { restore() }
-                    }
-                }
-            }
-
-            if current.isDeleted {
-                Section {
-                    HStack {
-                        Label("Deleted", systemImage: "trash").foregroundStyle(.secondary)
-                        Spacer()
-                        if isOwner { Button("Restore") { restore() }.disabled(isChangingDeletion) }
                     }
                 }
             }
@@ -290,21 +278,19 @@ extension ExpenseDetailView {
 }
 
 extension ExpenseDetailView {
-    private func delete() { changeDeletion { try await store.deleteExpense(expense.id, accessToken: $0) } }
-    private func restore() { changeDeletion { try await store.restoreExpense(expense.id, accessToken: $0) } }
-
-    /// The expense stays on screen either way, so restoring right after deleting undoes it.
-    private func changeDeletion(_ change: @escaping (String) async throws -> Void) {
-        guard !isChangingDeletion else { return }
-        isChangingDeletion = true
+    /// Deletes it for everyone and leaves, since it no longer exists.
+    private func delete() {
+        guard !isDeleting else { return }
+        isDeleting = true
         Task {
             do {
-                try await change(authentication.accessToken())
+                try await store.deleteExpense(expense.id, accessToken: authentication.accessToken())
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+                dismiss()
             } catch {
                 editError = error.localizedDescription
             }
-            isChangingDeletion = false
+            isDeleting = false
         }
     }
 }

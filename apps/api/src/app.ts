@@ -132,8 +132,6 @@ export function createApp(
     await repository.deleteExpense(userId(context), requireUuid(context.req.param("expenseId"), "expenseId"));
     return context.body(null, 204);
   });
-  app.post("/v1/expenses/:expenseId/restore", async (context) => context.json(
-    await repository.restoreExpense(userId(context), requireUuid(context.req.param("expenseId"), "expenseId"))));
   app.post("/v1/payments", async (context) => context.json(
     await repository.createPayment(userId(context), await jsonBody(context) as unknown as CreatePaymentInput), 201));
   app.post("/v1/developer/reset-ledger", async (context) => {

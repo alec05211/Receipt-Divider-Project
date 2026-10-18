@@ -256,20 +256,22 @@ test("an expense may carry one of the known categories", async () => {
   assert.deepEqual(shared.map((item) => item.category), ["concert"]);
 });
 
-test("only the payer can edit an expense's name and date, and each change is recorded as a revision", async () => {
+test("only the payer or creator can edit an expense's name and date, and each change is recorded as a revision", async () => {
   const repository = new MemoryRepository();
   const app = createApp(repository, async (context) => context.req.header("x-user-id") ?? null);
   for (const user of [alex, jamie, stranger, morgan]) assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
-  for (const [user, username] of [[alex, "alex"], [jamie, "jamie"], [stranger, "stranger"]] as const) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: username, lastName: "Test", username })).status, 200);
-  const invite = await jsonRequest(app, "/v1/friend-requests", alex, "POST", { username: "jamie" });
-  assert.equal((await jsonRequest(app, `/v1/friend-requests/${(await invite.json() as { requestId: string }).requestId}/accept`, jamie, "POST", {})).status, 200);
-  // Alex creates it, but Jamie paid, so Jamie owns it.
-  const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("50000000-0000-4000-8000-000000000001", jamie, [[alex, 1000], [jamie, 1000]]));
+  for (const [user, username] of [[alex, "alex"], [jamie, "jamie"], [stranger, "stranger"], [morgan, "morgan"]] as const) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: username, lastName: "Test", username })).status, 200);
+  for (const [friend, username] of [[jamie, "jamie"], [morgan, "morgan"]] as const) {
+    const invite = await jsonRequest(app, "/v1/friend-requests", alex, "POST", { username });
+    assert.equal((await jsonRequest(app, `/v1/friend-requests/${(await invite.json() as { requestId: string }).requestId}/accept`, friend, "POST", {})).status, 200);
+  }
+  // Alex creates it and Jamie paid, so both may change it; Morgan only has a share.
+  const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("50000000-0000-4000-8000-000000000001", jamie, [[alex, 1000], [jamie, 1000], [morgan, 500]]));
   const { id } = await created.json() as { id: string };
   const before = await snapshot(app, alex);
 
-  // The creator, who also has a share, can't edit it; nothing changes.
-  for (const body of [{ description: "Mine now" }, { transactionDate: "2026-09-01" }]) assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", body)).status, 403);
+  // Someone with only a share can't edit it; nothing changes.
+  for (const body of [{ description: "Mine now" }, { transactionDate: "2026-09-01" }]) assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, morgan, "PATCH", body)).status, 403);
   assert.equal(repository.auditEvents.length, 0);
 
   // The payer renames it (trimmed) and moves its date in one request: one revision per field, and everyone sees both.
@@ -302,50 +304,52 @@ test("only the payer can edit an expense's name and date, and each change is rec
   assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, stranger, "PATCH", { description: "Mine now" })).status, 404);
   assert.equal((await jsonRequest(app, "/v1/expenses/50000000-0000-4000-8000-000000000009", jamie, "PATCH", { description: "Nothing" })).status, 404);
   assert.equal((await snapshot(app, alex)).expenses[0]!.description, "Farmers market");
+
+  // The creator can edit it too, though someone else paid.
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", { description: "Market run" })).status, 200);
+  assert.deepEqual(repository.auditEvents.at(-1), { actorId: alex, eventType: "expense.description_changed", entityId: id, details: { from: "Farmers market", to: "Market run" } });
 });
 
-test("only the payer can delete an expense, which removes it from everyone's balances until they restore it", async () => {
+test("the payer or creator can delete an expense, which removes it and everything tied to it for everyone", async () => {
   const repository = new MemoryRepository();
   const app = createApp(repository, async (context) => context.req.header("x-user-id") ?? null);
   for (const user of [alex, jamie, stranger, morgan]) assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
   for (const [user, username] of [[alex, "alex"], [jamie, "jamie"], [morgan, "morgan"]] as const) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: username, lastName: "Test", username })).status, 200);
-  for (const username of ["jamie", "morgan"]) {
+  for (const [friend, username] of [[jamie, "jamie"], [morgan, "morgan"]] as const) {
     const invite = await jsonRequest(app, "/v1/friend-requests", alex, "POST", { username });
-    assert.equal((await jsonRequest(app, `/v1/friend-requests/${(await invite.json() as { requestId: string }).requestId}/accept`, username === "jamie" ? jamie : morgan, "POST", {})).status, 200);
+    assert.equal((await jsonRequest(app, `/v1/friend-requests/${(await invite.json() as { requestId: string }).requestId}/accept`, friend, "POST", {})).status, 200);
   }
-  // Alex records it, Jamie paid; a second expense stays put throughout.
-  const { id } = await (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("60000000-0000-4000-8000-000000000001", jamie, [[alex, 1000], [jamie, 1000]]))).json() as { id: string };
-  assert.equal((await jsonRequest(app, "/v1/expenses", alex, "POST", expense("60000000-0000-4000-8000-000000000002", alex, [[alex, 500], [jamie, 500]]))).status, 201);
-  type Deleted = { id: string; deletedBy: string; deletedAt: string };
-  const view = async (user: string) => await snapshot(app, user) as Snapshot & { deletedExpenses: Deleted[] };
+  // One receipt backs two expenses Alex records; Jamie paid the first, which Morgan also has a share of.
+  const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 9]);
+  const { id: receipt } = await (await request(app, "/v1/evidence?kind=receipt", alex, { method: "POST", headers: { "content-type": "image/jpeg" }, body: bytes })).json() as { id: string };
+  const { id } = await (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("60000000-0000-4000-8000-000000000001", jamie, [[alex, 1000], [jamie, 1000], [morgan, 500]], { evidenceIds: [receipt] }))).json() as { id: string };
+  const { id: other } = await (await jsonRequest(app, "/v1/expenses", alex, "POST", expense("60000000-0000-4000-8000-000000000002", alex, [[alex, 500], [jamie, 500]], { evidenceIds: [receipt] }))).json() as { id: string };
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { description: "Market" })).status, 200);
+  assert.equal((await jsonRequest(app, `/v1/expenses/${other}`, alex, "PATCH", { description: "Snacks" })).status, 200);
 
-  // The creator, a stranger, and an unknown ID can't delete it.
-  assert.equal((await request(app, `/v1/expenses/${id}`, alex, { method: "DELETE" })).status, 403);
+  // Someone with only a share, a stranger, and an unknown ID can't delete it.
+  assert.equal((await request(app, `/v1/expenses/${id}`, morgan, { method: "DELETE" })).status, 403);
   assert.equal((await request(app, `/v1/expenses/${id}`, stranger, { method: "DELETE" })).status, 404);
   assert.equal((await request(app, "/v1/expenses/60000000-0000-4000-8000-000000000009", jamie, { method: "DELETE" })).status, 404);
-  assert.equal((await view(alex)).balances[jamie], 500 - 1000);
+  assert.equal((await snapshot(app, alex)).balances[jamie], 500 - 1000);
 
-  // The payer deletes it: it leaves everyone's expenses and balances but stays listed as deleted.
+  // The payer deletes it: it's gone for everyone, with its revisions, and balances no longer count it.
   assert.equal((await request(app, `/v1/expenses/${id.toUpperCase()}`, jamie, { method: "DELETE" })).status, 204);
-  for (const user of [alex, jamie]) {
-    const after = await view(user);
-    assert.equal(after.expenses.length, 1); assert.notEqual(after.expenses[0]!.id, id);
-    assert.deepEqual(after.deletedExpenses.map((e) => [e.id, e.deletedBy]), [[id, jamie]]);
-  }
-  assert.equal((await view(alex)).balances[jamie], 500); assert.equal((await view(jamie)).balances[alex], -500);
-  assert.equal((await view(morgan)).deletedExpenses.length, 0);
-  // Deleting again changes nothing; a deleted expense can't be edited.
-  assert.equal((await request(app, `/v1/expenses/${id}`, jamie, { method: "DELETE" })).status, 204);
+  for (const user of [alex, jamie]) assert.deepEqual((await snapshot(app, user)).expenses.map((e) => e.id), [other]);
+  assert.equal((await snapshot(app, morgan)).expenses.length, 0);
+  assert.equal((await snapshot(app, alex)).balances[jamie], 500); assert.equal((await snapshot(app, jamie)).balances[alex], -500);
+  assert.deepEqual(repository.auditEvents.map((event) => event.entityId), [other]);
+  // It no longer exists: deleting or editing it again is a 404. The receipt stays while the other expense shows it.
+  assert.equal((await request(app, `/v1/expenses/${id}`, jamie, { method: "DELETE" })).status, 404);
   assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { description: "Gone" })).status, 404);
+  assert.equal((await request(app, `/v1/evidence/${receipt}/image`, jamie)).status, 200);
+  assert.equal((await request(app, `/v1/evidence/${receipt}/image`, morgan)).status, 404);
 
-  // Only the payer can restore it, and it counts again for everyone.
-  assert.equal((await request(app, `/v1/expenses/${id}/restore`, alex, { method: "POST" })).status, 403);
-  assert.equal((await request(app, `/v1/expenses/${id}/restore`, stranger, { method: "POST" })).status, 404);
-  const restored = await request(app, `/v1/expenses/${id}/restore`, jamie, { method: "POST" });
-  assert.equal(restored.status, 200); assert.equal((await restored.json() as { id: string }).id, id);
-  assert.equal((await view(alex)).balances[jamie], 500 - 1000); assert.equal((await view(alex)).deletedExpenses.length, 0);
-  assert.equal((await request(app, `/v1/expenses/${id}/restore`, jamie, { method: "POST" })).status, 200);
-  assert.deepEqual(repository.auditEvents.map((event) => [event.actorId, event.eventType]), [[jamie, "expense.voided"], [jamie, "expense.restored"]]);
+  // The creator can delete one someone else paid for; with the last expense showing it gone, so is the receipt.
+  assert.equal((await request(app, `/v1/expenses/${other}`, alex, { method: "DELETE" })).status, 204);
+  assert.equal((await snapshot(app, alex)).expenses.length, 0); assert.equal((await snapshot(app, alex)).netBalance, 0);
+  assert.equal(repository.auditEvents.length, 0);
+  assert.equal((await request(app, `/v1/evidence/${receipt}/image`, alex)).status, 404);
 });
 
 test("display name is derived from first and last name", async () => {

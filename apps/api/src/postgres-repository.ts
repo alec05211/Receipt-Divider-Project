@@ -1,7 +1,7 @@
 import postgres from "postgres";
 import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, DeletedExpense, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
-import { ApiError, deletedExpenseDays } from "./types.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
+import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
   private readonly sql: ReturnType<typeof postgres>;
@@ -189,7 +189,7 @@ export class PostgresRepository implements LedgerRepository {
     return this.sql.begin(async (tx) => {
       const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
       if (!row) throw new ApiError(404, "expense not found", "not_found");
-      if (row.payer_id !== userId) throw new ApiError(403, "only the payer can edit this expense", "forbidden");
+      requireManager(row, userId);
       const revisions: Array<{ eventType: string; from: string; to: string }> = [];
       if (description !== undefined && row.description !== description) revisions.push({ eventType: "expense.description_changed", from: row.description, to: description });
       const currentDate = toDay(row.transaction_date);
@@ -205,20 +205,14 @@ export class PostgresRepository implements LedgerRepository {
 
   async deleteExpense(userId: UUID, expenseId: UUID): Promise<void> {
     await this.sql.begin(async (tx) => {
-      const row = await lockOwnExpense(tx, userId, expenseId);
-      if (row.status === "voided") return;
-      await tx`UPDATE expenses SET status='voided', voided_at=now(), voided_by=${userId} WHERE id=${expenseId}`;
-      await tx`INSERT INTO audit_events (actor_id, event_type, entity_id) VALUES (${userId}, 'expense.voided', ${expenseId})`;
-    });
-  }
-
-  async restoreExpense(userId: UUID, expenseId: UUID): Promise<Expense> {
-    return this.sql.begin(async (tx) => {
-      const row = await lockOwnExpense(tx, userId, expenseId);
-      if (row.status === "active") return this.loadExpense(tx, row);
-      const [restored] = await tx`UPDATE expenses SET status='active', voided_at=NULL, voided_by=NULL WHERE id=${expenseId} RETURNING *`;
-      await tx`INSERT INTO audit_events (actor_id, event_type, entity_id) VALUES (${userId}, 'expense.restored', ${expenseId})`;
-      return this.loadExpense(tx, restored!);
+      const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
+      if (!row) throw new ApiError(404, "expense not found", "not_found");
+      requireManager(row, userId);
+      const evidenceIds = (await tx`SELECT evidence_id FROM expense_evidence WHERE expense_id=${expenseId}`).map((e) => e.evidence_id as UUID);
+      // Items, item owners, adjustments, allocations, and evidence links cascade.
+      await tx`DELETE FROM expenses WHERE id=${expenseId}`;
+      await tx`DELETE FROM audit_events WHERE entity_id=${expenseId}`;
+      if (evidenceIds.length) await tx`DELETE FROM evidence_assets a WHERE a.id IN ${tx(evidenceIds)} AND NOT EXISTS (SELECT 1 FROM expense_evidence ee WHERE ee.evidence_id=a.id)`;
     });
   }
 
@@ -242,7 +236,7 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   async getSnapshot(userId: UUID, filterId?: UUID): Promise<LedgerSnapshot> {
-    const visibleIds = this.sql`SELECT e.id FROM expenses e WHERE (e.status='active' OR e.voided_at > now() - make_interval(days => ${deletedExpenseDays})) AND ${visibleTo(this.sql, userId)}`;
+    const visibleIds = this.sql`SELECT e.id FROM expenses e WHERE e.status='active' AND ${visibleTo(this.sql, userId)}`;
     const [settings, savedFilters, expenseRows, itemRows, ownerRows, adjustmentRows, allocationRows, evidenceRows, paymentRows, friendRows] = await Promise.all([
       this.sql`SELECT currency FROM user_settings WHERE user_id=${userId}`, this.listSavedFilters(userId),
       this.sql`SELECT * FROM expenses WHERE id IN (${visibleIds}) ORDER BY transaction_date DESC, created_at DESC, id`,
@@ -254,12 +248,7 @@ export class PostgresRepository implements LedgerRepository {
       this.sql`SELECT * FROM repayments WHERE status='active' AND (from_user_id=${userId} OR to_user_id=${userId}) ORDER BY transaction_date DESC, created_at DESC, id`,
       this.sql`SELECT CASE WHEN requester_id=${userId} THEN addressee_id ELSE requester_id END user_id FROM friend_requests WHERE status='accepted' AND (requester_id=${userId} OR addressee_id=${userId})`]);
     if (!settings.length) throw new ApiError(404, "profile not found", "not_found");
-    const loaded = expenseRows.map((row) => mapExpense(row, mapItems(itemRows.filter((i) => i.expense_id === row.id), ownerRows.filter((o) => o.expense_id === row.id)), adjustmentRows.filter((a) => a.expense_id === row.id).map(mapAdjustment), allocationRows.filter((a) => a.expense_id === row.id).map(mapAllocation), evidenceRows.filter((e) => e.expense_id === row.id).map((e) => e.evidence_id)));
-    let expenses = loaded.filter((_, index) => expenseRows[index]!.status === "active");
-    let deletedExpenses: DeletedExpense[] = loaded.flatMap((expense, index) => {
-      const row = expenseRows[index]!;
-      return row.status === "voided" ? [{ ...expense, deletedAt: toIso(row.voided_at), deletedBy: row.voided_by }] : [];
-    });
+    let expenses = expenseRows.map((row) => mapExpense(row, mapItems(itemRows.filter((i) => i.expense_id === row.id), ownerRows.filter((o) => o.expense_id === row.id)), adjustmentRows.filter((a) => a.expense_id === row.id).map(mapAdjustment), allocationRows.filter((a) => a.expense_id === row.id).map(mapAllocation), evidenceRows.filter((e) => e.expense_id === row.id).map((e) => e.evidence_id)));
     let payments = paymentRows.map(mapPayment);
     const balances = calculateBalances(userId, expenses, payments);
     const peopleIds = new Set<UUID>([userId, ...friendRows.map((row) => row.user_id as UUID)]);
@@ -270,9 +259,8 @@ export class PostgresRepository implements LedgerRepository {
       const filter = savedFilters.find((f) => f.id === filterId);
       if (!filter) throw new ApiError(404, "saved filter not found", "not_found");
       ({ expenses, payments } = filterTransactions(filter.userIds, expenses, payments));
-      deletedExpenses = filterTransactions(filter.userIds, deletedExpenses, []).expenses;
     }
-    const result: LedgerSnapshot = { currency: settings[0]!.currency, people, savedFilters, expenses, deletedExpenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
+    const result: LedgerSnapshot = { currency: settings[0]!.currency, people, savedFilters, expenses, payments, balances, netBalance: Object.values(balances).reduce((sum, value) => sum + value, 0) };
     if (filterId) result.appliedFilterId = filterId; return result;
   }
 
@@ -287,15 +275,9 @@ function visibleTo(sql: any, userId: UUID) {
   return sql`(e.creator_id=${userId} OR e.payer_id=${userId} OR EXISTS (SELECT 1 FROM expense_allocations x WHERE x.expense_id=e.id AND x.user_id=${userId}))`;
 }
 
-/**
- * Locks an expense, active or deleted, for its payer to change. Only the payer may (403 for anyone else on it); to anyone
- * not on it, it doesn't exist (404).
- */
-async function lockOwnExpense(sql: any, userId: UUID, expenseId: UUID): Promise<any> {
-  const [row] = await sql`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND ${visibleTo(sql, userId)} FOR UPDATE OF e`;
-  if (!row) throw new ApiError(404, "expense not found", "not_found");
-  if (row.payer_id !== userId) throw new ApiError(403, "only the payer can change this expense", "forbidden");
-  return row;
+/** The payer and whoever added an expense may edit or delete it; anyone else on it gets a 403. */
+function requireManager(row: any, userId: UUID): void {
+  if (row.payer_id !== userId && row.creator_id !== userId) throw new ApiError(403, "only the payer or whoever added this expense can change it", "forbidden");
 }
 
 /** A dev account's flag is its owner's. */
