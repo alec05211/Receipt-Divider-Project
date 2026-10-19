@@ -43,7 +43,6 @@ struct ReceiptCaptureView: View {
     @State private var personSearch = ""
     @State private var isSaving = false
     @State private var showSaveSuccess = false
-    @State private var assignmentsLocked = false
     /// Invalidates a reading still in progress when another receipt starts or the flow resets.
     @State private var receiptAnalysisID: UUID?
     /// True while the receipt's items are still being read, after its text has been recognized.
@@ -52,8 +51,8 @@ struct ReceiptCaptureView: View {
     @State private var continuesAfterExtraction = false
     /// Manual entries have no total until Review expense, so participant selection can't require one.
     @State private var isManualEntry = false
-    /// Exact manual state before confirmation, restored when Back rescinds the lock/autofill operation.
-    @State private var assignmentsBeforeLock: [UUID: Set<UUID>]?
+    /// Assign items' confirmation, which fills unassigned rows to the payer; Back restores them.
+    @State private var confirmation = AssignmentConfirmation()
 
     /// A receipt with at most one item skips assignment and belongs to everyone selected.
     private var hasSingleItem: Bool { items.filter { $0.kind == .item }.count <= 1 }
@@ -84,9 +83,6 @@ struct ReceiptCaptureView: View {
                 result[index].ownerIDs = owners.isEmpty ? Set(payer.map { [$0] } ?? []) : owners
             }
             result[index].isSelected = true
-            if result[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                result[index].name = result.count == 1 ? savedDescription : "Item"
-            }
         }
         return result
     }
@@ -136,22 +132,6 @@ struct ReceiptCaptureView: View {
                                 .accessibilityLabel("Continue")
                         }
                         .disabled(selectedPeople.isEmpty || (!isExtracting && !isManualEntry && total == 0))
-                    }
-                }
-                if step == .assign {
-                    ToolbarItem(placement: .confirmationAction) {
-                        if assignmentsLocked {
-                            Button("Continue") { confirmAssignments() }
-                                .disabled(items.isEmpty || receiptTotal == 0)
-                        } else if !hasAnyItemAssignments {
-                            Button("Split All") { splitAll() }
-                                .disabled(items.isEmpty || receiptTotal == 0)
-                        } else {
-                            Button { confirmAssignments() } label: {
-                                Image(systemName: "checkmark").accessibilityLabel("Confirm assignments")
-                            }
-                            .disabled(items.isEmpty || receiptTotal == 0)
-                        }
                     }
                 }
                 if step == .split {
@@ -288,7 +268,7 @@ struct ReceiptCaptureView: View {
             itemAssignments: $itemAssignments,
             participants: orderedSelection,
             isEditable: true,
-            assignmentsLocked: $assignmentsLocked,
+            assignmentsLocked: confirmation.isLocked,
             assignsNewItemsToAll: splitsPrintedTotal,
             onAssignmentsChanged: {
                 splitsPrintedTotal = false
@@ -304,7 +284,10 @@ struct ReceiptCaptureView: View {
                 }
                 // A price edit moves only its owners' contributions, keeping any adjusted by hand.
                 shares = ShareAdjuster.applyingItemChanges(from: old, to: new, shares: shares, owners: owners(of:), people: orderedSelection, total: total)
-            }
+            },
+            onSplitAll: { splitAll() },
+            onConfirm: { confirmAssignments() },
+            canConfirm: !items.isEmpty && receiptTotal > 0
         )
     }
     /// You first, then friends ordered by their latest shared transaction; friends never shared with are alphabetical.
@@ -344,7 +327,7 @@ struct ReceiptCaptureView: View {
             canSave: isValidSplit,
             onSave: { save() },
             onOpenAssignItems: {
-                if assignmentsLocked { undoAssignmentConfirmation() }
+                if confirmation.isLocked { undoAssignmentConfirmation() }
                 step = .assign
             },
             onPayerChanged: { reassignPayerRows(to: $0) }
@@ -472,8 +455,7 @@ struct ReceiptCaptureView: View {
             itemAssignments = [:]
         }
         splitsPrintedTotal = false
-        assignmentsLocked = false
-        assignmentsBeforeLock = nil
+        confirmation.reset()
         shares = assignedShares()
         setDefaultPayer()
     }
@@ -491,42 +473,37 @@ struct ReceiptCaptureView: View {
     private func confirmAssignments() {
         // Assigning already set contributions from ownership, and price edits since only moved their owners' part, so
         // contributions adjusted by hand on final review are kept when they still add up.
-        if assignmentsLocked {
+        if confirmation.isLocked {
             if allocationTotal != total || Set(shares.keys) != selectedPeople { shares = assignedShares() }
             step = .split
             return
         }
         setDefaultPayer()
         guard let payer else { return }
-        assignmentsBeforeLock = itemAssignments
-        let untouched = items.filter { itemAssignments[$0.id, default: []].isEmpty }
-        guard !untouched.isEmpty else {
-            assignmentsLocked = true
+        var confirmed = confirmation, assignments = itemAssignments
+        guard confirmed.confirm(items, assignments: &assignments, payer: payer) else {
+            confirmation = confirmed
             if allocationTotal != total || Set(shares.keys) != selectedPeople { shares = assignedShares() }
             step = .split
             return
         }
         withAnimation(.snappy(duration: 0.2)) {
-            for item in untouched { itemAssignments[item.id] = [payer] }
+            itemAssignments = assignments
             shares = assignedShares()
-            assignmentsLocked = true
+            confirmation = confirmed
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
     /// Moves only rows that confirmation auto-assigned when the payer changes on final review.
     private func reassignPayerRows(to newPayer: UUID?) {
-        guard assignmentsLocked, let newPayer, let assignmentsBeforeLock else { return }
-        for item in items where assignmentsBeforeLock[item.id, default: []].isEmpty {
-            itemAssignments[item.id] = [newPayer]
-        }
+        guard confirmation.isLocked, let newPayer else { return }
+        confirmation.reassignFilledRows(items, assignments: &itemAssignments, to: newPayer)
         shares = assignedShares()
     }
     private func undoAssignmentConfirmation() {
         withAnimation(.snappy(duration: 0.2)) {
-            if let assignmentsBeforeLock { itemAssignments = assignmentsBeforeLock }
+            confirmation.undo(&itemAssignments)
             shares = assignedShares()
-            assignmentsLocked = false
-            assignmentsBeforeLock = nil
         }
         UISelectionFeedbackGenerator().selectionChanged()
     }
@@ -561,7 +538,13 @@ struct ReceiptCaptureView: View {
     }
     private func save() {
         guard let payer else { return }
-        var expense = Expense(description: savedDescription, transactionDate: purchaseDate, payer: payer, items: expenseItems, shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category, adjustments: adjustments)
+        let amounts = ExpenseAmounts(items: expenseItems, adjustments: adjustments)
+        // Checked before anything is staged, so nothing shows as saved.
+        if let message = amounts.saveError {
+            error = message
+            return
+        }
+        var expense = Expense(description: savedDescription, transactionDate: purchaseDate, payer: payer, items: amounts.savedItems(named: savedDescription), shares: shares.filter { selectedPeople.contains($0.key) }, receiptImageData: image?.jpegData(compressionQuality: 0.72), recognizedText: recognizedText, category: category, adjustments: adjustments)
         expense.receiptDiagnostics = diagnostics.map { diagnostics in
             var diagnostics = diagnostics
             diagnostics.saved = ReceiptDiagnostics.Summary(name: savedDescription, category: category, purchaseDate: purchaseDate, items: expense.items,
@@ -589,7 +572,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; isExtracting = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func reset() { receiptAnalysisID = nil; isExtracting = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; confirmation.reset(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
     private func triggerScannerShortcut() {
         guard canScan else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -604,7 +587,7 @@ struct ReceiptCaptureView: View {
             // Going back abandons this receipt, so a reading still in progress can't fill in a later manual entry.
             personSearch = ""; receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; diagnostics = nil; step = .capture
         case .assign:
-            if assignmentsLocked { undoAssignmentConfirmation() }
+            if confirmation.isLocked { undoAssignmentConfirmation() }
             else { step = .split }
         case .split:
             step = .review

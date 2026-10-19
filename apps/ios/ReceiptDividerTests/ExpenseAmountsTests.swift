@@ -291,4 +291,45 @@ final class ExpenseAmountsTests: XCTestCase {
         retyped.set(.subtotal, to: 1_500)
         XCTAssertEqual(retyped.totalCents, 1_000)
     }
+
+    // MARK: Saving
+
+    func testTaxOrSurchargeOnANoSubtotalCantBeSaved() {
+        XCTAssertEqual(manual(0, [ReceiptAdjustment(kind: .tax, amountCents: 500)]).saveError, "Enter a subtotal.")
+        XCTAssertEqual(manual(0, [ReceiptAdjustment(kind: .surcharge, amountCents: 200)]).saveError, "Enter a subtotal.")
+        XCTAssertNil(manual(1_000, [ReceiptAdjustment(kind: .tax, amountCents: 500)]).saveError)
+        XCTAssertNil(manual(0, [ReceiptAdjustment(kind: .tax)]).saveError)
+        XCTAssertNil(manual(0, [ReceiptAdjustment(kind: .tip, amountCents: 500)]).saveError)
+    }
+
+    func testSavedItemsDropRowsWithNoPriceAndNameBlankOnes() {
+        let amounts = ExpenseAmounts(items: [
+            ReceiptItem(name: "Burger", cents: 1_000, isSelected: true),
+            ReceiptItem(name: " ", cents: 500, isSelected: true),
+            ReceiptItem(name: "", cents: 0, isSelected: true),
+            ReceiptItem(name: "Old tip", cents: 300, kind: .tip, isSelected: false),
+        ], adjustments: [ReceiptAdjustment(kind: .tax, amountCents: 150)])
+        let saved = amounts.savedItems(named: "Dinner")
+        XCTAssertEqual(saved.map(\.name), ["Burger", "Item"])
+        XCTAssertEqual(saved.reduce(0) { $0 + $1.totalCents }, 1_650)
+    }
+
+    func testALoneBlankItemTakesTheExpenseName() {
+        let amounts = ExpenseAmounts(items: [
+            ReceiptItem(name: "", cents: 1_200, isSelected: true),
+            ReceiptItem(name: "", cents: 0, isSelected: true),
+        ], adjustments: [])
+        XCTAssertEqual(amounts.savedItems(named: "Groceries").map(\.name), ["Groceries"])
+    }
+
+    /// Tax with no taxed items is spread equally over the rows, so a $0 row's part moves to the rows that are saved.
+    func testSavedItemsKeepEveryAdjustmentWhenARowIsDropped() {
+        let amounts = ExpenseAmounts(items: [
+            ReceiptItem(name: "Burger", cents: 1_000, taxed: false, isSelected: true),
+            ReceiptItem(name: "", cents: 0, taxed: false, isSelected: true),
+        ], adjustments: [ReceiptAdjustment(kind: .tax, amountCents: 100)])
+        let saved = amounts.savedItems(named: "Lunch")
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(saved[0].totalCents, amounts.totalCents)
+    }
 }

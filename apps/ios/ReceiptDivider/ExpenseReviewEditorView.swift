@@ -52,6 +52,8 @@ struct ExpenseReviewEditorView: View {
     @State private var focusedField: ExpenseAmounts.Field?
     @State private var amountEdit: AmountEdit?
     @State private var isShowingAssignItems = false
+    /// On a saved expense, Assign items' confirmation, which fills unassigned rows to the payer; Back restores them.
+    @State private var confirmation = AssignmentConfirmation()
     /// On a saved expense, whether its amounts or contributions were changed, so saving sends them.
     @State private var amountsEdited = false
     let existingExpenseID: UUID?
@@ -210,7 +212,9 @@ struct ExpenseReviewEditorView: View {
     }
 
     private func openAssignItems() {
-        if let onOpenAssignItems { onOpenAssignItems() } else { isShowingAssignItems = true }
+        if let onOpenAssignItems { onOpenAssignItems(); return }
+        if confirmation.isLocked { undoAssignmentConfirmation() }
+        isShowingAssignItems = true
     }
 
     private func menuSymbol(_ item: ExpenseAmounts.MenuItem) -> String {
@@ -524,8 +528,13 @@ struct ExpenseReviewEditorView: View {
                 itemAssignments: itemAssignmentsBinding,
                 participants: participants,
                 isEditable: isEditable,
+                assignmentsLocked: confirmation.isLocked,
                 onAssignmentsChanged: { recomputeAssignedShares() },
-                onItemsChanged: { old, new in itemsChanged(from: old, to: new) }
+                onItemsChanged: { old, new in itemsChanged(from: old, to: new) },
+                onSplitAll: { splitAll() },
+                onConfirm: { confirmAssignments() },
+                canConfirm: !itemsBinding.wrappedValue.isEmpty && amounts.totalCents > 0,
+                onUndoConfirmation: { undoAssignmentConfirmation() }
             )
         }
         .listStyle(.insetGrouped)
@@ -553,7 +562,7 @@ struct ExpenseReviewEditorView: View {
             Text(internalSaveError ?? "")
         }
         .onChange(of: payerBinding.wrappedValue) { _, newPayer in
-            onPayerChanged?(newPayer)
+            if let onPayerChanged { onPayerChanged(newPayer) } else { reassignFilledRows(to: newPayer) }
         }
     }
 
@@ -578,13 +587,18 @@ struct ExpenseReviewEditorView: View {
         if mode == .draft {
             externalOnSave?()
         } else if let expenseID = existingExpenseID {
+            if amountsEdited, let message = amounts.saveError {
+                internalSaveError = message
+                return
+            }
             Task {
                 internalIsSaving = true
                 do {
                     let token = try await authentication.accessToken()
                     let edit = amountsEdited ? ExpenseStore.AmountsEdit(
                         totalCents: totalBinding.wrappedValue,
-                        items: ownedItems,
+                        items: ExpenseAmounts(items: ownedItems, adjustments: amounts.adjustments)
+                            .savedItems(named: descriptionBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)),
                         adjustments: amounts.adjustments,
                         shares: sharesBinding.wrappedValue.filter { participants.contains($0.key) }
                     ) : nil
@@ -625,7 +639,63 @@ struct ExpenseReviewEditorView: View {
         focusedField = nil
         amountEdit = nil
         amountsEdited = false
+        confirmation.reset()
         balancer = ContributionBalancer()
+    }
+
+    /// Gives every row to everyone.
+    private func splitAll() {
+        withAnimation(.snappy(duration: 0.2)) {
+            for item in itemsBinding.wrappedValue { itemAssignmentsBinding.wrappedValue[item.id] = Set(participants) }
+            recomputeAssignedShares()
+        }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    /// Confirmation closes Assign items at once when every row has an owner. Otherwise it fills the rest to the payer
+    /// and waits for Continue so the autofill stays visible. Either way contributions follow ownership, keeping any
+    /// adjusted by hand while they still add up.
+    private func confirmAssignments() {
+        if confirmation.isLocked {
+            finishAssigning()
+            return
+        }
+        guard let payer = payerBinding.wrappedValue else { return }
+        var confirmed = confirmation, assignments = itemAssignmentsBinding.wrappedValue
+        guard confirmed.confirm(itemsBinding.wrappedValue, assignments: &assignments, payer: payer) else {
+            confirmation = confirmed
+            finishAssigning()
+            return
+        }
+        withAnimation(.snappy(duration: 0.2)) {
+            itemAssignmentsBinding.wrappedValue = assignments
+            recomputeAssignedShares()
+            confirmation = confirmed
+        }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    private func finishAssigning() {
+        if allocationTotal != totalBinding.wrappedValue || !Set(participants).isSubset(of: sharesBinding.wrappedValue.keys) {
+            recomputeAssignedShares()
+        }
+        isShowingAssignItems = false
+    }
+
+    private func undoAssignmentConfirmation() {
+        let confirmed = itemAssignmentsBinding.wrappedValue
+        withAnimation(.snappy(duration: 0.2)) {
+            confirmation.undo(&itemAssignmentsBinding.wrappedValue)
+            if itemAssignmentsBinding.wrappedValue != confirmed { recomputeAssignedShares() }
+        }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    /// Moves only the rows confirmation filled when the payer changes.
+    private func reassignFilledRows(to newPayer: UUID?) {
+        guard mode == .existing, confirmation.isLocked, let newPayer else { return }
+        confirmation.reassignFilledRows(itemsBinding.wrappedValue, assignments: &itemAssignmentsBinding.wrappedValue, to: newPayer)
+        recomputeAssignedShares()
     }
 
     private func recomputeAssignedShares() {

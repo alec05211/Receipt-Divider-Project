@@ -161,6 +161,25 @@ struct ExpenseAmounts: Equatable {
         return menu
     }
 
+    // MARK: Saving
+
+    /// Why these amounts can't be saved, if they can't: a tax or surcharge needs a subtotal to apply to.
+    var saveError: String? {
+        let charged = taxCents + surcharges.reduce(0) { $0 + $1.amountCents }
+        return subtotalCents == 0 && charged > 0 ? "Enter a subtotal." : nil
+    }
+
+    /// The counted rows as an expense saves them, new or edited: rows with no price are left out, since the ledger
+    /// needs every item to have one, with the adjustments spread over the rest. A blank name becomes "Item", or `name`
+    /// when only one row is left.
+    func savedItems(named name: String) -> [ReceiptItem] {
+        var saved = ExpenseAmounts(items: counted.filter { $0.cents > 0 }, adjustments: adjustments).items
+        for index in saved.indices where saved[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            saved[index].name = saved.count == 1 ? name : "Item"
+        }
+        return saved
+    }
+
     // MARK: Edits
 
     /// Sets `field` to `cents`. Nothing else changes except the total.

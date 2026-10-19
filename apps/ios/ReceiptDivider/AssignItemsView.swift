@@ -8,11 +8,18 @@ struct AssignItemsView: View {
     @Binding var itemAssignments: [UUID: Set<UUID>]
     let participants: [UUID]
     let isEditable: Bool
-    @Binding var assignmentsLocked: Bool
+    let assignmentsLocked: Bool
     let assignsNewItemsToAll: Bool
     var onAssignmentsChanged: (() -> Void)?
     /// Called with the rows before and after each change to them.
     var onItemsChanged: ((_ old: [ReceiptItem], _ new: [ReceiptItem]) -> Void)?
+    /// The top-right action: Split All while nobody is assigned (when given), then the checkmark, then Continue once
+    /// confirmed. Both of the last two call `onConfirm`. Without it there is no action.
+    var onSplitAll: (() -> Void)?
+    var onConfirm: (() -> Void)?
+    var canConfirm: Bool
+    /// When given, Back replaces the navigation back button while confirmed and calls this instead of leaving.
+    var onUndoConfirmation: (() -> Void)?
 
     @State private var activeAssignmentTarget: AssignmentTarget? = .all
     @State private var editingItemID: UUID?
@@ -22,19 +29,32 @@ struct AssignItemsView: View {
         itemAssignments: Binding<[UUID: Set<UUID>]>,
         participants: [UUID],
         isEditable: Bool = true,
-        assignmentsLocked: Binding<Bool> = .constant(false),
+        assignmentsLocked: Bool = false,
         assignsNewItemsToAll: Bool = false,
         onAssignmentsChanged: (() -> Void)? = nil,
-        onItemsChanged: ((_ old: [ReceiptItem], _ new: [ReceiptItem]) -> Void)? = nil
+        onItemsChanged: ((_ old: [ReceiptItem], _ new: [ReceiptItem]) -> Void)? = nil,
+        onSplitAll: (() -> Void)? = nil,
+        onConfirm: (() -> Void)? = nil,
+        canConfirm: Bool = true,
+        onUndoConfirmation: (() -> Void)? = nil
     ) {
         self._items = items
         self._itemAssignments = itemAssignments
         self.participants = participants
         self.isEditable = isEditable
-        self._assignmentsLocked = assignmentsLocked
+        self.assignmentsLocked = assignmentsLocked
         self.assignsNewItemsToAll = assignsNewItemsToAll
         self.onAssignmentsChanged = onAssignmentsChanged
         self.onItemsChanged = onItemsChanged
+        self.onSplitAll = onSplitAll
+        self.onConfirm = onConfirm
+        self.canConfirm = canConfirm
+        self.onUndoConfirmation = onUndoConfirmation
+    }
+
+    /// Only assignments on item rows count when choosing the action; a tip always belongs to everyone.
+    private var hasAnyItemAssignments: Bool {
+        items.contains { $0.kind == .item && !itemAssignments[$0.id, default: []].isDisjoint(with: participants) }
     }
 
     /// Selected participants sorted by recent shared transactions, signed-in user first.
@@ -115,6 +135,28 @@ struct AssignItemsView: View {
             }
         }
         .onChange(of: items) { old, new in onItemsChanged?(old, new) }
+        .navigationBarBackButtonHidden(onUndoConfirmation != nil && assignmentsLocked)
+        .toolbar {
+            if let onUndoConfirmation, assignmentsLocked {
+                ToolbarItem(placement: .topBarLeading) { Button("Back") { onUndoConfirmation() } }
+            }
+            if let onConfirm {
+                ToolbarItem(placement: .confirmationAction) {
+                    Group {
+                        if assignmentsLocked {
+                            Button("Continue") { onConfirm() }
+                        } else if !hasAnyItemAssignments, let onSplitAll {
+                            Button("Split All") { onSplitAll() }
+                        } else {
+                            Button { onConfirm() } label: {
+                                Image(systemName: "checkmark").accessibilityLabel("Confirm assignments")
+                            }
+                        }
+                    }
+                    .disabled(!canConfirm)
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             assignmentFilters
         }
@@ -191,6 +233,39 @@ struct AssignItemsView: View {
         onAssignmentsChanged?()
         UISelectionFeedbackGenerator().selectionChanged()
     }
+}
+
+/// Confirming Assign items: every row nobody has goes to the payer and the rows lock until Continue, so the autofill
+/// shows first. Back restores ownership exactly as it was before confirming.
+struct AssignmentConfirmation: Equatable {
+    /// Ownership from before confirming, which Back restores; nil until confirmed.
+    private(set) var assignmentsBefore: [UUID: Set<UUID>]?
+    var isLocked: Bool { assignmentsBefore != nil }
+
+    /// Locks the rows and gives each one nobody has to `payer`. Returns whether any were filled; when none were,
+    /// Assign items can close at once.
+    @discardableResult
+    mutating func confirm(_ items: [ReceiptItem], assignments: inout [UUID: Set<UUID>], payer: UUID) -> Bool {
+        assignmentsBefore = assignments
+        let unassigned = items.filter { assignments[$0.id, default: []].isEmpty }
+        for item in unassigned { assignments[item.id] = [payer] }
+        return !unassigned.isEmpty
+    }
+
+    /// Restores ownership from before confirming and unlocks the rows.
+    mutating func undo(_ assignments: inout [UUID: Set<UUID>]) {
+        if let assignmentsBefore { assignments = assignmentsBefore }
+        assignmentsBefore = nil
+    }
+
+    /// Gives the rows confirmation filled to a new `payer`.
+    func reassignFilledRows(_ items: [ReceiptItem], assignments: inout [UUID: Set<UUID>], to payer: UUID) {
+        guard let assignmentsBefore else { return }
+        for item in items where assignmentsBefore[item.id, default: []].isEmpty { assignments[item.id] = [payer] }
+    }
+
+    /// Forgets the confirmation without changing ownership.
+    mutating func reset() { assignmentsBefore = nil }
 }
 
 enum AssignmentTarget: Equatable {
