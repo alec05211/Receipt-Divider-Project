@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { hasImageSignature, requireUuid } from "./domain.ts";
+import { hasImageSignature, requireUuid, usernameProblem } from "./domain.ts";
 import { createOpenAIReceiptParser } from "./receipt-vision.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseAmounts, ExpenseCategory, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UserSettings, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseAmounts, ExpenseCategory, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UsernameAvailability, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const avatarLimit = 5 * 1024 * 1024;
@@ -33,6 +33,14 @@ export function createApp(
   app.get("/ready", async (context) => {
     await repository.checkHealth();
     return context.json({ ok: true });
+  });
+  // Public, since sign-up checks it before the account exists. Usernames are already discoverable through search.
+  app.get("/usernames/:username/availability", async (context) => {
+    const username = context.req.param("username");
+    const problem = usernameProblem(username);
+    const result: UsernameAvailability = problem ? { available: false, reason: problem }
+      : await repository.isUsernameAvailable(username) ? { available: true } : { available: false, reason: "taken" };
+    return context.json(result);
   });
   app.use("/v1/*", async (context, next) => {
     const authenticatedId = await authenticate(context);

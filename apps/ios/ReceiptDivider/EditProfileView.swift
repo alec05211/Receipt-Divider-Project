@@ -23,10 +23,7 @@ struct EditProfileView: View {
             username: username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         )
     }
-    private var isValid: Bool {
-        !identity.firstName.isEmpty && !identity.lastName.isEmpty
-            && identity.username.range(of: "^[a-z0-9_]{3,24}$", options: .regularExpression) != nil
-    }
+    private var isComplete: Bool { !identity.firstName.isEmpty && !identity.lastName.isEmpty && !identity.username.isEmpty }
 
     var body: some View {
         Form {
@@ -43,8 +40,8 @@ struct EditProfileView: View {
             }
             .listRowBackground(Color.clear)
             Section {
-                TextField("First name", text: $firstName).textContentType(.givenName).submitLabel(.done)
-                TextField("Last name", text: $lastName).textContentType(.familyName).submitLabel(.done)
+                TextField("First name", text: $firstName).characterLimit(AccountIdentity.nameLimit, $firstName).textContentType(.givenName).submitLabel(.done)
+                TextField("Last name", text: $lastName).characterLimit(AccountIdentity.nameLimit, $lastName).textContentType(.familyName).submitLabel(.done)
                 TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.done)
             } footer: { Text("3–24 lowercase letters, numbers, or underscores.") }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
@@ -72,13 +69,15 @@ struct EditProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                if isSaving { ProgressView() } else { Button("Save", action: save).disabled(!isValid) }
+                if isSaving { ProgressView() } else { Button("Save", action: save).disabled(!isComplete) }
             }
         }
         .onAppear {
-            firstName = store.profile?.firstName ?? ""
-            lastName = store.profile?.lastName ?? ""
-            username = store.profile?.username ?? ""
+            let rejected = store.identityRejection?.identity
+            firstName = store.profile?.firstName ?? rejected?.firstName ?? ""
+            lastName = store.profile?.lastName ?? rejected?.lastName ?? ""
+            username = store.profile?.username ?? rejected?.username ?? ""
+            errorMessage = store.identityRejection?.message
         }
     }
 
@@ -115,17 +114,29 @@ struct EditProfileView: View {
     }
 
     private func save() {
+        if let problem = identity.problem {
+            errorMessage = problem
+            return
+        }
         isSaving = true
         errorMessage = nil
         Task {
             do {
                 try await store.updateProfile(identity, accessToken: try await authentication.accessToken())
+                store.identityRejection = nil
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
             }
             isSaving = false
         }
+    }
+}
+
+extension View {
+    /// Keeps `text` to at most `limit` characters as it's typed or pasted.
+    func characterLimit(_ limit: Int, _ text: Binding<String>) -> some View {
+        onChange(of: text.wrappedValue) { _, value in if value.count > limit { text.wrappedValue = String(value.prefix(limit)) } }
     }
 }
 

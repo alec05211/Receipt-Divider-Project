@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { amountsSummary, calculateBalances, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, nextUpdatedAt, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { amountsSummary, calculateBalances, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, nextUpdatedAt, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment, validOwnUsername, validPersonName } from "./domain.ts";
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -27,12 +27,16 @@ export class MemoryRepository implements LedgerRepository {
 
   async checkHealth(): Promise<void> {}
 
+  async isUsernameAvailable(username: string): Promise<boolean> {
+    const handle = username.trim().toLowerCase();
+    return ![...this.profiles.values()].some((profile) => profile.username === handle);
+  }
+
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
     this.requireProfile(userId); this.requireAccount(userId);
-    const handle = username.trim().toLowerCase();
-    if (handle.endsWith("_dev")) throw new ApiError(400, "username can’t end in _dev", "invalid_input");
+    const first = validPersonName(firstName, "firstName"), last = validPersonName(lastName, "lastName"), handle = validOwnUsername(username);
     if ([...this.profiles.values()].some((profile) => profile.id !== userId && profile.username === handle)) throw new ApiError(409, "username is already taken", "username_taken");
-    const identity = { id: userId, firstName: firstName.trim(), lastName: lastName.trim(), username: handle, displayName: `${firstName.trim()} ${lastName.trim()}` };
+    const identity = { id: userId, firstName: first, lastName: last, username: handle, displayName: `${first} ${last}` };
     this.profiles.set(userId, { ...identity, isDeveloper: false });
     const devId = this.devAccountOf(userId);
     if (devId) this.profiles.set(devId, this.devProfile(devId, userId));

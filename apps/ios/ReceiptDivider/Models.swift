@@ -171,6 +171,8 @@ enum SelfReferenceMode: String, CaseIterable, Identifiable {
 }
 struct Payment: Identifiable, Hashable, Codable { var id = UUID(); var amount: Int; var from: UUID; var to: UUID; var transactionDate: Date; var createdAt = Date() }
 /// An app user who appears in the signed-in user's ledger: themselves, a friend, or someone they share a transaction with.
+struct IdentityRejection: Equatable { let identity: AccountIdentity; let message: String }
+
 struct LedgerPerson: Identifiable, Hashable, Codable {
     let id: UUID; var displayName: String?; var username: String?; var avatarEtag: String?
     var name: String { displayName ?? username.map { "@\($0)" } ?? "Unknown" }
@@ -204,6 +206,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
     /// Bumped when the signed-in user's own picture changes, so views showing it reload.
     private(set) var avatarVersion = 0
     var syncError: String?
+    /// The name and username given at sign-up, when the server refused them; Edit profile opens with them to fix.
+    var identityRejection: IdentityRejection?
     var expenseSaveError: String?
     /// Everyone who appears in the ledger, by user ID.
     private(set) var people: [UUID: LedgerPerson] = [:]
@@ -282,7 +286,14 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             await api.actAsDevAccount(false)
             var account = try await api.ensureProfile(token: accessToken)
             isDeveloper = account.isDeveloper ?? false
-            if let identity { account = try await api.updateIdentity(identity, token: accessToken) }
+            if let identity {
+                // A rejected identity (say, its username was taken since sign-up) mustn't stop the ledger from loading:
+                // the account opens without it, and the user fixes it in Edit profile.
+                do { account = try await api.updateIdentity(identity, token: accessToken) }
+                catch LedgerAPIClientError.requestFailed(let status, let message) where status == 400 || status == 409 {
+                    identityRejection = IdentityRejection(identity: identity, message: message)
+                }
+            }
             if isDevAccount && !isDeveloper { setDevAccount(false, for: userID) }
             await api.actAsDevAccount(isDevAccount)
             let current = isDevAccount ? try await api.ensureProfile(token: accessToken) : account
@@ -621,6 +632,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         activeUserID = nil
         hasLoadedRemoteData = false
         profile = nil
+        identityRejection = nil
         isDeveloper = false
         savedSliderUnit = nil
         savedTipSplit = nil

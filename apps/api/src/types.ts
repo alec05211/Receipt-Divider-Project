@@ -10,6 +10,8 @@ export interface ProfileIdentity { id: UUID; firstName: string; lastName: string
 /** Where the searcher stands with a search result: no request, a request either way, or already friends. */
 export type Relationship = "none" | "outgoing" | "incoming" | "friend";
 /** `avatarEtag` changes whenever the person uploads a new photo, so clients know when to refetch it; null means no photo. */
+/** `reason` says why a username can't be used: "invalid" (not 3–24 of a–z, 0–9, _), "reserved" (ends in _dev), or "taken". */
+export interface UsernameAvailability { available: boolean; reason?: "invalid" | "reserved" | "taken"; }
 export interface UserSearchResult { userId: UUID; displayName: string; username: string; hasAvatar: boolean; avatarEtag: string | null; relationship: Relationship; requestId?: UUID; }
 export interface FriendConnection { requestId: UUID; userId: UUID; displayName: string; username: string; avatarEtag: string | null; status: "pending" | "accepted"; direction: "incoming" | "outgoing" | "friend"; }
 
@@ -188,6 +190,8 @@ export interface LedgerRepository {
   devAccount(accountId: UUID): Promise<UUID>;
   getSettings(userId: UUID): Promise<UserSettings>;
   updateSettings(userId: UUID, changes: Partial<Pick<UserSettings, "sliderUnit" | "tipSplit">>): Promise<UserSettings>;
+  /** Whether no profile, a dev account's included, has this username, ignoring case. */
+  isUsernameAvailable(username: string): Promise<boolean>;
   updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity>;
   searchUsers(userId: UUID, query: string): Promise<UserSearchResult[]>;
   listFriends(userId: UUID): Promise<FriendConnection[]>;

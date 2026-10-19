@@ -21,6 +21,34 @@ export function searchTerm(value: string): string {
   return term;
 }
 
+/** Names are 1–60 characters after trimming, the database's limit. */
+export const personNameLimit = 60;
+export function validPersonName(value: string, field: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > personNameLimit) throw new ApiError(400, `${field} must contain 1–${personNameLimit} characters`, "invalid_name");
+  return trimmed;
+}
+
+/** Why a username can't be someone's own: badly formed, or ending in "_dev", which only dev accounts may. */
+export function usernameProblem(value: string): "invalid" | "reserved" | null {
+  const username = value.trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,24}$/.test(username)) return "invalid";
+  return username.endsWith("_dev") ? "reserved" : null;
+}
+
+/** A username to look someone up by; dev accounts' usernames are well formed too. */
+export function validUsername(value: string): string {
+  if (usernameProblem(value) === "invalid") throw new ApiError(400, "username must be 3–24 lowercase letters, numbers, or underscores", "invalid_username");
+  return value.trim().toLowerCase();
+}
+
+/** A username someone may give themselves. */
+export function validOwnUsername(value: string): string {
+  const username = validUsername(value);
+  if (usernameProblem(username) === "reserved") throw new ApiError(400, "username can’t end in _dev", "reserved_username");
+  return username;
+}
+
 export function requireCurrency(value: unknown): string {
   if (typeof value !== "string" || !currencyPattern.test(value)) {
     throw new ApiError(400, "currency must be a three-letter uppercase code", "invalid_input");

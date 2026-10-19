@@ -12,6 +12,21 @@ enum AppAuthenticationState: Equatable {
 }
 struct AccountIdentity: Codable, Sendable, Equatable {
     let firstName: String; let lastName: String; let username: String
+
+    /// The server's limits: names of 1–60 characters, and a username of 3–24 of a–z, 0–9, and _ not ending in _dev.
+    static let nameLimit = 60
+    static let invalidNameMessage = "Enter a first and last name of up to \(nameLimit) characters."
+    static let invalidUsernameMessage = "Use 3–24 lowercase letters, numbers, or underscores for your username."
+    static let reservedUsernameMessage = "Usernames can’t end in _dev."
+    static let takenMessage = "That username is taken."
+
+    /// What's wrong with it, or nil if the server should accept it.
+    var problem: String? {
+        if firstName.isEmpty || lastName.isEmpty || firstName.count > Self.nameLimit || lastName.count > Self.nameLimit { return Self.invalidNameMessage }
+        if username.range(of: "^[a-z0-9_]{3,24}$", options: .regularExpression) == nil { return Self.invalidUsernameMessage }
+        if username.hasSuffix("_dev") { return Self.reservedUsernameMessage }
+        return nil
+    }
 }
 
 @MainActor
@@ -24,11 +39,13 @@ struct AccountIdentity: Codable, Sendable, Equatable {
     private(set) var pendingIdentity: AccountIdentity?
 
     private let client: SupabaseClient?
+    private let ledgerAPI: LedgerAPIClient?
     private var isObserving = false
     private var isResettingPassword = false
 
     init(bundle: Bundle = .main) {
         client = SupabaseConfiguration.client(from: bundle)
+        ledgerAPI = LedgerAPIClient(bundle: bundle)
         if client == nil { state = .configurationMissing }
     }
 
@@ -57,11 +74,30 @@ struct AccountIdentity: Codable, Sendable, Equatable {
     @discardableResult
     func createAccount(email address: String, password: String, identity: AccountIdentity) async -> Bool {
         guard let client, let email = validatedEmail(address), validateNewPassword(password) else { return false }
-        pendingIdentity = identity
+        if let problem = identity.problem {
+            errorMessage = problem
+            return false
+        }
         return await perform {
+            try await checkAvailability(of: identity.username)
+            pendingIdentity = identity
             let response = try await client.auth.signUp(email: email, password: password)
             if response.session == nil { throw AuthenticationStoreError.confirmationRequired }
         }
+    }
+
+    private func checkAvailability(of username: String) async throws {
+        guard let ledgerAPI else { throw AuthenticationStoreError.usernameUnchecked }
+        let availability: APIUsernameAvailability
+        do { availability = try await ledgerAPI.usernameAvailability(username) }
+        catch { throw AuthenticationStoreError.usernameUnchecked }
+        guard !availability.available else { return }
+        let message = switch availability.reason {
+        case "taken": AccountIdentity.takenMessage
+        case "reserved": AccountIdentity.reservedUsernameMessage
+        default: AccountIdentity.invalidUsernameMessage
+        }
+        throw AuthenticationStoreError.usernameRejected(message)
     }
 
     @discardableResult
@@ -174,8 +210,11 @@ struct AccountIdentity: Codable, Sendable, Equatable {
     }
 
     private static func friendlyMessage(for error: Error) -> String {
-        if case AuthenticationStoreError.confirmationRequired = error {
-            return "Check your email to confirm your account, then sign in."
+        switch error {
+        case AuthenticationStoreError.confirmationRequired: return "Check your email to confirm your account, then sign in."
+        case AuthenticationStoreError.usernameRejected(let message): return message
+        case AuthenticationStoreError.usernameUnchecked: return "Couldn’t check that username. Try again."
+        default: break
         }
         if let authError = error as? AuthError {
             switch authError.errorCode {
@@ -193,7 +232,10 @@ struct AccountIdentity: Codable, Sendable, Equatable {
     }
 }
 
-private enum AuthenticationStoreError: Error { case configurationMissing, confirmationRequired }
+private enum AuthenticationStoreError: Error {
+    case configurationMissing, confirmationRequired, usernameUnchecked
+    case usernameRejected(String)
+}
 
 private enum SupabaseConfiguration {
     /// Must be listed under Authentication → URL Configuration → Redirect URLs in Supabase.

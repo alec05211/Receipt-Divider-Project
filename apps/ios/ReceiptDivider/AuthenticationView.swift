@@ -124,8 +124,8 @@ struct AuthenticationView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if mode == .createAccount {
-                    TextField("First name", text: $firstName).textContentType(.givenName).submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    TextField("Last name", text: $lastName).textContentType(.familyName).submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("First name", text: $firstName).characterLimit(AccountIdentity.nameLimit, $firstName).textContentType(.givenName).submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    TextField("Last name", text: $lastName).characterLimit(AccountIdentity.nameLimit, $lastName).textContentType(.familyName).submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
                     TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.done).padding(14).background(.background, in: RoundedRectangle(cornerRadius: 14))
                 }
                 Text("Email address").font(.headline)
@@ -226,10 +226,6 @@ struct AuthenticationView: View {
         guard !authentication.isWorking else { return }
         Task {
             let identity = mode == .createAccount ? AccountIdentity(firstName: firstName.trimmingCharacters(in: .whitespacesAndNewlines), lastName: lastName.trimmingCharacters(in: .whitespacesAndNewlines), username: username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) : nil
-            if mode == .createAccount && (identity!.firstName.isEmpty || identity!.lastName.isEmpty || identity!.username.range(of: "^[a-z0-9_]{3,24}$", options: .regularExpression) == nil) {
-                authentication.errorMessage = "Enter your real first and last name and a 3–24 character username."
-                return
-            }
             if mode == .signIn {
                 await authentication.signIn(email: email, password: password)
             } else {
