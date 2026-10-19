@@ -591,6 +591,7 @@ struct ExpenseReviewEditorView: View {
                     try await store.updateExpense(
                         expenseID,
                         description: descriptionBinding.wrappedValue,
+                        category: .some(categoryBinding.wrappedValue),
                         transactionDate: dateBinding.wrappedValue,
                         amounts: edit,
                         accessToken: token

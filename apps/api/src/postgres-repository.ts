@@ -185,14 +185,14 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
-    const { description, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
+    const { description, category, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
     return this.sql.begin(async (tx) => {
       // The row lock holds off concurrent edits until this one commits, so the version check below can't race.
       const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
       if (!row) throw new ApiError(404, "expense not found", "not_found");
       requireManager(row, userId);
       requireCurrentVersion(expectedUpdatedAt, toIso(row.updated_at));
-      const revisions: Array<{ eventType: string; from: string | ExpenseAmountsSummary; to: string | ExpenseAmountsSummary }> = [];
+      const revisions: Array<{ eventType: string; from: string | null | ExpenseAmountsSummary; to: string | null | ExpenseAmountsSummary }> = [];
       const currentDate = toDay(row.transaction_date);
       let totalCents = Number(row.total_cents);
       if (amounts) {
@@ -215,9 +215,11 @@ export class PostgresRepository implements LedgerRepository {
         }
       }
       if (description !== undefined && row.description !== description) revisions.push({ eventType: "expense.description_changed", from: row.description, to: description });
+      const currentCategory = row.category ?? null;
+      if (category !== undefined && currentCategory !== category) revisions.push({ eventType: "expense.category_changed", from: currentCategory, to: category });
       if (transactionDate !== undefined && currentDate !== transactionDate) revisions.push({ eventType: "expense.date_changed", from: currentDate, to: transactionDate });
       // Every successful edit moves updated_at, by at least a millisecond so the API's millisecond timestamps differ.
-      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, transaction_date=${transactionDate ?? currentDate}, total_cents=${totalCents}, updated_at=greatest(now(), updated_at + interval '1 millisecond') WHERE id=${expenseId} RETURNING *`;
+      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, category=${category === undefined ? currentCategory : category}, transaction_date=${transactionDate ?? currentDate}, total_cents=${totalCents}, updated_at=greatest(now(), updated_at + interval '1 millisecond') WHERE id=${expenseId} RETURNING *`;
       for (const { eventType, from, to } of revisions) {
         await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, ${eventType}, ${expenseId}, ${tx.json({ from, to } as any)})`;
       }

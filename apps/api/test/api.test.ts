@@ -309,6 +309,20 @@ test("only the payer or creator can edit an expense's name and date, and each ch
   // The creator can edit it too, though someone else paid.
   assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", { description: "Market run" })).status, 200);
   assert.deepEqual(repository.auditEvents.at(-1), { actorId: alex, eventType: "expense.description_changed", entityId: id, details: { from: "Farmers market", to: "Market run" } });
+
+  // Category can be set, changed, and cleared; an unknown one is rejected and someone with only a share can't change it.
+  const category = async () => ((await snapshot(app, jamie)).expenses[0] as unknown as { category: string | null }).category;
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { category: "groceries" })).status, 200);
+  assert.equal(await category(), "groceries");
+  assert.deepEqual(repository.auditEvents.at(-1), { actorId: jamie, eventType: "expense.category_changed", entityId: id, details: { from: null, to: "groceries" } });
+  const eventCount = repository.auditEvents.length;
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { category: "groceries" })).status, 200);
+  assert.equal(repository.auditEvents.length, eventCount);
+  for (const bad of ["Groceries", "travel", 3]) assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, jamie, "PATCH", { category: bad })).status, 400);
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, morgan, "PATCH", { category: "movie" })).status, 403);
+  assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", { category: null })).status, 200);
+  assert.equal(await category(), null);
+  assert.deepEqual(repository.auditEvents.at(-1)!.details, { from: "groceries", to: null });
 });
 
 interface SavedExpense { id: string; totalCents: number; updatedAt: string; createdAt: string; description: string; items: Array<{ name: string; amountCents: number; kind: string; ownerIds: string[] }>; adjustments: Array<{ kind: string; amountCents: number; rate: number | null }>; allocations: Array<{ userId: string; amountCents: number }>; }

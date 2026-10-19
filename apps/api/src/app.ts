@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { hasImageSignature, requireUuid } from "./domain.ts";
 import { createOpenAIReceiptParser } from "./receipt-vision.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseAmounts, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UserSettings, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseAmounts, ExpenseCategory, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const avatarLimit = 5 * 1024 * 1024;
@@ -125,6 +125,7 @@ export function createApp(
     const body = await jsonBody(context);
     const changes: ExpenseChanges = {};
     if (body.description !== undefined) changes.description = stringField(body, "description");
+    if (body.category !== undefined) changes.category = body.category as ExpenseCategory | null;
     if (body.transactionDate !== undefined) changes.transactionDate = stringField(body, "transactionDate");
     if (body.expectedUpdatedAt !== undefined) changes.expectedUpdatedAt = stringField(body, "expectedUpdatedAt");
     const amountFields = ["totalCents", "items", "adjustments", "allocations"] as const;

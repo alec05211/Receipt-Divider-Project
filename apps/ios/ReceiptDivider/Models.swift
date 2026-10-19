@@ -504,11 +504,11 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         var shares: [UUID: Int]
     }
 
-    /// Applies a name or date edit immediately and restores the previous values if the server rejects it. New `amounts`
+    /// Applies a name, category, or date edit immediately and restores the previous values if the server rejects it. New `amounts`
     /// are saved first and then the ledger reloads, since balances come from the server; if someone changed the expense
     /// in the meantime, the ledger reloads and `LedgerAPIClientError.staleExpense` is thrown. Only the payer or creator
     /// may edit; a blank name is ignored, and a call that changes nothing does nothing.
-    func updateExpense(_ expenseID: UUID, description: String? = nil, transactionDate: Date? = nil, amounts: AmountsEdit? = nil,
+    func updateExpense(_ expenseID: UUID, description: String? = nil, category: ExpenseCategory?? = nil, transactionDate: Date? = nil, amounts: AmountsEdit? = nil,
                        accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         guard let index = expenses.firstIndex(where: { $0.id == expenseID }) else { return }
@@ -526,6 +526,10 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             edited.description = name
             changes.description = name
         }
+        if let category, category != previous.category {
+            edited.category = category
+            changes.category = .some(category?.rawValue)
+        }
         if let transactionDate {
             let day = Self.dayFormatter.string(from: transactionDate)
             if day != Self.dayFormatter.string(from: previous.transactionDate) {
@@ -533,7 +537,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 changes.transactionDate = day
             }
         }
-        guard changes.description != nil || changes.transactionDate != nil || amounts != nil else { return }
+        guard changes.description != nil || changes.category != nil || changes.transactionDate != nil || amounts != nil else { return }
         expenses[index] = edited
         do {
             let saved = try await api.updateExpense(id: expenseID, changes: changes, token: accessToken)
@@ -542,6 +546,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                     expenses[index] = Self.expense(from: saved)
                 } else {
                     expenses[index].description = saved.description
+                    expenses[index].category = saved.category.flatMap(ExpenseCategory.init(rawValue:))
                     if let day = Self.dayFormatter.date(from: saved.transactionDate) { expenses[index].transactionDate = day }
                     expenses[index].updatedAt = saved.updatedAt
                 }
@@ -555,6 +560,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             // Undo only what this edit set, in case a refresh has replaced it since.
             if let index = expenses.firstIndex(where: { $0.id == expenseID }) {
                 if changes.description != nil, expenses[index].description == edited.description { expenses[index].description = previous.description }
+                if changes.category != nil, expenses[index].category == edited.category { expenses[index].category = previous.category }
                 if changes.transactionDate != nil, expenses[index].transactionDate == edited.transactionDate { expenses[index].transactionDate = previous.transactionDate }
             }
             throw error

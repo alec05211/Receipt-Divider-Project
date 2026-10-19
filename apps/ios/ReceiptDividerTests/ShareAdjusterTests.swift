@@ -134,3 +134,17 @@ final class AmountsAuditTests: XCTestCase {
         XCTAssertEqual(stamped.updatedAt, "2026-10-19T12:34:56.789Z")
     }
 }
+
+final class UpdateExpenseEncodingTests: XCTestCase {
+    private func json(_ changes: UpdateAPIExpense) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return String(decoding: try encoder.encode(changes), as: UTF8.self)
+    }
+
+    func testCategoryIsLeftOutSetOrClearedWithNull() throws {
+        XCTAssertEqual(try json(UpdateAPIExpense(description: "Dinner")), #"{"description":"Dinner"}"#)
+        XCTAssertEqual(try json(UpdateAPIExpense(category: "movie")), #"{"category":"movie"}"#)
+        XCTAssertEqual(try json(UpdateAPIExpense(category: .some(nil))), #"{"category":null}"#)
+    }
+}

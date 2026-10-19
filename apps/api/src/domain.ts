@@ -41,11 +41,12 @@ export function requireDescription(value: unknown): string {
  * are checked against the expense once it's loaded, by `editedExpenseInput`.
  */
 export function validateExpenseChanges(changes: ExpenseChanges): ExpenseChanges {
-  if (changes.description === undefined && changes.transactionDate === undefined && changes.amounts === undefined) {
-    throw new ApiError(400, "provide description, transactionDate, or amounts", "invalid_input");
+  if (changes.description === undefined && changes.category === undefined && changes.transactionDate === undefined && changes.amounts === undefined) {
+    throw new ApiError(400, "provide description, category, transactionDate, or amounts", "invalid_input");
   }
   const result: ExpenseChanges = {};
   if (changes.description !== undefined) result.description = requireDescription(changes.description);
+  if (changes.category !== undefined) result.category = optionalCategory(changes.category);
   if (changes.transactionDate !== undefined) { requireDate(changes.transactionDate); result.transactionDate = changes.transactionDate; }
   if (changes.amounts !== undefined) result.amounts = changes.amounts;
   if (changes.expectedUpdatedAt !== undefined) {
@@ -69,7 +70,7 @@ export function nextUpdatedAt(previous: string): string {
 
 /**
  * The expense as it would be saved with new amounts, checked by the same rules as a new expense, with its IDs
- * lowercased. Payer, currency, evidence and category stay as they are.
+ * lowercased. Payer, currency and evidence stay as they are; category is edited separately.
  */
 export function editedExpenseInput(expense: Expense, description: string, transactionDate: string, amounts: ExpenseAmounts): CreateExpenseInput {
   const input: CreateExpenseInput = {

@@ -181,7 +181,7 @@ export class MemoryRepository implements LedgerRepository {
   }
 
   async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
-    const { description, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
+    const { description, category, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
     const expense = this.visibleExpenses(userId).find((candidate) => candidate.id === expenseId);
     if (!expense) throw new ApiError(404, "expense not found", "not_found");
     requireManager(expense, userId);
@@ -199,6 +199,10 @@ export class MemoryRepository implements LedgerRepository {
     if (description !== undefined && expense.description !== description) {
       this.auditEvents.push({ actorId: userId, eventType: "expense.description_changed", entityId: expenseId, details: { from: expense.description, to: description } });
       expense.description = description;
+    }
+    if (category !== undefined && expense.category !== category) {
+      this.auditEvents.push({ actorId: userId, eventType: "expense.category_changed", entityId: expenseId, details: { from: expense.category, to: category } });
+      expense.category = category;
     }
     if (transactionDate !== undefined && expense.transactionDate !== transactionDate) {
       this.auditEvents.push({ actorId: userId, eventType: "expense.date_changed", entityId: expenseId, details: { from: expense.transactionDate, to: transactionDate } });
