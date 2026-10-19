@@ -44,13 +44,14 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | --- | --- | --- |
 | `GET` | `/health` | Confirm that the API process is running. |
 | `GET` | `/ready` | Confirm that the API can reach its configured datastore. |
+| `GET` | `/usernames/{username}/availability` | Public, for sign-up: `{ "available": true }`, or `false` with `reason` `invalid`, `reserved` (ends in `_dev`), or `taken` (by anyone, ignoring case). |
 | `PUT` | `/v1/profile` | Create the account profile and settings if missing; returns the profile. |
 | `GET` | `/v1/profile` | Read the caller's ID, name, username, display name, and `isDeveloper` (a dev account carries its owner's). |
 | `GET` | `/v1/settings` | Read the caller's `currency` and `sliderUnit` (`dollars` or `percent`, default `percent`). |
 | `PATCH` | `/v1/settings` | Change `sliderUnit`; returns the updated settings. |
 | `PUT` | `/v1/profile/avatar` | Store the account avatar. |
 | `GET` | `/v1/users/{userId}/avatar` | Read your own avatar or that of any user who has set a username (and so appears in search). |
-| `PUT` | `/v1/profile/identity` | Set the real first/last name and unique username. The display name is always derived as "First Last". |
+| `PUT` | `/v1/profile/identity` | Set the real first/last name (1–60 characters each) and unique username. The display name is always derived as "First Last". Errors: 400 `invalid_name`, `invalid_username`, `reserved_username`; 409 `username_taken`. |
 | `GET` | `/v1/users/search?q=` | Find users whose first name, last name, or username starts with `q` (2–60 characters, up to 20 results), with each one’s relationship to the caller. |
 | `GET` | `/v1/friends` | List accepted, incoming, and outgoing friend relationships, each with the person’s current `avatarEtag`. |
 | `POST` | `/v1/friend-requests` | Invite an account by exact username. |

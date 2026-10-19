@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { amountsSummary, calculateBalances, currentAmounts, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { amountsSummary, calculateBalances, currentAmounts, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment, validOwnUsername, validPersonName, validUsername } from "./domain.ts";
 import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseAmountsSummary, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -9,8 +9,13 @@ export class PostgresRepository implements LedgerRepository {
   async close(): Promise<void> { await this.sql.end(); }
   async checkHealth(): Promise<void> { await this.sql`SELECT 1`; }
 
+  async isUsernameAvailable(username: string): Promise<boolean> {
+    const rows = await this.sql`SELECT 1 FROM user_profiles WHERE lower(username)=lower(${username}) LIMIT 1`;
+    return !rows.length;
+  }
+
   async updateIdentity(userId: UUID, firstName: string, lastName: string, username: string): Promise<ProfileIdentity> {
-    const first = validName(firstName, "firstName"), last = validName(lastName, "lastName"), handle = validOwnUsername(username);
+    const first = validPersonName(firstName, "firstName"), last = validPersonName(lastName, "lastName"), handle = validOwnUsername(username);
     await requireAccount(this.sql, userId);
     try {
       const rows = await this.sql`UPDATE user_profiles SET first_name=${first}, last_name=${last}, username=${handle}, updated_at=now() WHERE id=${userId} RETURNING id, first_name, last_name, username, display_name`;
@@ -348,5 +353,3 @@ function toIso(value: unknown): string { return value instanceof Date ? value.to
 function toDay(value: unknown): string { return value instanceof Date ? value.toISOString().slice(0, 10) : String(value); }
 function isUniqueError(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23505"; }
 function validName(value: string, field: string): string { const trimmed = value.trim(); if (!trimmed || trimmed.length > 100) throw new ApiError(400, `${field} must contain 1–100 characters`, "invalid_input"); return trimmed; }
-function validOwnUsername(value: string): string { const username = validUsername(value); if (username.endsWith("_dev")) throw new ApiError(400, "username can’t end in _dev", "invalid_input"); return username; }
-function validUsername(value: string): string { const username = value.trim().toLowerCase(); if (!/^[a-z0-9_]{3,24}$/.test(username)) throw new ApiError(400, "username must be 3–24 lowercase letters, numbers, or underscores", "invalid_input"); return username; }

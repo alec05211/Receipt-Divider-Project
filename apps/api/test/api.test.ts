@@ -569,6 +569,33 @@ test("display name is derived from first and last name", async () => {
   assert.equal(profile.displayName, "Alex Rivera"); assert.equal(profile.username, "alex_r");
 });
 
+test("username availability needs no sign-in and ignores case", async () => {
+  const { app } = await setup();
+  assert.equal((await jsonRequest(app, "/v1/profile/identity", alex, "PUT", { firstName: "Alex", lastName: "Rivera", username: "arivera" })).status, 200);
+  async function availability(username: string) { const response = await app.request(`/usernames/${encodeURIComponent(username)}/availability`); assert.equal(response.status, 200); return await response.json(); }
+  assert.deepEqual(await availability("ARivera"), { available: false, reason: "taken" });
+  assert.deepEqual(await availability("rivera"), { available: true });
+  assert.deepEqual(await availability("ab"), { available: false, reason: "invalid" });
+  assert.deepEqual(await availability("a-b-c"), { available: false, reason: "invalid" });
+  assert.deepEqual(await availability("x".repeat(25)), { available: false, reason: "invalid" });
+  assert.deepEqual(await availability("rivera_dev"), { available: false, reason: "reserved" });
+});
+
+test("identity names are limited to 60 characters and errors say which rule failed", async () => {
+  const { app } = await setup();
+  async function identity(user: string, body: Record<string, string>) {
+    const response = await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName: "Alex", lastName: "Rivera", username: "arivera", ...body });
+    return [response.status, response.status === 200 ? null : (await response.json() as { error: { code: string } }).error.code];
+  }
+  assert.deepEqual(await identity(alex, { firstName: "x".repeat(61) }), [400, "invalid_name"]);
+  assert.deepEqual(await identity(alex, { lastName: "x".repeat(61) }), [400, "invalid_name"]);
+  assert.deepEqual(await identity(alex, { lastName: "  " }), [400, "invalid_name"]);
+  assert.deepEqual(await identity(alex, { username: "a!" }), [400, "invalid_username"]);
+  assert.deepEqual(await identity(alex, { username: "alex_dev" }), [400, "reserved_username"]);
+  assert.deepEqual(await identity(alex, { firstName: "x".repeat(60), lastName: "y".repeat(60) }), [200, null]);
+  assert.deepEqual(await identity(jamie, { username: "ARIVERA" }), [409, "username_taken"]);
+});
+
 test("user search matches first name, last name, and username prefixes", async () => {
   const { app } = await setup();
   assert.equal((await jsonRequest(app, "/v1/profile/identity", alex, "PUT", { firstName: "Alex", lastName: "Rivera", username: "arivera" })).status, 200);

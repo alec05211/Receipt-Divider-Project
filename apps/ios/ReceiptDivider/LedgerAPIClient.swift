@@ -45,6 +45,15 @@ actor LedgerAPIClient {
         try await send(path: "/v1/profile/identity", method: "PUT", token: token, body: encoder.encode(identity))
     }
 
+    /// Needs no sign-in, so sign-up can check before creating the account.
+    func usernameAvailability(_ username: String) async throws -> APIUsernameAvailability {
+        let encoded = username.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        let (data, status) = try await perform(path: "/usernames/\(encoded)/availability", method: "GET", token: nil, contentType: nil, body: nil)
+        try check(data: data, status: status)
+        do { return try decoder.decode(APIUsernameAvailability.self, from: data) }
+        catch { throw LedgerAPIClientError.invalidResponse }
+    }
+
     func settings(token: String) async throws -> APISettings { try await send(path: "/v1/settings", token: token) }
     func updateSliderUnit(_ unit: String, token: String) async throws -> APISettings {
         try await send(path: "/v1/settings", method: "PATCH", token: token, body: encoder.encode(["sliderUnit": unit]))
@@ -161,13 +170,13 @@ actor LedgerAPIClient {
         catch { throw LedgerAPIClientError.invalidResponse }
     }
 
-    private func perform(path: String, method: String, token: String, contentType: String?, body: Data?) async throws -> (Data, Int) {
+    private func perform(path: String, method: String, token: String?, contentType: String?, body: Data?) async throws -> (Data, Int) {
         guard let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
             throw LedgerAPIClientError.configurationMissing
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if actsAsDevAccount { request.setValue("dev", forHTTPHeaderField: "X-Identity") }
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         request.httpBody = body
@@ -185,6 +194,10 @@ actor LedgerAPIClient {
         case "allocation_mismatch": "Contributions must add up to the total."
         case "invalid_owner": "An item has someone who isn’t on this expense."
         case "invalid_person": "Someone on this expense can’t be added."
+        case "username_taken": AccountIdentity.takenMessage
+        case "invalid_username": AccountIdentity.invalidUsernameMessage
+        case "reserved_username": AccountIdentity.reservedUsernameMessage
+        case "invalid_name": AccountIdentity.invalidNameMessage
         default: nil
         }
         let message = short ?? body?.message ?? HTTPURLResponse.localizedString(forStatusCode: status)
@@ -336,6 +349,9 @@ struct APIFriend: Decodable, Identifiable, Sendable {
     let status: String; let direction: String
     var id: UUID { requestId }
 }
+
+/// `reason` is "invalid", "reserved" (ends in _dev), or "taken" when the username can't be used.
+struct APIUsernameAvailability: Decodable, Sendable { let available: Bool; let reason: String? }
 
 private struct FriendRequest: Encodable { let username: String }
 private struct APIErrorEnvelope: Decodable { let error: APIErrorBody }

@@ -3,6 +3,7 @@ import SwiftUI
 enum AppTab: Hashable { case transactions, add, settings }
 
 struct AppTabView: View {
+    @Environment(ExpenseStore.self) private var store
     @State private var selection: AppTab = .transactions
     @State private var openScannerTrigger = 0
 
@@ -32,5 +33,8 @@ struct AppTabView: View {
         // Standard TabView deliberately owns its appearance. Current iOS applies
         // the system Liquid Glass treatment when available.
         .tint(.primary)
+        .sheet(isPresented: Binding(get: { store.identityRejection != nil }, set: { if !$0 { store.identityRejection = nil } })) {
+            NavigationStack { EditProfileView() }
+        }
     }
 }
