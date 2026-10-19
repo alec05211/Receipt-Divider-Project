@@ -226,15 +226,16 @@ These are proposed implementation rules. They should be settled before implement
 
 `expense total = sum over items of (printed price + local offset + global offset) + tip + surcharge on the tip`, which equals the printed total when every row is kept and the reading is correct. Split All may still use the printed total.
 
-**Final review amounts (proposed 2026-10-18, pending product-owner confirmation).** The items and adjustments are the only source of truth; every line on final review is derived from them and the lines add up to the total: Subtotal (the kept items' printed prices) + Item discounts + each Tax − Discounts + Surcharges + Tip = Total. The tip line is the tip as entered; any surcharge on it is part of the surcharge line.
+**Confirmed final review amounts (2026-10-18).** Items and adjustments are the only source of truth, and every line on final review satisfies: Subtotal + each Tax + Tip + each Surcharge − each Discount = Total. The subtotal is the kept items' prices after their own discounts. The tip line is the tip as entered; any surcharge on it is part of the surcharge line.
 
-- Editing the subtotal sets the price of the expense's single item; rates stay, so tax follows.
-- Editing a tax sets that amount and works out its rate from the taxed running cost; the subtotal stays and the total follows. A tax with nothing taxed to apply to comes to $0. Clearing a tax or the tip keeps it, at $0, in its receipt position.
-- Editing the tip sets its amount; the subtotal and rates stay.
-- Editing the total finds the subtotal that, with the same rates and tip, comes to it; when rounding makes the exact total unreachable, the last rate-based adjustment absorbs the cent or two. A total below what a $0 subtotal comes to leaves the subtotal at $0.
-- The subtotal and total are typed only for an expense with at most one item. For an itemized receipt they are derived from the items (edited in Assign Items) and the adjustments; editing them never rewrites printed prices or invents a balancing adjustment.
-- On a saved expense the amounts are shown but not editable, since only the name and date can be saved (D-04).
-- Contributions on final review are recalculated from ownership whenever an amount edit leaves them not adding up to the total.
+1. Every amount field holds the dollar amount it shows. Taxes, surcharges, and discounts keep their dollar amounts when other fields change; they don't follow a rate. (Their rates are worked out from those amounts only to spread them over the rows they apply to.)
+2. Editing the total changes the tip: tip = total − everything else. The tip can't go below $0. If the typed total is below the minimum (everything else with a $0 tip), a single-amount expense's subtotal makes up the rest, down to $0; an itemized receipt's total snaps back to the minimum.
+3. Editing any other field (subtotal, a tax, the tip, a surcharge, or a discount) changes the total by the same amount. The latest edit wins, even after the total was typed.
+4. An itemized receipt (more than one item row) has a read-only subtotal that always equals the kept items' sum; nothing rewrites item prices. A single-amount expense's subtotal is editable.
+5. Clearing a tax or the tip leaves it at $0 in its receipt position. Empty fields count as $0.
+6. A saved expense's amounts are shown but not editable, since only its name and date can be saved (D-04).
+
+An adjustment with nothing to apply to (such as tax when nothing is taxed) comes to $0, and a discount can't exceed what it applies to. Contributions on final review are recalculated from ownership whenever an amount edit leaves them not adding up to the total.
 
 ### Allocation
 

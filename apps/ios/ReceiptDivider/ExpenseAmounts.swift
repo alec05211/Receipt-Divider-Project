@@ -1,26 +1,23 @@
 import Foundation
 
-/// The amounts final review shows (subtotal, item discounts, taxes, tip, other adjustments, total) and what editing
-/// one of them changes. Items and adjustments are the only source of truth; every line, and the total, is derived from
-/// them, so the lines always add up to the total:
+/// The amounts final review shows (subtotal, taxes, discounts, surcharges, tip, total) and what editing one of them
+/// changes. Items and adjustments are the only source of truth; every line, and the total, is derived from them, so
 ///
-/// `subtotal + item discounts + taxes − discounts + surcharges + tip (+ unlisted offsets) = total`
+/// `subtotal + taxes + surcharges − discounts + tip = total`
 ///
-/// - The subtotal is the counted item rows' printed prices; their own discounts are the item discounts line.
-/// - Discounts, taxes and surcharges keep their rates, so they follow the rows they apply to. The tip is an amount.
-/// - Editing the subtotal sets the single row's price; the rates stay, so tax follows.
-/// - Editing a tax sets its amount, and its rate is worked out from what it applies to; the subtotal stays.
-/// - Editing the tip sets its amount; the subtotal and rates stay.
-/// - Editing the total finds the subtotal that, with the same rates and tip, comes to it. When no subtotal comes to it
-///   exactly because of rounding, the last rate-based adjustment absorbs the cent or two.
-/// - The subtotal and total are only editable with at most one item row: an itemized receipt's subtotal is its items,
-///   and its total follows them and the adjustments.
+/// - Every line holds the dollar amount it shows. Taxes, discounts and surcharges keep their amounts when other lines
+///   change; their rates are worked out from those amounts, so they're spread over the rows they apply to.
+/// - Editing the subtotal, a tax, a discount, a surcharge or the tip changes the total by the same amount.
+/// - Editing the total changes the tip, which can't go below zero. Below that, a single-amount expense's subtotal makes
+///   up the rest (down to zero); an itemized receipt's total stays at its minimum.
+/// - With more than one item row, the subtotal is the items' sum and isn't editable; nothing rewrites item prices.
+/// - An adjustment with nothing to apply to comes to zero, and a discount can't exceed what it applies to.
 struct ExpenseAmounts: Equatable {
     private(set) var items: [ReceiptItem]
     private(set) var adjustments: [ReceiptAdjustment]
 
-    /// Re-applies `adjustments` to `items`, so offsets and adjustment amounts are current. Without adjustments the rows
-    /// are kept as they are, since expenses saved before adjustments were recorded hold them only as global offsets.
+    /// Spreads `adjustments` over `items` by their amounts. Without adjustments the rows are kept as they are, since
+    /// expenses saved before adjustments were recorded hold them only as global offsets.
     init(items: [ReceiptItem], adjustments: [ReceiptAdjustment]) {
         self.items = items
         self.adjustments = adjustments
@@ -37,17 +34,16 @@ struct ExpenseAmounts: Equatable {
         adjustments.contains { $0.kind == .tip } ? [] : counted.filter { $0.kind == .tip }
     }
 
-    var subtotalCents: Int { itemRows.reduce(0) { $0 + $1.cents } }
-    /// The item rows' own discounts (negative), or other differences recorded on a row.
-    var itemOffsetCents: Int { itemRows.reduce(0) { $0 + $1.localOffsetCents } }
+    /// The counted item rows' prices after their own discounts.
+    var subtotalCents: Int { itemRows.reduce(0) { $0 + $1.netCents } }
     var taxes: [ReceiptAdjustment] { adjustments.filter { $0.kind == .tax } }
     var taxCents: Int { taxes.reduce(0) { $0 + $1.amountCents } }
+    /// Receipt-wide discounts and surcharges, in receipt order.
+    var otherAdjustments: [ReceiptAdjustment] { adjustments.filter { $0.kind == .discount || $0.kind == .surcharge } }
     /// The tip as entered. Any surcharge on it is part of that surcharge's line.
     var tipCents: Int {
         adjustments.filter { $0.kind == .tip }.reduce(0) { $0 + $1.amountCents } + legacyTipRows.reduce(0) { $0 + $1.totalCents }
     }
-    /// Receipt-wide discounts and surcharges, in receipt order.
-    var otherAdjustments: [ReceiptAdjustment] { adjustments.filter { $0.kind == .discount || $0.kind == .surcharge } }
     /// Receipt-wide offsets on expenses saved before adjustments were recorded, where nothing else lists them.
     var unlistedOffsetCents: Int { adjustments.isEmpty ? itemRows.reduce(0) { $0 + $1.globalOffsetCents } : 0 }
 
@@ -56,23 +52,32 @@ struct ExpenseAmounts: Equatable {
         return max(0, rows + adjustments.tipCents)
     }
 
-    /// Whether the subtotal and total can be typed: only with at most one item row and no legacy tip rows.
+    /// The total with no tip: the least the total can be without lowering anything else.
+    var minimumTotalCents: Int { totalCents - tipCents }
+
+    /// Whether the subtotal can be typed: only for a single-amount expense, with at most one item row.
     var isSubtotalEditable: Bool { itemRows.count <= 1 && counted.allSatisfy { $0.kind == .item } }
 
     // MARK: Edits
 
-    /// Sets the single item row's price, creating the row if there is none. The rates stay, so tax follows.
+    /// Sets the single item row's price, creating the row if there is none. The total follows.
     mutating func setSubtotal(_ cents: Int) {
         guard isSubtotalEditable else { return }
-        setPrice(max(0, cents))
+        let cents = max(0, cents)
+        if let index = items.firstIndex(where: { $0.isSelected && $0.kind == .item }) {
+            items[index].cents = cents
+            items[index].localOffsetCents = 0
+        } else {
+            items.append(ReceiptItem(name: "", cents: cents, isSelected: true))
+        }
         apply()
     }
 
-    /// Sets the tax `id` to `cents`, working out its rate from what it applies to. The subtotal stays.
-    mutating func setTax(_ cents: Int, id: UUID) {
-        guard let index = adjustments.firstIndex(where: { $0.id == id && $0.kind == .tax }) else { return }
+    /// Sets the tax, discount or surcharge `id` to `cents`. The total follows.
+    mutating func setAdjustment(_ cents: Int, id: UUID) {
+        guard let index = adjustments.firstIndex(where: { $0.id == id && $0.kind != .tip }) else { return }
         adjustments[index].amountCents = max(0, cents)
-        apply(resolving: [id])
+        apply()
     }
 
     /// Adds a tax of nothing before the tip, so a surcharge printed after the tip isn't moved, and returns its ID.
@@ -83,7 +88,8 @@ struct ExpenseAmounts: Equatable {
         return tax.id
     }
 
-    /// Sets the tip to `cents`. A tip kept at zero keeps its place, so surcharges after it still apply to it.
+    /// Sets the tip to `cents`. The total follows. A tip kept at zero keeps its place, so surcharges after it would
+    /// still apply to it.
     mutating func setTip(_ cents: Int) {
         let cents = max(0, cents)
         if let first = adjustments.firstIndex(where: { $0.kind == .tip }) {
@@ -98,60 +104,22 @@ struct ExpenseAmounts: Equatable {
         apply()
     }
 
-    /// Finds the subtotal that, with the same rates and tip, comes to `cents`. A total below what a zero subtotal
-    /// comes to leaves the subtotal at zero.
+    /// Makes the total `cents` by changing the tip. Below the minimum total the tip is zero, and a single-amount
+    /// expense's subtotal makes up the rest, down to zero; an itemized receipt stays at its minimum.
     mutating func setTotal(_ cents: Int) {
-        guard isSubtotalEditable else { return }
         let target = max(0, cents)
-        let start = self
-        func total(_ price: Int) -> Int {
-            var trial = start
-            trial.setPrice(price)
-            trial.apply()
-            return trial.totalCents
-        }
-        var low = 0
-        var high = max(target, 1)
-        while total(high) < target, high < 1_000_000_000 { low = high; high *= 2 }
-        // The smallest price whose total reaches the target; the total never falls as the price rises.
-        while low < high {
-            let middle = (low + high) / 2
-            if total(middle) < target { low = middle + 1 } else { high = middle }
-        }
-        setPrice(low)
-        apply()
-        absorbRounding(towards: target)
-    }
-
-    // MARK: Helpers
-
-    /// When rounding keeps the total a cent or two over `target`, takes the difference from the last rate-based
-    /// adjustment, whose amount reaches the total one for one. Leaves everything as it is if that doesn't work.
-    private mutating func absorbRounding(towards target: Int) {
-        let excess = totalCents - target
-        guard excess > 0, excess <= 5, let index = adjustments.lastIndex(where: { $0.kind != .tip }) else { return }
-        var trial = self
-        if trial.adjustments[index].kind == .discount {
-            trial.adjustments[index].amountCents += excess
-        } else {
-            guard trial.adjustments[index].amountCents >= excess else { return }
-            trial.adjustments[index].amountCents -= excess
-        }
-        trial.apply(resolving: [trial.adjustments[index].id])
-        if trial.totalCents == target { self = trial }
-    }
-
-    /// Sets the price of the single item row, keeping its own discount where the price still covers it.
-    private mutating func setPrice(_ cents: Int) {
-        guard let index = items.firstIndex(where: { $0.isSelected && $0.kind == .item }) else {
-            items.append(ReceiptItem(name: "", cents: cents, isSelected: true))
+        let minimum = minimumTotalCents
+        guard legacyTipRows.isEmpty else { return }
+        if target >= minimum {
+            setTip(target - minimum)
             return
         }
-        items[index].cents = cents
-        if items[index].localOffsetCents < 0 { items[index].localOffsetCents = max(items[index].localOffsetCents, -cents) }
+        setTip(0)
+        if isSubtotalEditable { setSubtotal(subtotalCents - (minimum - target)) }
     }
 
-    private mutating func apply(resolving ids: Set<UUID> = []) {
-        adjustments = items.applyAdjustments(adjustments, resolving: ids)
+    /// Spreads every adjustment by its amount: each rate is worked out from the amount and what it applies to.
+    private mutating func apply() {
+        adjustments = items.applyAdjustments(adjustments, resolving: Set(adjustments.map(\.id)))
     }
 }

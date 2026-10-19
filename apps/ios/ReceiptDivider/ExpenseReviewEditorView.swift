@@ -47,12 +47,13 @@ struct ExpenseReviewEditorView: View {
     @State private var internalSaveError: String?
     @State private var balancer = ContributionBalancer()
     @State private var isSubtotalFocused = false
-    /// The tax field being edited, and one just added that shows until it's left.
-    @State private var focusedTaxID: UUID?
-    @State private var revealedTaxID: UUID?
+    /// The tax, discount or surcharge field being edited, and a tax just added that shows until it's left.
+    @State private var focusedAdjustmentID: UUID?
+    @State private var revealedAdjustmentID: UUID?
     @State private var isTipFocused = false
     @State private var isAddingTip = false
     @State private var isTotalFocused = false
+    @State private var amountEdit: AmountEdit?
     let existingExpenseID: UUID?
 
     private var categoryBinding: Binding<ExpenseCategory?> {
@@ -127,64 +128,102 @@ struct ExpenseReviewEditorView: View {
         ExpenseAmounts(items: itemsBinding.wrappedValue, adjustments: adjustmentsBinding.wrappedValue)
     }
 
-    /// Applies an amount edit to the items and adjustments, then sets the total they come to.
-    private func editAmounts(_ change: (inout ExpenseAmounts) -> Void) {
+    private enum AmountField: Hashable { case subtotal, adjustment(UUID), tip, total }
+
+    /// The field being typed in, the amounts from before it was touched, and what it holds. Each keystroke is applied
+    /// to those amounts, so a value passed through on the way (such as $0) doesn't change anything for good.
+    private struct AmountEdit {
+        let field: AmountField
+        let base: ExpenseAmounts
+        var typed: Int
+    }
+
+    private var focusedAmountField: AmountField? {
+        if isSubtotalFocused { return .subtotal }
+        if let focusedAdjustmentID { return .adjustment(focusedAdjustmentID) }
+        if isTipFocused { return .tip }
+        if isTotalFocused { return .total }
+        return nil
+    }
+
+    /// Applies an edit of `field` to the items and adjustments, then sets the total they come to.
+    private func editAmounts(_ field: AmountField, typed: Int, _ change: (inout ExpenseAmounts) -> Void) {
         guard canEditAmounts else { return }
-        var edited = amounts
+        let base = amountEdit?.field == field ? amountEdit!.base : amounts
+        amountEdit = AmountEdit(field: field, base: base, typed: typed)
+        var edited = base
         change(&edited)
         if edited.items != itemsBinding.wrappedValue { itemsBinding.wrappedValue = edited.items }
         if edited.adjustments != adjustmentsBinding.wrappedValue { adjustmentsBinding.wrappedValue = edited.adjustments }
         totalBinding.wrappedValue = edited.totalCents
     }
 
-    private var subtotalBinding: Binding<Int> {
-        Binding(get: { amounts.subtotalCents }, set: { cents in editAmounts { $0.setSubtotal(cents) } })
+    /// What `field` shows: what's being typed in it, otherwise its amount.
+    private func shown(_ field: AmountField, _ cents: Int) -> Int {
+        amountEdit?.field == field ? amountEdit!.typed : cents
     }
 
-    private func taxBinding(_ id: UUID) -> Binding<Int> {
+    private var subtotalBinding: Binding<Int> {
         Binding(
-            get: { amounts.taxes.first { $0.id == id }?.amountCents ?? 0 },
-            set: { cents in editAmounts { $0.setTax(cents, id: id) } }
+            get: { shown(.subtotal, amounts.subtotalCents) },
+            set: { cents in editAmounts(.subtotal, typed: cents) { $0.setSubtotal(cents) } }
         )
     }
 
-    private func taxFocusBinding(_ id: UUID) -> Binding<Bool> {
+    private func adjustmentBinding(_ id: UUID) -> Binding<Int> {
         Binding(
-            get: { focusedTaxID == id },
+            get: { shown(.adjustment(id), amounts.adjustments.first { $0.id == id }?.amountCents ?? 0) },
+            set: { cents in editAmounts(.adjustment(id), typed: cents) { $0.setAdjustment(cents, id: id) } }
+        )
+    }
+
+    private func adjustmentFocusBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { focusedAdjustmentID == id },
             set: { focused in
-                if focused { focusedTaxID = id } else if focusedTaxID == id { focusedTaxID = nil }
+                if focused { focusedAdjustmentID = id } else if focusedAdjustmentID == id { focusedAdjustmentID = nil }
             }
         )
     }
 
     private var tipBinding: Binding<Int> {
-        Binding(get: { amounts.tipCents }, set: { cents in editAmounts { $0.setTip(cents) } })
+        Binding(
+            get: { shown(.tip, amounts.tipCents) },
+            set: { cents in editAmounts(.tip, typed: cents) { $0.setTip(cents) } }
+        )
     }
 
     private var editableTotalBinding: Binding<Int> {
-        Binding(get: { totalBinding.wrappedValue }, set: { cents in editAmounts { $0.setTotal(cents) } })
+        Binding(
+            get: { shown(.total, totalBinding.wrappedValue) },
+            set: { cents in editAmounts(.total, typed: cents) { $0.setTotal(cents) } }
+        )
     }
 
     /// Taxes with an amount, plus one being added or edited.
     private var shownTaxes: [ReceiptAdjustment] {
-        amounts.taxes.filter { $0.amountCents > 0 || $0.id == focusedTaxID || $0.id == revealedTaxID }
+        amounts.taxes.filter { $0.amountCents > 0 || $0.id == focusedAdjustmentID || $0.id == revealedAdjustmentID }
     }
 
     private var showsTip: Bool { amounts.tipCents > 0 || isTipFocused || isAddingTip }
 
     private var hasAdditiveAmounts: Bool {
         let lines = amounts
-        return !shownTaxes.isEmpty || showsTip || lines.itemOffsetCents != 0 || lines.unlistedOffsetCents != 0
+        return !shownTaxes.isEmpty || showsTip || lines.unlistedOffsetCents != 0
             || lines.otherAdjustments.contains { $0.amountCents != 0 }
     }
 
     private func addTax() {
         var id = amounts.taxes.first?.id
-        if id == nil { editAmounts { id = $0.addTax() } }
+        if id == nil {
+            var edited = amounts
+            id = edited.addTax()
+            adjustmentsBinding.wrappedValue = edited.adjustments
+        }
         guard let id else { return }
-        revealedTaxID = id
+        revealedAdjustmentID = id
         // The field has to exist before it can take focus.
-        Task { @MainActor in focusedTaxID = id }
+        Task { @MainActor in focusedAdjustmentID = id }
     }
 
     private func addTip() {
@@ -398,14 +437,6 @@ struct ExpenseReviewEditorView: View {
                             if editsTotal { isSubtotalFocused = true }
                         }
 
-                        if lines.itemOffsetCents != 0 {
-                            HStack {
-                                Text("Item discounts")
-                                Spacer()
-                                Text(signed(lines.itemOffsetCents))
-                            }
-                        }
-
                         ForEach(shownTaxes) { tax in
                             HStack {
                                 HStack(spacing: 4) {
@@ -418,7 +449,7 @@ struct ExpenseReviewEditorView: View {
                                 }
                                 Spacer()
                                 if canEditAmounts {
-                                    CentsField(title: "0.00", cents: taxBinding(tax.id), isFocusedBinding: taxFocusBinding(tax.id))
+                                    CentsField(title: "0.00", cents: adjustmentBinding(tax.id), isFocusedBinding: adjustmentFocusBinding(tax.id))
                                         .accessibilityLabel("Tax")
                                 } else {
                                     Text(tax.amountCents.usd)
@@ -427,16 +458,29 @@ struct ExpenseReviewEditorView: View {
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if canEditAmounts { focusedTaxID = tax.id }
+                                if canEditAmounts { focusedAdjustmentID = tax.id }
                             }
                         }
 
                         ForEach(lines.otherAdjustments) { adjustment in
-                            if adjustment.amountCents != 0 {
+                            if adjustment.amountCents != 0 || adjustment.id == focusedAdjustmentID {
                                 HStack {
                                     Text(adjustment.kind.title)
                                     Spacer()
-                                    Text(signedAdjustment(adjustment))
+                                    if canEditAmounts {
+                                        if adjustment.kind == .discount {
+                                            Text("−").foregroundStyle(.secondary)
+                                        }
+                                        CentsField(title: "0.00", cents: adjustmentBinding(adjustment.id), isFocusedBinding: adjustmentFocusBinding(adjustment.id))
+                                            .accessibilityLabel(adjustment.kind.title)
+                                    } else {
+                                        Text(signedAdjustment(adjustment))
+                                            .accessibilityLabel(adjustment.kind.title)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if canEditAmounts { focusedAdjustmentID = adjustment.id }
                                 }
                             }
                         }
@@ -504,8 +548,11 @@ struct ExpenseReviewEditorView: View {
                         }
                     }
                 }
-                .onChange(of: focusedTaxID) { _, focused in
-                    if focused == nil { revealedTaxID = nil }
+                .onChange(of: focusedAmountField) { _, field in
+                    if amountEdit?.field != field { amountEdit = nil }
+                }
+                .onChange(of: focusedAdjustmentID) { _, focused in
+                    if focused == nil { revealedAdjustmentID = nil }
                 }
                 .onChange(of: isTipFocused) { _, focused in
                     if !focused { isAddingTip = false }
