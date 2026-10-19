@@ -47,12 +47,6 @@ struct ExpenseDetailView: View {
         return itemsAllShared && sharesBalanced
     }
 
-    private func items(for person: UUID) -> [ReceiptItem] {
-        selectedItems.filter { item in
-            item.ownerIDs.isEmpty || item.ownerIDs.contains(person)
-        }
-    }
-
     var body: some View {
         List {
             Section {
@@ -119,7 +113,7 @@ struct ExpenseDetailView: View {
                     .padding(.vertical, 2)
                 } else {
                     ForEach(participants, id: \.self) { person in
-                        let personItems = items(for: person)
+                        let personItems = current.itemCharges(for: person)
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
                                 PersonBadge(person: person)
@@ -128,13 +122,12 @@ struct ExpenseDetailView: View {
                             }
                             if !personItems.isEmpty {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(personItems) { item in
+                                    ForEach(personItems, id: \.item.id) { charge in
                                         HStack {
-                                            Text(item.name.isEmpty ? "Item" : item.name)
+                                            Text(charge.item.name.isEmpty ? "Item" : charge.item.name)
                                                 .lineLimit(1)
                                             Spacer()
-                                            let ownersCount = max(1, item.ownerIDs.isEmpty ? participants.count : item.ownerIDs.count)
-                                            Text((item.cents / ownersCount).usd)
+                                            Text(charge.cents.usd)
                                         }
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)

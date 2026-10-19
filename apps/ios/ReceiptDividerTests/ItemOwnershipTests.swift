@@ -53,4 +53,40 @@ final class ItemOwnershipTests: XCTestCase {
         let tip = [ReceiptItem]().tipRows(900, among: [ben, willem, alec], split: .proportional)
         XCTAssertEqual(tip.ownerShares(for: [ben, willem, alec]), [ben: 300, willem: 300, alec: 300])
     }
+
+    /// What each item costs a person, as shown in Settle Up and on an expense, includes its tax, surcharge and tip and
+    /// adds up to their share.
+    func testItemChargesIncludeTaxTipAndSurcharge() {
+        var items = [
+            ReceiptItem(name: "Steak", cents: 4_000, isSelected: true, ownerIDs: [ben]),
+            ReceiptItem(name: "Salad", cents: 2_000, isSelected: true, ownerIDs: [willem]),
+            ReceiptItem(name: "Fries", cents: 1_000, isSelected: true, ownerIDs: [ben, willem]),
+        ]
+        let adjustments = items.applyAdjustments([
+            ReceiptAdjustment(kind: .tax, rate: 0.10),
+            ReceiptAdjustment(kind: .tip, amountCents: 1_200),
+            ReceiptAdjustment(kind: .surcharge, rate: 0.03),
+        ])
+        let shares = (items + items.tipRows(adjustments.tipCents, among: [ben, willem], split: .even)).ownerShares(for: [ben, willem])
+        XCTAssertEqual(shares, [ben: 5_717, willem: 3_450])
+        let expense = Expense(description: "Dinner", transactionDate: .now, payer: ben, items: items, shares: shares, recordedTotalCents: 9_167, adjustments: adjustments)
+
+        let bens = expense.itemCharges(for: ben)
+        XCTAssertEqual(bens.map(\.item.name), ["Steak", "Fries"])
+        XCTAssertEqual(bens.map(\.cents), [5_082, 635])
+        let willems = expense.itemCharges(for: willem)
+        XCTAssertEqual(willems.map(\.item.name), ["Salad", "Fries"])
+        XCTAssertEqual(willems.map(\.cents), [2_760, 690])
+    }
+
+    /// A contribution changed by hand is still fully accounted for by the person's items.
+    func testItemChargesFollowAnAdjustedShare() {
+        let items = [
+            ReceiptItem(name: "Pizza", cents: 3_000, globalOffsetCents: 270, isSelected: true, ownerIDs: [ben, willem]),
+            ReceiptItem(name: "Soda", cents: 300, globalOffsetCents: 27, isSelected: true, ownerIDs: [willem]),
+        ]
+        let expense = Expense(description: "Lunch", transactionDate: .now, payer: ben, items: items, shares: [ben: 1_000, willem: 2_597])
+        XCTAssertEqual(expense.itemCharges(for: willem).map(\.cents).reduce(0, +), 2_597)
+        XCTAssertEqual(expense.itemCharges(for: ben).map(\.cents), [1_000])
+    }
 }
