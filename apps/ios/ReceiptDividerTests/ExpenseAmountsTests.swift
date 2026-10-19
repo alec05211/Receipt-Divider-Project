@@ -276,4 +276,19 @@ final class ExpenseAmountsTests: XCTestCase {
         XCTAssertTrue(amounts.isSubtotalEditable)
         assertAddsUp(amounts)
     }
+
+    func testClearingTheSubtotalUnderADiscountKeepsTheLinesWhileEditing() {
+        let base = manual(2_000, [ReceiptAdjustment(kind: .discount, amountCents: 500)])
+        let kept = Set(base.lines(editing: .subtotal).map(\.id))
+        var edited = base
+        edited.set(.subtotal, to: 0)
+        // The discount can't exceed a $0 subtotal, but the lines shown when editing began stay.
+        XCTAssertEqual(edited.lines(editing: .subtotal, keeping: kept).map(\.title), ["Subtotal", "Discount"])
+        // Without keeping them, the $0 discount would hide and take the subtotal with it.
+        XCTAssertTrue(edited.lines(editing: .subtotal).isEmpty)
+        // Typing again from the state before the edit brings the discount back.
+        var retyped = base
+        retyped.set(.subtotal, to: 1_500)
+        XCTAssertEqual(retyped.totalCents, 1_000)
+    }
 }

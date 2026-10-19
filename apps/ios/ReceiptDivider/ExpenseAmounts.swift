@@ -110,11 +110,12 @@ struct ExpenseAmounts: Equatable {
     // MARK: What's shown
 
     /// The lines shown above the total, top to bottom: subtotal, discounts, taxes, surcharges, then the tip. A line
-    /// with no amount shows only while it's `editing`. The subtotal shows whenever anything else does. Empty when the
-    /// total is the only amount.
-    func lines(editing: Field? = nil) -> [Line] {
+    /// with no amount shows only while it's `editing` or its id is in `kept` (the lines shown when editing began, so the
+    /// layout holds still while typing passes through $0). The subtotal shows whenever anything else does. Empty when
+    /// the total is the only amount.
+    func lines(editing: Field? = nil, keeping kept: Set<String> = []) -> [Line] {
         func shows(_ adjustment: ReceiptAdjustment) -> Bool {
-            adjustment.amountCents != 0 || editing == .adjustment(adjustment.id)
+            adjustment.amountCents != 0 || editing == .adjustment(adjustment.id) || kept.contains(adjustment.id.uuidString)
         }
         func line(_ adjustment: ReceiptAdjustment) -> Line {
             Line(id: adjustment.id.uuidString, field: .adjustment(adjustment.id), title: adjustment.kind.title,
@@ -124,7 +125,7 @@ struct ExpenseAmounts: Equatable {
         if unlistedOffsetCents != 0 {
             lines.append(Line(id: "unlisted", field: nil, title: "Adjustments", cents: unlistedOffsetCents, kind: nil))
         }
-        if tipCents != 0 || editing == .tip {
+        if tipCents != 0 || editing == .tip || kept.contains("tip") {
             lines.append(Line(id: "tip", field: .tip, title: "Tip", cents: tipCents, kind: .tip))
         }
         guard !lines.isEmpty else { return [] }
@@ -136,8 +137,8 @@ struct ExpenseAmounts: Equatable {
 
     /// Edits for every shown line, top to bottom, then additions for the kinds not shown. An itemized receipt offers
     /// Edit items instead of editing its subtotal, or its total when that's the only amount.
-    func menu(editing: Field? = nil) -> [MenuItem] {
-        let shown = lines(editing: editing)
+    func menu(editing: Field? = nil, keeping kept: Set<String> = []) -> [MenuItem] {
+        let shown = lines(editing: editing, keeping: kept)
         var menu: [MenuItem] = []
         if shown.isEmpty {
             menu.append(isSubtotalEditable ? .edit(.total, title: "Edit total") : .editItems)

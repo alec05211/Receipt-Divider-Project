@@ -163,6 +163,12 @@ struct ExpenseReviewEditorView: View {
         amountsEdited = true
     }
 
+    /// The lines shown when the current edit began, kept on screen until it ends.
+    private var keptLines: Set<String> {
+        guard let edit = amountEdit else { return [] }
+        return Set(edit.base.lines(editing: edit.field).map(\.id))
+    }
+
     private func amountBinding(_ field: ExpenseAmounts.Field) -> Binding<Int> {
         Binding(
             get: { amountEdit?.field == field ? amountEdit!.typed : amounts.cents(of: field) },
@@ -422,7 +428,7 @@ struct ExpenseReviewEditorView: View {
             }
 
             Section {
-                let lines = amounts.lines(editing: editingField)
+                let lines = amounts.lines(editing: editingField, keeping: keptLines)
                 VStack(spacing: 3) {
                     if !lines.isEmpty {
                         ForEach(lines) { line in amountLine(line) }
@@ -454,7 +460,7 @@ struct ExpenseReviewEditorView: View {
                 // Press and hold to edit. An empty menu builder disables the menu, so only those who may edit get one.
                 .contextMenu {
                     if canEditAmounts {
-                        ForEach(amounts.menu(editing: editingField)) { item in
+                        ForEach(amounts.menu(editing: editingField, keeping: keptLines)) { item in
                             Button(item.title, systemImage: menuSymbol(item)) { perform(item) }
                         }
                     }
