@@ -4,12 +4,15 @@ enum LedgerAPIClientError: LocalizedError, Sendable {
     case configurationMissing
     case invalidResponse
     case requestFailed(status: Int, message: String)
+    /// Someone else changed the expense since it was loaded.
+    case staleExpense
 
     var errorDescription: String? {
         switch self {
         case .configurationMissing: "The ledger API URL is missing from the app configuration."
         case .invalidResponse: "The ledger service returned an unreadable response."
         case .requestFailed(_, let message): message
+        case .staleExpense: "This expense changed. Review it again."
         }
     }
 }
@@ -176,8 +179,15 @@ actor LedgerAPIClient {
 
     private func check(data: Data, status: Int) throws {
         guard !(200..<300).contains(status) else { return }
-        let message = (try? decoder.decode(APIErrorEnvelope.self, from: data).error.message)
-            ?? HTTPURLResponse.localizedString(forStatusCode: status)
+        let body = try? decoder.decode(APIErrorEnvelope.self, from: data).error
+        if status == 409, body?.code == "stale_expense" { throw LedgerAPIClientError.staleExpense }
+        let short: String? = switch body?.code {
+        case "allocation_mismatch": "Contributions must add up to the total."
+        case "invalid_owner": "An item has someone who isn’t on this expense."
+        case "invalid_person": "Someone on this expense can’t be added."
+        default: nil
+        }
+        let message = short ?? body?.message ?? HTTPURLResponse.localizedString(forStatusCode: status)
         throw LedgerAPIClientError.requestFailed(status: status, message: message)
     }
 }
@@ -228,10 +238,38 @@ struct CreateAPIExpense: Encodable, Sendable {
     let allocations: [APIAllocation]
 }
 
-/// The editable fields of an expense; nil fields are left out of the request.
+/// The editable fields of an expense; nil fields are left out of the request. The four amount fields are sent together
+/// or not at all, and replace the expense's amounts. `expectedUpdatedAt` is the `updatedAt` the edit started from; the
+/// server refuses the edit with "stale_expense" if the expense has changed since.
 struct UpdateAPIExpense: Encodable, Sendable {
     var description: String?
     var transactionDate: String?
+    var totalCents: Int?
+    var items: [APIExpenseItem]?
+    var adjustments: [APIAdjustment]?
+    var allocations: [APIAllocation]?
+    var expectedUpdatedAt: String?
+}
+
+/// The details of an "expense.amounts_updated" audit event: the amounts before and after an edit.
+struct APIExpenseAmountsAudit: Decodable, Sendable {
+    struct Adjustment: Decodable, Sendable { let kind: String; let amountCents: Int }
+    struct Amounts: Decodable, Sendable { let totalCents: Int; let adjustments: [Adjustment]; let allocations: [APIAllocation] }
+    let from: Amounts
+    let to: Amounts
+
+    /// One line per changed amount, such as "Tip $10.00 → $15.00", adjustments of a kind added together, the total last.
+    var changes: [String] {
+        let kinds = ["discount", "tax", "surcharge", "tip"]
+        func sum(_ amounts: Amounts, _ kind: String) -> Int { amounts.adjustments.filter { $0.kind == kind }.reduce(0) { $0 + $1.amountCents } }
+        var lines = kinds.compactMap { kind -> String? in
+            let (before, after) = (sum(from, kind), sum(to, kind))
+            guard before != after else { return nil }
+            return "\(ReceiptAdjustment.Kind(rawValue: kind)?.title ?? kind.capitalized) \(before.usd) → \(after.usd)"
+        }
+        if from.totalCents != to.totalCents { lines.append("Total \(from.totalCents.usd) → \(to.totalCents.usd)") }
+        return lines
+    }
 }
 
 struct APIExpense: Decodable, Sendable {
@@ -251,6 +289,8 @@ struct APIExpense: Decodable, Sendable {
     let allocations: [APIAllocation]
     let evidenceIds: [UUID]
     let createdAt: String
+    /// Sent back as `expectedUpdatedAt` when editing amounts; nil from a server that predates editing them.
+    let updatedAt: String?
 }
 
 struct CreateAPIPayment: Encodable, Sendable {

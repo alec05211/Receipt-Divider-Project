@@ -19,7 +19,7 @@ struct ExpenseDetailView: View {
     /// The store's copy, so an edit (or a refresh) shows here as soon as it happens.
     private var current: Expense { store.expenses.first { $0.id == expense.id } ?? expense }
     /// The payer and whoever added the expense may edit or delete it.
-    private var canEdit: Bool { store.activeUserID.map { $0 == current.payer || $0 == current.creator } ?? false }
+    private var canEdit: Bool { current.canEdit(as: store.activeUserID) }
     /// Everyone else a deletion also removes it for.
     private var otherParticipantNames: String {
         participants.filter { $0 != store.activeUserID }.map { store.person(for: $0).firstName }.formatted(.list(type: .and))

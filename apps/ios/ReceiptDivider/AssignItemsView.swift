@@ -11,7 +11,8 @@ struct AssignItemsView: View {
     @Binding var assignmentsLocked: Bool
     let assignsNewItemsToAll: Bool
     var onAssignmentsChanged: (() -> Void)?
-    var onItemsChanged: (() -> Void)?
+    /// Called with the rows before and after each change to them.
+    var onItemsChanged: ((_ old: [ReceiptItem], _ new: [ReceiptItem]) -> Void)?
 
     @State private var activeAssignmentTarget: AssignmentTarget? = .all
     @State private var editingItemID: UUID?
@@ -24,7 +25,7 @@ struct AssignItemsView: View {
         assignmentsLocked: Binding<Bool> = .constant(false),
         assignsNewItemsToAll: Bool = false,
         onAssignmentsChanged: (() -> Void)? = nil,
-        onItemsChanged: (() -> Void)? = nil
+        onItemsChanged: ((_ old: [ReceiptItem], _ new: [ReceiptItem]) -> Void)? = nil
     ) {
         self._items = items
         self._itemAssignments = itemAssignments
@@ -113,7 +114,7 @@ struct AssignItemsView: View {
                 ItemEditor(item: $items[index])
             }
         }
-        .onChange(of: items) { _, _ in onItemsChanged?() }
+        .onChange(of: items) { old, new in onItemsChanged?(old, new) }
         .safeAreaInset(edge: .bottom) {
             assignmentFilters
         }

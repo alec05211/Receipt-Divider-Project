@@ -96,6 +96,8 @@ struct Expense: Identifiable, Hashable, Codable {
     var receiptDiagnostics: ReceiptDiagnostics? = nil
     /// Who added it with the app; nil in a cache from before this was kept.
     var creator: UUID? = nil
+    /// When the server last changed it, as the server wrote it; nil before it's saved or from an older server.
+    var updatedAt: String? = nil
     var total: Int { recordedTotalCents ?? max(0, items.filter(\.isSelected).reduce(0) { $0 + $1.totalCents }) }
     /// The selected items' own discounts.
     var itemDiscountTotal: Int { items.filter(\.isSelected).reduce(0) { $0 + $1.localOffsetCents } }
@@ -104,6 +106,12 @@ struct Expense: Identifiable, Hashable, Codable {
     var participants: [UUID] { Array(shares.keys) }
 }
 extension Expense {
+    /// The payer and whoever added the expense may edit or delete it; nobody else may.
+    func canEdit(as user: UUID?) -> Bool {
+        guard let user else { return false }
+        return user == payer || user == creator
+    }
+
     /// The selected items `person` owns, each with what it costs them in full. Their share is divided over these items in
     /// proportion to each item's total (its price after its own discount and its part of the receipt's discounts, taxes
     /// and surcharges) divided among its owners, so the parts include the tip and any hand-adjusted contribution and add
@@ -447,8 +455,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             throw LedgerAPIClientError.configurationMissing
         }
         do {
-            // Sorted so a retry after relaunch sends the same request.
-            let allocations = expense.shares.sorted { $0.key.uuidString < $1.key.uuidString }.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
+            let allocations = Self.apiAllocations(expense.shares)
             var evidenceIDs = expense.evidenceIDs
             if evidenceIDs.isEmpty, let image = expense.receiptImageData {
                 if let pending = pendingEvidenceIDs[expense.id] { evidenceIDs = [pending] }
@@ -463,10 +470,6 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                     }
                 }
             }
-            let selectedItems = expense.items.filter(\.isSelected).map {
-                APIExpenseItem(name: $0.name, amountCents: $0.cents, localOffsetCents: $0.localOffsetCents, globalOffsetCents: $0.globalOffsetCents,
-                               kind: $0.kind.rawValue, taxed: $0.taxed, ownerIds: $0.ownerIDs.sorted { $0.uuidString < $1.uuidString })
-            }
             let request = CreateAPIExpense(
                 clientRequestId: expense.id,
                 description: expense.description,
@@ -476,8 +479,8 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 currency: "USD",
                 totalCents: expense.total,
                 evidenceIds: evidenceIDs,
-                items: selectedItems,
-                adjustments: expense.adjustments.map { APIAdjustment(kind: $0.kind.rawValue, amountCents: $0.amountCents, rate: $0.kind == .tip ? nil : $0.rate) },
+                items: Self.apiItems(expense.items),
+                adjustments: Self.apiAdjustments(expense.adjustments),
                 allocations: allocations
             )
             _ = try await api.createExpense(request, token: accessToken)
@@ -493,14 +496,32 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         }
     }
 
-    /// Applies an edit immediately and restores the previous values if the server rejects it. Only the payer or creator may edit;
-    /// a blank name is ignored, and a call that changes nothing does nothing.
-    func updateExpense(_ expenseID: UUID, description: String? = nil, transactionDate: Date? = nil, accessToken: String) async throws {
+    /// New amounts for a saved expense: they replace its total, items, adjustments and allocations together.
+    struct AmountsEdit {
+        var totalCents: Int
+        var items: [ReceiptItem]
+        var adjustments: [ReceiptAdjustment]
+        var shares: [UUID: Int]
+    }
+
+    /// Applies a name or date edit immediately and restores the previous values if the server rejects it. New `amounts`
+    /// are saved first and then the ledger reloads, since balances come from the server; if someone changed the expense
+    /// in the meantime, the ledger reloads and `LedgerAPIClientError.staleExpense` is thrown. Only the payer or creator
+    /// may edit; a blank name is ignored, and a call that changes nothing does nothing.
+    func updateExpense(_ expenseID: UUID, description: String? = nil, transactionDate: Date? = nil, amounts: AmountsEdit? = nil,
+                       accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         guard let index = expenses.firstIndex(where: { $0.id == expenseID }) else { return }
         let previous = expenses[index]
         var edited = previous
         var changes = UpdateAPIExpense()
+        if let amounts {
+            changes.totalCents = amounts.totalCents
+            changes.items = Self.apiItems(amounts.items)
+            changes.adjustments = Self.apiAdjustments(amounts.adjustments)
+            changes.allocations = Self.apiAllocations(amounts.shares)
+            changes.expectedUpdatedAt = previous.updatedAt
+        }
         if let name = description?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty, name != previous.description {
             edited.description = name
             changes.description = name
@@ -512,15 +533,25 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 changes.transactionDate = day
             }
         }
-        guard changes.description != nil || changes.transactionDate != nil else { return }
+        guard changes.description != nil || changes.transactionDate != nil || amounts != nil else { return }
         expenses[index] = edited
         do {
             let saved = try await api.updateExpense(id: expenseID, changes: changes, token: accessToken)
             if let index = expenses.firstIndex(where: { $0.id == expenseID }) {
-                expenses[index].description = saved.description
-                if let day = Self.dayFormatter.date(from: saved.transactionDate) { expenses[index].transactionDate = day }
+                if amounts != nil {
+                    expenses[index] = Self.expense(from: saved)
+                } else {
+                    expenses[index].description = saved.description
+                    if let day = Self.dayFormatter.date(from: saved.transactionDate) { expenses[index].transactionDate = day }
+                    expenses[index].updatedAt = saved.updatedAt
+                }
+            }
+            if amounts != nil {
+                do { try await refresh(accessToken: accessToken) }
+                catch { syncError = error.localizedDescription }
             }
         } catch {
+            if case LedgerAPIClientError.staleExpense = error { try? await refresh(accessToken: accessToken) }
             // Undo only what this edit set, in case a refresh has replaced it since.
             if let index = expenses.firstIndex(where: { $0.id == expenseID }) {
                 if changes.description != nil, expenses[index].description == edited.description { expenses[index].description = previous.description }
@@ -658,8 +689,27 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             adjustments: (remote.adjustments ?? []).compactMap { adjustment in
                 ReceiptAdjustment.Kind(rawValue: adjustment.kind).map { ReceiptAdjustment(kind: $0, rate: adjustment.rate ?? 0, amountCents: adjustment.amountCents) }
             },
-            creator: remote.creatorId
+            creator: remote.creatorId,
+            updatedAt: remote.updatedAt
         )
+    }
+
+    /// The counted rows as the API takes them.
+    static func apiItems(_ items: [ReceiptItem]) -> [APIExpenseItem] {
+        items.filter(\.isSelected).map {
+            APIExpenseItem(name: $0.name, amountCents: $0.cents, localOffsetCents: $0.localOffsetCents, globalOffsetCents: $0.globalOffsetCents,
+                           kind: $0.kind.rawValue, taxed: $0.taxed, ownerIds: $0.ownerIDs.sorted { $0.uuidString < $1.uuidString })
+        }
+    }
+
+    /// A tip has no rate; anything else sends the rate worked out from its amount, for the record.
+    static func apiAdjustments(_ adjustments: [ReceiptAdjustment]) -> [APIAdjustment] {
+        adjustments.map { APIAdjustment(kind: $0.kind.rawValue, amountCents: $0.amountCents, rate: $0.kind == .tip ? nil : $0.rate) }
+    }
+
+    /// Sorted so a retry after relaunch sends the same request.
+    static func apiAllocations(_ shares: [UUID: Int]) -> [APIAllocation] {
+        shares.sorted { $0.key.uuidString < $1.key.uuidString }.map { APIAllocation(userId: $0.key, amountCents: $0.value) }
     }
 
     private func discardPendingExpense(_ id: UUID) {

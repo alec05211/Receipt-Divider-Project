@@ -73,7 +73,8 @@ struct ReceiptCaptureView: View {
     }
     /// The priced items and their owners in the saved expense. When no rows were assigned, all items belong to all selected participants.
     private var expenseItems: [ReceiptItem] {
-        var result = items.filter { $0.cents > 0 }
+        // A $0 row still counts when an adjustment is spread over it, as when tax is added to a $0 manual amount.
+        var result = items.filter { $0.cents > 0 || $0.globalOffsetCents != 0 }
         let isDefaultEven = !hasAnyItemAssignments
         for index in result.indices {
             if isDefaultEven {
@@ -293,13 +294,16 @@ struct ReceiptCaptureView: View {
                 splitsPrintedTotal = false
                 shares = assignedShares()
             },
-            onItemsChanged: {
+            onItemsChanged: { old, new in
                 if splitsPrintedTotal {
                     for item in items where itemAssignments[item.id] == nil {
                         itemAssignments[item.id] = selectedPeople
                     }
+                    shares = assignedShares()
+                    return
                 }
-                shares = assignedShares()
+                // A price edit moves only its owners' contributions, keeping any adjusted by hand.
+                shares = ShareAdjuster.applyingItemChanges(from: old, to: new, shares: shares, owners: owners(of:), people: orderedSelection, total: total)
             }
         )
     }
@@ -416,18 +420,22 @@ struct ReceiptCaptureView: View {
             error = nil
         }
     }
-    /// Re-applies the adjustments whenever rows or rates change, so every row's global offset and the total stay current.
-    /// A tip adjustment goes when its row is deleted. On final review, contributions follow the new amounts whenever
-    /// they no longer add up to the total, including after final review has already applied the change.
+    /// Spreads the adjustments over the rows whenever either changes, keeping every adjustment's amount, so each row's
+    /// global offset and the total stay current. Final review moves contributions along with each amount edit; if they
+    /// still don't add up to the total, the difference is spread without undoing any adjusted by hand.
     private func applyAdjustments() {
         var updated = items
-        let applied = updated.applyAdjustments(adjustments)
-        let changed = updated != items || applied != adjustments
+        let applied = updated.distributeAdjustments(adjustments)
         if updated != items { items = updated }
         if applied != adjustments { adjustments = applied }
-        if step == .split, changed || allocationTotal != total {
-            shares = assignedShares()
+        if step == .split, allocationTotal != total, !splitsPrintedTotal {
+            shares = ShareAdjuster.adding(0, weightedBy: [:], to: shares, people: orderedSelection, total: total)
         }
+    }
+
+    /// Who owns a row for moving contributions: its assignees, or everyone when nobody is assigned.
+    private func owners(of item: ReceiptItem) -> Set<UUID> {
+        hasAnyItemAssignments ? itemAssignments[item.id, default: []].intersection(selectedPeople) : []
     }
     private var totalBinding: Binding<Int> {
         // Final review edits the items and adjustments the total comes from, then sets it; an edit ends Split All.
@@ -481,8 +489,10 @@ struct ReceiptCaptureView: View {
     /// Confirmation continues immediately when every row is assigned. Otherwise it fills untouched rows to the payer
     /// and waits for Continue so the autofill remains visible.
     private func confirmAssignments() {
+        // Assigning already set contributions from ownership, and price edits since only moved their owners' part, so
+        // contributions adjusted by hand on final review are kept when they still add up.
         if assignmentsLocked {
-            shares = assignedShares()
+            if allocationTotal != total || Set(shares.keys) != selectedPeople { shares = assignedShares() }
             step = .split
             return
         }
@@ -492,7 +502,7 @@ struct ReceiptCaptureView: View {
         let untouched = items.filter { itemAssignments[$0.id, default: []].isEmpty }
         guard !untouched.isEmpty else {
             assignmentsLocked = true
-            shares = assignedShares()
+            if allocationTotal != total || Set(shares.keys) != selectedPeople { shares = assignedShares() }
             step = .split
             return
         }

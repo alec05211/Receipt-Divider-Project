@@ -1,30 +1,61 @@
 import Foundation
 
-/// The amounts final review shows (subtotal, taxes, discounts, surcharges, tip, total) and what editing one of them
-/// changes. Items and adjustments are the only source of truth; every line, and the total, is derived from them, so
+/// The amounts final review shows (subtotal, discounts, taxes, surcharges, tip, total), which of them are shown, and
+/// what editing one changes. Items and adjustments are the only source of truth.
 ///
-/// `subtotal + taxes + surcharges − discounts + tip = total`
-///
-/// - Every line holds the dollar amount it shows. Taxes, discounts and surcharges keep their amounts when other lines
-///   change; their rates are worked out from those amounts, so they're spread over the rows they apply to.
-/// - Editing the subtotal, a tax, a discount, a surcharge or the tip changes the total by the same amount.
-/// - Editing the total changes the tip, which can't go below zero. Below that, a single-amount expense's subtotal makes
-///   up the rest (down to zero); an itemized receipt's total stays at its minimum.
-/// - With more than one item row, the subtotal is the items' sum and isn't editable; nothing rewrites item prices.
-/// - An adjustment with nothing to apply to comes to zero, and a discount can't exceed what it applies to.
+/// - Every component (the subtotal, each discount, tax and surcharge, and the tip) holds exactly the dollars typed in it.
+///   Editing one never changes another: taxes and surcharges don't follow a rate.
+/// - The total is the only computed amount: `subtotal + taxes + surcharges + tip − discounts`, always.
+/// - The total can be typed only when it's the only amount shown on a single-amount expense; it then sets the subtotal,
+///   so adding a component afterwards turns that total into the subtotal.
+/// - The subtotal can be typed only with at most one item row (it sets that row's price). With more, it's the items'
+///   sum and is edited through the items.
+/// - A component at $0 isn't shown unless it's being edited, and can be added again.
+/// - A discount can't exceed what it applies to.
 struct ExpenseAmounts: Equatable {
     private(set) var items: [ReceiptItem]
     private(set) var adjustments: [ReceiptAdjustment]
+
+    /// A line that can be edited.
+    enum Field: Hashable { case subtotal, adjustment(UUID), tip, total }
+
+    /// A line shown above the total. `field` is nil for one that can't be edited.
+    struct Line: Identifiable, Equatable {
+        let id: String
+        let field: Field?
+        let title: String
+        /// The amount as typed; a discount is subtracted.
+        let cents: Int
+        let kind: ReceiptAdjustment.Kind?
+        /// For a tax, the fraction of what it applies to, worked out from its amount.
+        var rate: Double = 0
+    }
+
+    /// What the press-and-hold menu on the amounts offers.
+    enum MenuItem: Hashable, Identifiable {
+        case edit(Field, title: String)
+        case editItems
+        case add(ReceiptAdjustment.Kind)
+
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case let .edit(_, title): title
+            case .editItems: "Edit items"
+            case let .add(kind): "Add \(kind.title.lowercased())"
+            }
+        }
+    }
 
     /// Spreads `adjustments` over `items` by their amounts. Without adjustments the rows are kept as they are, since
     /// expenses saved before adjustments were recorded hold them only as global offsets.
     init(items: [ReceiptItem], adjustments: [ReceiptAdjustment]) {
         self.items = items
         self.adjustments = adjustments
-        if !adjustments.isEmpty { apply() }
+        if !adjustments.isEmpty { distribute() }
     }
 
-    // MARK: Lines
+    // MARK: Amounts
 
     /// Rows that count toward the expense.
     private var counted: [ReceiptItem] { items.filter(\.isSelected) }
@@ -38,8 +69,8 @@ struct ExpenseAmounts: Equatable {
     var subtotalCents: Int { itemRows.reduce(0) { $0 + $1.netCents } }
     var taxes: [ReceiptAdjustment] { adjustments.filter { $0.kind == .tax } }
     var taxCents: Int { taxes.reduce(0) { $0 + $1.amountCents } }
-    /// Receipt-wide discounts and surcharges, in receipt order.
-    var otherAdjustments: [ReceiptAdjustment] { adjustments.filter { $0.kind == .discount || $0.kind == .surcharge } }
+    var discounts: [ReceiptAdjustment] { adjustments.filter { $0.kind == .discount } }
+    var surcharges: [ReceiptAdjustment] { adjustments.filter { $0.kind == .surcharge } }
     /// The tip as entered. Any surcharge on it is part of that surcharge's line.
     var tipCents: Int {
         adjustments.filter { $0.kind == .tip }.reduce(0) { $0 + $1.amountCents } + legacyTipRows.reduce(0) { $0 + $1.totalCents }
@@ -47,20 +78,101 @@ struct ExpenseAmounts: Equatable {
     /// Receipt-wide offsets on expenses saved before adjustments were recorded, where nothing else lists them.
     var unlistedOffsetCents: Int { adjustments.isEmpty ? itemRows.reduce(0) { $0 + $1.globalOffsetCents } : 0 }
 
+    /// subtotal + taxes + surcharges + tip − discounts.
     var totalCents: Int {
-        let rows = itemRows.reduce(0) { $0 + $1.totalCents } + legacyTipRows.reduce(0) { $0 + $1.totalCents }
-        return max(0, rows + adjustments.tipCents)
+        let discounts = discounts.reduce(0) { $0 + $1.amountCents }
+        let surcharges = surcharges.reduce(0) { $0 + $1.amountCents }
+        return max(0, subtotalCents + taxCents + surcharges + tipCents - discounts + unlistedOffsetCents)
     }
-
-    /// The total with no tip: the least the total can be without lowering anything else.
-    var minimumTotalCents: Int { totalCents - tipCents }
 
     /// Whether the subtotal can be typed: only for a single-amount expense, with at most one item row.
     var isSubtotalEditable: Bool { itemRows.count <= 1 && counted.allSatisfy { $0.kind == .item } }
 
+    /// What `field` holds.
+    func cents(of field: Field) -> Int {
+        switch field {
+        case .subtotal: subtotalCents
+        case let .adjustment(id): adjustments.first { $0.id == id }?.amountCents ?? 0
+        case .tip: tipCents
+        case .total: totalCents
+        }
+    }
+
+    /// The kind of adjustment `field` is, if it is one.
+    func kind(of field: Field) -> ReceiptAdjustment.Kind? {
+        switch field {
+        case let .adjustment(id): adjustments.first { $0.id == id }?.kind
+        case .tip: .tip
+        case .subtotal, .total: nil
+        }
+    }
+
+    // MARK: What's shown
+
+    /// The lines shown above the total, top to bottom: subtotal, discounts, taxes, surcharges, then the tip. A line
+    /// with no amount shows only while it's `editing`. The subtotal shows whenever anything else does. Empty when the
+    /// total is the only amount.
+    func lines(editing: Field? = nil) -> [Line] {
+        func shows(_ adjustment: ReceiptAdjustment) -> Bool {
+            adjustment.amountCents != 0 || editing == .adjustment(adjustment.id)
+        }
+        func line(_ adjustment: ReceiptAdjustment) -> Line {
+            Line(id: adjustment.id.uuidString, field: .adjustment(adjustment.id), title: adjustment.kind.title,
+                 cents: adjustment.amountCents, kind: adjustment.kind, rate: adjustment.rate)
+        }
+        var lines = (discounts.filter(shows) + taxes.filter(shows) + surcharges.filter(shows)).map(line)
+        if unlistedOffsetCents != 0 {
+            lines.append(Line(id: "unlisted", field: nil, title: "Adjustments", cents: unlistedOffsetCents, kind: nil))
+        }
+        if tipCents != 0 || editing == .tip {
+            lines.append(Line(id: "tip", field: .tip, title: "Tip", cents: tipCents, kind: .tip))
+        }
+        guard !lines.isEmpty else { return [] }
+        return [Line(id: "subtotal", field: .subtotal, title: "Subtotal", cents: subtotalCents, kind: nil)] + lines
+    }
+
+    /// Whether the total is the only amount shown, so it can be typed (on a single-amount expense).
+    func isTotalOnly(editing: Field? = nil) -> Bool { lines(editing: editing).isEmpty }
+
+    /// Edits for every shown line, top to bottom, then additions for the kinds not shown. An itemized receipt offers
+    /// Edit items instead of editing its subtotal, or its total when that's the only amount.
+    func menu(editing: Field? = nil) -> [MenuItem] {
+        let shown = lines(editing: editing)
+        var menu: [MenuItem] = []
+        if shown.isEmpty {
+            menu.append(isSubtotalEditable ? .edit(.total, title: "Edit total") : .editItems)
+        }
+        for line in shown {
+            guard let field = line.field else { continue }
+            if field == .subtotal {
+                menu.append(isSubtotalEditable ? .edit(.subtotal, title: "Edit subtotal") : .editItems)
+                continue
+            }
+            var title = "Edit \(line.title.lowercased())"
+            // Two lines of one kind are told apart by their amounts.
+            if shown.filter({ $0.kind == line.kind }).count > 1 { title += " (\(line.cents.usd))" }
+            menu.append(.edit(field, title: title))
+        }
+        let shownKinds = Set(shown.compactMap(\.kind))
+        for kind in [ReceiptAdjustment.Kind.tax, .tip, .discount, .surcharge] where !shownKinds.contains(kind) {
+            menu.append(.add(kind))
+        }
+        return menu
+    }
+
     // MARK: Edits
 
-    /// Sets the single item row's price, creating the row if there is none. The total follows.
+    /// Sets `field` to `cents`. Nothing else changes except the total.
+    mutating func set(_ field: Field, to cents: Int) {
+        switch field {
+        case .subtotal: setSubtotal(cents)
+        case let .adjustment(id): setAdjustment(cents, id: id)
+        case .tip: setTip(cents)
+        case .total: setTotal(cents)
+        }
+    }
+
+    /// Sets the single item row's price, creating the row if there is none.
     mutating func setSubtotal(_ cents: Int) {
         guard isSubtotalEditable else { return }
         let cents = max(0, cents)
@@ -70,56 +182,69 @@ struct ExpenseAmounts: Equatable {
         } else {
             items.append(ReceiptItem(name: "", cents: cents, isSelected: true))
         }
-        apply()
+        distribute()
     }
 
-    /// Sets the tax, discount or surcharge `id` to `cents`. The total follows.
+    /// Sets the discount, tax or surcharge `id` to `cents`. A discount can't exceed what it applies to.
     mutating func setAdjustment(_ cents: Int, id: UUID) {
         guard let index = adjustments.firstIndex(where: { $0.id == id && $0.kind != .tip }) else { return }
         adjustments[index].amountCents = max(0, cents)
-        apply()
+        distribute()
     }
 
-    /// Adds a tax of nothing before the tip, so a surcharge printed after the tip isn't moved, and returns its ID.
-    @discardableResult
-    mutating func addTax() -> UUID {
-        let tax = ReceiptAdjustment(kind: .tax)
-        adjustments.insert(tax, at: adjustments.firstIndex { $0.kind == .tip } ?? adjustments.endIndex)
-        return tax.id
-    }
-
-    /// Sets the tip to `cents`. The total follows. A tip kept at zero keeps its place, so surcharges after it would
-    /// still apply to it.
+    /// Sets the tip to `cents`. A tip kept at zero keeps its place, so surcharges after it would still apply to it. Tip
+    /// rows from an older expense become the tip adjustment.
     mutating func setTip(_ cents: Int) {
         let cents = max(0, cents)
         if let first = adjustments.firstIndex(where: { $0.kind == .tip }) {
             for index in adjustments.indices where adjustments[index].kind == .tip {
                 adjustments[index].amountCents = index == first ? cents : 0
             }
-        } else if cents > 0 {
-            adjustments.append(ReceiptAdjustment(kind: .tip, amountCents: cents))
         } else {
-            return
+            for index in items.indices where items[index].kind == .tip { items[index].isSelected = false }
+            adjustments.append(ReceiptAdjustment(kind: .tip, amountCents: cents))
+            ensureItemRow()
         }
-        apply()
+        distribute()
     }
 
-    /// Makes the total `cents` by changing the tip. Below the minimum total the tip is zero, and a single-amount
-    /// expense's subtotal makes up the rest, down to zero; an itemized receipt stays at its minimum.
+    /// Sets the total when it's the only amount on a single-amount expense: it is then the subtotal.
     mutating func setTotal(_ cents: Int) {
-        let target = max(0, cents)
-        let minimum = minimumTotalCents
-        guard legacyTipRows.isEmpty else { return }
-        if target >= minimum {
-            setTip(target - minimum)
-            return
-        }
-        setTip(0)
-        if isSubtotalEditable { setSubtotal(subtotalCents - (minimum - target)) }
+        guard isTotalOnly(), isSubtotalEditable else { return }
+        setSubtotal(cents)
     }
 
-    /// Spreads every adjustment by its amount: each rate is worked out from the amount and what it applies to.
-    private mutating func apply() {
-        adjustments = items.applyAdjustments(adjustments, resolving: Set(adjustments.map(\.id)))
+    /// Adds a line of `kind` at $0 and returns its field. One already there at $0 is reused, keeping its place. A new
+    /// discount goes first, a new tax or surcharge before the tip, and a new tip last.
+    @discardableResult
+    mutating func add(_ kind: ReceiptAdjustment.Kind) -> Field {
+        ensureItemRow()
+        if kind == .tip {
+            if !adjustments.contains(where: { $0.kind == .tip }) { setTip(0) }
+            return .tip
+        }
+        if let existing = adjustments.first(where: { $0.kind == kind && $0.amountCents == 0 }) {
+            return .adjustment(existing.id)
+        }
+        let adjustment = ReceiptAdjustment(kind: kind)
+        let index = kind == .discount ? 0 : adjustments.firstIndex { $0.kind == .tip } ?? adjustments.endIndex
+        adjustments.insert(adjustment, at: index)
+        distribute()
+        return .adjustment(adjustment.id)
+    }
+
+    /// Adjustments need an item row to be spread over.
+    private mutating func ensureItemRow() {
+        if !items.contains(where: { $0.isSelected && $0.kind == .item }) {
+            items.append(ReceiptItem(name: "", cents: 0, isSelected: true))
+        }
+    }
+
+    /// Spreads every adjustment over the counted rows without changing its amount.
+    private mutating func distribute() {
+        let indices = items.indices.filter { items[$0].isSelected }
+        var rows = indices.map { items[$0] }
+        adjustments = rows.distributeAdjustments(adjustments)
+        for (index, row) in zip(indices, rows) { items[index] = row }
     }
 }

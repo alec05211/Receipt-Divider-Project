@@ -46,14 +46,14 @@ struct ExpenseReviewEditorView: View {
     @State private var isPickingDate = false
     @State private var internalSaveError: String?
     @State private var balancer = ContributionBalancer()
-    @State private var isSubtotalFocused = false
-    /// The tax, discount or surcharge field being edited, and a tax just added that shows until it's left.
-    @State private var focusedAdjustmentID: UUID?
-    @State private var revealedAdjustmentID: UUID?
-    @State private var isTipFocused = false
-    @State private var isAddingTip = false
-    @State private var isTotalFocused = false
+    /// The amount line chosen from the press-and-hold menu, shown as a field until editing ends, and whether that field
+    /// has focus.
+    @State private var editingField: ExpenseAmounts.Field?
+    @State private var focusedField: ExpenseAmounts.Field?
     @State private var amountEdit: AmountEdit?
+    @State private var isShowingAssignItems = false
+    /// On a saved expense, whether its amounts or contributions were changed, so saving sends them.
+    @State private var amountsEdited = false
     let existingExpenseID: UUID?
 
     private var categoryBinding: Binding<ExpenseCategory?> {
@@ -91,12 +91,21 @@ struct ExpenseReviewEditorView: View {
 
     private var contributionDetents: [UUID: Int] {
         if mode == .draft { return externalContributionDetents }
-        var ownedItems = itemsBinding.wrappedValue
-        for index in ownedItems.indices {
-            let existingOwners = ownedItems[index].ownerIDs
-            ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id] ?? existingOwners
-        }
         return (ownedItems + tipRows(for: ownedItems)).ownerShares(for: participants)
+    }
+
+    /// The rows with their owners from Assign Items and adjustments spread over them.
+    private var ownedItems: [ReceiptItem] {
+        amounts.items.map { item in
+            var item = item
+            item.ownerIDs = itemAssignmentsBinding.wrappedValue[item.id] ?? item.ownerIDs
+            return item
+        }
+    }
+
+    /// Who owns a row for moving contributions; nobody means everyone.
+    private func owners(of item: ReceiptItem) -> Set<UUID> {
+        (itemAssignmentsBinding.wrappedValue[item.id] ?? item.ownerIDs).intersection(participants)
     }
 
     /// The tip as rows split the way Settings says, so shares from ownership include it.
@@ -118,126 +127,122 @@ struct ExpenseReviewEditorView: View {
         }
         guard isEditable else { return false }
         let name = descriptionBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !name.isEmpty
+        return !name.isEmpty && (!amountsEdited || allocationTotal == totalBinding.wrappedValue)
     }
 
-    /// Amounts are only edited before saving: a saved expense saves just its name and date.
-    private var canEditAmounts: Bool { isEditable && mode == .draft }
+    /// Before saving, and on a saved expense for its payer or creator.
+    private var canEditAmounts: Bool { isEditable }
 
     private var amounts: ExpenseAmounts {
         ExpenseAmounts(items: itemsBinding.wrappedValue, adjustments: adjustmentsBinding.wrappedValue)
     }
 
-    private enum AmountField: Hashable { case subtotal, adjustment(UUID), tip, total }
-
-    /// The field being typed in, the amounts from before it was touched, and what it holds. Each keystroke is applied
-    /// to those amounts, so a value passed through on the way (such as $0) doesn't change anything for good.
+    /// The field being typed in, the amounts and contributions from before it was touched, and what it holds. Each
+    /// keystroke is applied to those, so a value passed through on the way (such as $0) doesn't change anything for good.
     private struct AmountEdit {
-        let field: AmountField
+        let field: ExpenseAmounts.Field
         let base: ExpenseAmounts
+        let baseShares: [UUID: Int]
         var typed: Int
     }
 
-    private var focusedAmountField: AmountField? {
-        if isSubtotalFocused { return .subtotal }
-        if let focusedAdjustmentID { return .adjustment(focusedAdjustmentID) }
-        if isTipFocused { return .tip }
-        if isTotalFocused { return .total }
-        return nil
-    }
-
-    /// Applies an edit of `field` to the items and adjustments, then sets the total they come to.
-    private func editAmounts(_ field: AmountField, typed: Int, _ change: (inout ExpenseAmounts) -> Void) {
+    /// Sets `field` to `typed`, then the total, then moves contributions by the change: each person's part of it is added
+    /// to what they contribute, so contributions adjusted by hand keep their adjustments.
+    private func editAmount(_ field: ExpenseAmounts.Field, typed: Int) {
         guard canEditAmounts else { return }
-        let base = amountEdit?.field == field ? amountEdit!.base : amounts
-        amountEdit = AmountEdit(field: field, base: base, typed: typed)
-        var edited = base
-        change(&edited)
+        let edit = amountEdit?.field == field ? amountEdit! : AmountEdit(field: field, base: amounts, baseShares: sharesBinding.wrappedValue, typed: typed)
+        amountEdit = AmountEdit(field: field, base: edit.base, baseShares: edit.baseShares, typed: typed)
+        var edited = edit.base
+        edited.set(field, to: typed)
         if edited.items != itemsBinding.wrappedValue { itemsBinding.wrappedValue = edited.items }
         if edited.adjustments != adjustmentsBinding.wrappedValue { adjustmentsBinding.wrappedValue = edited.adjustments }
         totalBinding.wrappedValue = edited.totalCents
+        let change = edited.cents(of: field) - edit.base.cents(of: field)
+        let weights = ShareAdjuster.weights(for: field, in: edit.base, owners: owners(of:), people: participants, tipSplit: tipSplit)
+        sharesBinding.wrappedValue = ShareAdjuster.adding(change, weightedBy: weights, to: edit.baseShares, people: participants, total: edited.totalCents)
+        amountsEdited = true
     }
 
-    /// What `field` shows: what's being typed in it, otherwise its amount.
-    private func shown(_ field: AmountField, _ cents: Int) -> Int {
-        amountEdit?.field == field ? amountEdit!.typed : cents
-    }
-
-    private var subtotalBinding: Binding<Int> {
+    private func amountBinding(_ field: ExpenseAmounts.Field) -> Binding<Int> {
         Binding(
-            get: { shown(.subtotal, amounts.subtotalCents) },
-            set: { cents in editAmounts(.subtotal, typed: cents) { $0.setSubtotal(cents) } }
+            get: { amountEdit?.field == field ? amountEdit!.typed : amounts.cents(of: field) },
+            set: { editAmount(field, typed: $0) }
         )
     }
 
-    private func adjustmentBinding(_ id: UUID) -> Binding<Int> {
+    private func focusBinding(_ field: ExpenseAmounts.Field) -> Binding<Bool> {
         Binding(
-            get: { shown(.adjustment(id), amounts.adjustments.first { $0.id == id }?.amountCents ?? 0) },
-            set: { cents in editAmounts(.adjustment(id), typed: cents) { $0.setAdjustment(cents, id: id) } }
-        )
-    }
-
-    private func adjustmentFocusBinding(_ id: UUID) -> Binding<Bool> {
-        Binding(
-            get: { focusedAdjustmentID == id },
+            get: { focusedField == field },
             set: { focused in
-                if focused { focusedAdjustmentID = id } else if focusedAdjustmentID == id { focusedAdjustmentID = nil }
+                if focused { focusedField = field } else if focusedField == field { focusedField = nil }
             }
         )
     }
 
-    private var tipBinding: Binding<Int> {
-        Binding(
-            get: { shown(.tip, amounts.tipCents) },
-            set: { cents in editAmounts(.tip, typed: cents) { $0.setTip(cents) } }
-        )
-    }
-
-    private var editableTotalBinding: Binding<Int> {
-        Binding(
-            get: { shown(.total, totalBinding.wrappedValue) },
-            set: { cents in editAmounts(.total, typed: cents) { $0.setTotal(cents) } }
-        )
-    }
-
-    /// Taxes with an amount, plus one being added or edited.
-    private var shownTaxes: [ReceiptAdjustment] {
-        amounts.taxes.filter { $0.amountCents > 0 || $0.id == focusedAdjustmentID || $0.id == revealedAdjustmentID }
-    }
-
-    private var showsTip: Bool { amounts.tipCents > 0 || isTipFocused || isAddingTip }
-
-    private var hasAdditiveAmounts: Bool {
-        let lines = amounts
-        return !shownTaxes.isEmpty || showsTip || lines.unlistedOffsetCents != 0
-            || lines.otherAdjustments.contains { $0.amountCents != 0 }
-    }
-
-    private func addTax() {
-        var id = amounts.taxes.first?.id
-        if id == nil {
-            var edited = amounts
-            id = edited.addTax()
-            adjustmentsBinding.wrappedValue = edited.adjustments
+    /// Shows `field` as a field and focuses it once it's on screen and the menu has closed.
+    private func beginEditing(_ field: ExpenseAmounts.Field) {
+        editingField = field
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            if editingField == field { focusedField = field }
         }
-        guard let id else { return }
-        revealedAdjustmentID = id
-        // The field has to exist before it can take focus.
-        Task { @MainActor in focusedAdjustmentID = id }
     }
 
-    private func addTip() {
-        isAddingTip = true
-        Task { @MainActor in isTipFocused = true }
+    private func perform(_ item: ExpenseAmounts.MenuItem) {
+        switch item {
+        case let .edit(field, _):
+            beginEditing(field)
+        case .editItems:
+            openAssignItems()
+        case let .add(kind):
+            var edited = amounts
+            let field = edited.add(kind)
+            if edited.items != itemsBinding.wrappedValue { itemsBinding.wrappedValue = edited.items }
+            if edited.adjustments != adjustmentsBinding.wrappedValue { adjustmentsBinding.wrappedValue = edited.adjustments }
+            beginEditing(field)
+        }
     }
 
-    private func signed(_ cents: Int) -> String {
-        cents < 0 ? "−\((-cents).usd)" : cents.usd
+    private func openAssignItems() {
+        if let onOpenAssignItems { onOpenAssignItems() } else { isShowingAssignItems = true }
     }
 
-    private func signedAdjustment(_ adjustment: ReceiptAdjustment) -> String {
-        let amount = adjustment.amountCents
-        return adjustment.kind == .discount ? "−\(amount.usd)" : amount.usd
+    private func menuSymbol(_ item: ExpenseAmounts.MenuItem) -> String {
+        switch item {
+        case .edit: "pencil"
+        case .editItems: "list.bullet"
+        case .add: "plus"
+        }
+    }
+
+    private func display(_ line: ExpenseAmounts.Line) -> String {
+        if line.kind == .discount { return "−\(line.cents.usd)" }
+        return line.cents < 0 ? "−\((-line.cents).usd)" : line.cents.usd
+    }
+
+    @ViewBuilder
+    private func amountLine(_ line: ExpenseAmounts.Line) -> some View {
+        HStack {
+            HStack(spacing: 4) {
+                Text(line.title)
+                if line.kind == .tax, line.rate > 0 {
+                    Text("(\(RateField.format(line.rate))%)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if canEditAmounts, let field = line.field, editingField == field {
+                if line.kind == .discount {
+                    Text("−").foregroundStyle(.secondary)
+                }
+                CentsField(title: "0.00", cents: amountBinding(field), isFocusedBinding: focusBinding(field))
+                    .accessibilityLabel(line.title)
+            } else {
+                Text(display(line))
+                    .accessibilityLabel(line.title)
+            }
+        }
     }
 
     /// Initializer for draft mode during new expense capture review.
@@ -417,99 +422,10 @@ struct ExpenseReviewEditorView: View {
             }
 
             Section {
-                let lines = amounts
-                let editsTotal = canEditAmounts && lines.isSubtotalEditable
+                let lines = amounts.lines(editing: editingField)
                 VStack(spacing: 3) {
-                    if hasAdditiveAmounts {
-                        HStack {
-                            Text("Subtotal")
-                            Spacer()
-                            if editsTotal {
-                                CentsField(title: "0.00", cents: subtotalBinding, isFocusedBinding: $isSubtotalFocused)
-                                    .accessibilityLabel("Subtotal")
-                            } else {
-                                Text(lines.subtotalCents.usd)
-                                    .accessibilityLabel("Subtotal")
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if editsTotal { isSubtotalFocused = true }
-                        }
-
-                        ForEach(shownTaxes) { tax in
-                            HStack {
-                                HStack(spacing: 4) {
-                                    Text("Tax")
-                                    if tax.rate > 0 {
-                                        Text("(\(RateField.format(tax.rate))%)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                if canEditAmounts {
-                                    CentsField(title: "0.00", cents: adjustmentBinding(tax.id), isFocusedBinding: adjustmentFocusBinding(tax.id))
-                                        .accessibilityLabel("Tax")
-                                } else {
-                                    Text(tax.amountCents.usd)
-                                        .accessibilityLabel("Tax")
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if canEditAmounts { focusedAdjustmentID = tax.id }
-                            }
-                        }
-
-                        ForEach(lines.otherAdjustments) { adjustment in
-                            if adjustment.amountCents != 0 || adjustment.id == focusedAdjustmentID {
-                                HStack {
-                                    Text(adjustment.kind.title)
-                                    Spacer()
-                                    if canEditAmounts {
-                                        if adjustment.kind == .discount {
-                                            Text("−").foregroundStyle(.secondary)
-                                        }
-                                        CentsField(title: "0.00", cents: adjustmentBinding(adjustment.id), isFocusedBinding: adjustmentFocusBinding(adjustment.id))
-                                            .accessibilityLabel(adjustment.kind.title)
-                                    } else {
-                                        Text(signedAdjustment(adjustment))
-                                            .accessibilityLabel(adjustment.kind.title)
-                                    }
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if canEditAmounts { focusedAdjustmentID = adjustment.id }
-                                }
-                            }
-                        }
-
-                        if lines.unlistedOffsetCents != 0 {
-                            HStack {
-                                Text("Adjustments")
-                                Spacer()
-                                Text(signed(lines.unlistedOffsetCents))
-                            }
-                        }
-
-                        if showsTip {
-                            HStack {
-                                Text("Tip")
-                                Spacer()
-                                if canEditAmounts {
-                                    CentsField(title: "0.00", cents: tipBinding, isFocusedBinding: $isTipFocused)
-                                        .accessibilityLabel("Tip")
-                                } else {
-                                    Text(lines.tipCents.usd)
-                                        .accessibilityLabel("Tip")
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if canEditAmounts { isTipFocused = true }
-                            }
-                        }
+                    if !lines.isEmpty {
+                        ForEach(lines) { line in amountLine(line) }
 
                         Rectangle()
                             .fill(Color(uiColor: .separator))
@@ -519,12 +435,12 @@ struct ExpenseReviewEditorView: View {
 
                     // Total
                     HStack {
-                        if !hasAdditiveAmounts {
+                        if lines.isEmpty {
                             Text("Total")
                         }
                         Spacer()
-                        if editsTotal {
-                            CentsField(title: "0.00", cents: editableTotalBinding, isFocusedBinding: $isTotalFocused, fontWeight: .semibold)
+                        if canEditAmounts, editingField == .total {
+                            CentsField(title: "0.00", cents: amountBinding(.total), isFocusedBinding: focusBinding(.total), fontWeight: .semibold)
                                 .accessibilityLabel("Total")
                         } else {
                             Text(totalBinding.wrappedValue.usd)
@@ -532,30 +448,25 @@ struct ExpenseReviewEditorView: View {
                                 .accessibilityLabel("Total")
                         }
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if editsTotal { isTotalFocused = true }
-                    }
                 }
                 .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                // Press and hold to edit. An empty menu builder disables the menu, so only those who may edit get one.
                 .contextMenu {
                     if canEditAmounts {
-                        if shownTaxes.isEmpty {
-                            Button("Add tax", systemImage: "percent") { addTax() }
-                        }
-                        if !showsTip {
-                            Button("Add tip", systemImage: "heart") { addTip() }
+                        ForEach(amounts.menu(editing: editingField)) { item in
+                            Button(item.title, systemImage: menuSymbol(item)) { perform(item) }
                         }
                     }
                 }
-                .onChange(of: focusedAmountField) { _, field in
-                    if amountEdit?.field != field { amountEdit = nil }
-                }
-                .onChange(of: focusedAdjustmentID) { _, focused in
-                    if focused == nil { revealedAdjustmentID = nil }
-                }
-                .onChange(of: isTipFocused) { _, focused in
-                    if !focused { isAddingTip = false }
+                .onChange(of: focusedField) { _, field in
+                    // Leaving the field ends editing: it shows as a value again, and a line left at $0 goes away.
+                    if field == nil {
+                        editingField = nil
+                        amountEdit = nil
+                    } else if amountEdit?.field != field {
+                        amountEdit = nil
+                    }
                 }
             }
 
@@ -584,39 +495,32 @@ struct ExpenseReviewEditorView: View {
                 }
 
                 if showsAssignmentSection {
-                    if let onOpenAssignItems {
-                        Button {
-                            onOpenAssignItems()
-                        } label: {
-                            HStack {
-                                Text("Assign items")
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .foregroundStyle(.primary)
-                    } else {
-                        NavigationLink {
-                            AssignItemsView(
-                                items: itemsBinding,
-                                itemAssignments: itemAssignmentsBinding,
-                                participants: participants,
-                                isEditable: isEditable,
-                                onAssignmentsChanged: {
-                                    recomputeAssignedShares()
-                                },
-                                onItemsChanged: { recomputeAssignedShares() }
-                            )
-                        } label: {
+                    Button {
+                        openAssignItems()
+                    } label: {
+                        HStack {
                             Text("Assign items")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        .disabled(!isEditable)
+                        .contentShape(Rectangle())
                     }
+                    .foregroundStyle(.primary)
+                    .disabled(!isEditable)
                 }
             }
+        }
+        .navigationDestination(isPresented: $isShowingAssignItems) {
+            AssignItemsView(
+                items: itemsBinding,
+                itemAssignments: itemAssignmentsBinding,
+                participants: participants,
+                isEditable: isEditable,
+                onAssignmentsChanged: { recomputeAssignedShares() },
+                onItemsChanged: { old, new in itemsChanged(from: old, to: new) }
+            )
         }
         .listStyle(.insetGrouped)
         .contentMargins(.top, 8, for: .scrollContent)
@@ -642,15 +546,6 @@ struct ExpenseReviewEditorView: View {
         } message: {
             Text(internalSaveError ?? "")
         }
-        .onChange(of: totalBinding.wrappedValue) { oldTotal, newTotal in
-            guard itemsBinding.wrappedValue.count <= 1, newTotal > 0, !participants.isEmpty, newTotal != oldTotal else { return }
-            let base = newTotal / participants.count
-            let remainder = newTotal % participants.count
-            sharesBinding.wrappedValue = Dictionary(uniqueKeysWithValues: participants.enumerated().map { index, person in
-                (person, base + (index < remainder ? 1 : 0))
-            })
-            balancer = ContributionBalancer()
-        }
         .onChange(of: payerBinding.wrappedValue) { _, newPayer in
             onPayerChanged?(newPayer)
         }
@@ -661,6 +556,7 @@ struct ExpenseReviewEditorView: View {
             get: { sharesBinding.wrappedValue[person] ?? 0 },
             set: { cents in
                 guard isEditable else { return }
+                amountsEdited = true
                 sharesBinding.wrappedValue = balancer.set(
                     person,
                     to: cents,
@@ -680,13 +576,24 @@ struct ExpenseReviewEditorView: View {
                 internalIsSaving = true
                 do {
                     let token = try await authentication.accessToken()
+                    let edit = amountsEdited ? ExpenseStore.AmountsEdit(
+                        totalCents: totalBinding.wrappedValue,
+                        items: ownedItems,
+                        adjustments: amounts.adjustments,
+                        shares: sharesBinding.wrappedValue.filter { participants.contains($0.key) }
+                    ) : nil
                     try await store.updateExpense(
                         expenseID,
                         description: descriptionBinding.wrappedValue,
                         transactionDate: dateBinding.wrappedValue,
+                        amounts: edit,
                         accessToken: token
                     )
                     dismiss()
+                } catch LedgerAPIClientError.staleExpense {
+                    // Start over from the expense as it is now.
+                    if let current = store.expenses.first(where: { $0.id == expenseID }) { load(current) }
+                    internalSaveError = LedgerAPIClientError.staleExpense.localizedDescription
                 } catch {
                     internalSaveError = error.localizedDescription
                 }
@@ -695,12 +602,42 @@ struct ExpenseReviewEditorView: View {
         }
     }
 
+    /// Resets a saved expense's fields to `expense`.
+    private func load(_ expense: Expense) {
+        internalCategory = expense.category
+        internalDescription = expense.description
+        internalTotal = expense.total
+        internalPayer = expense.payer
+        internalPurchaseDate = expense.transactionDate
+        internalShares = expense.shares
+        internalItems = expense.items
+        internalItemAssignments = Dictionary(expense.items.map { ($0.id, $0.ownerIDs) }, uniquingKeysWith: { first, _ in first })
+        internalAdjustments = expense.adjustments
+        editingField = nil
+        focusedField = nil
+        amountEdit = nil
+        amountsEdited = false
+        balancer = ContributionBalancer()
+    }
+
     private func recomputeAssignedShares() {
         guard !participants.isEmpty else { return }
-        var ownedItems = itemsBinding.wrappedValue
-        for index in ownedItems.indices {
-            ownedItems[index].ownerIDs = itemAssignmentsBinding.wrappedValue[ownedItems[index].id, default: []]
+        amountsEdited = true
+        let items = amounts.items.map { item in
+            var item = item
+            item.ownerIDs = itemAssignmentsBinding.wrappedValue[item.id, default: []]
+            return item
         }
-        sharesBinding.wrappedValue = (ownedItems + tipRows(for: ownedItems)).ownerShares(for: participants)
+        sharesBinding.wrappedValue = (items + tipRows(for: items)).ownerShares(for: participants)
+    }
+
+    /// An item's price edit moves only its owners' contributions, and the total follows.
+    private func itemsChanged(from old: [ReceiptItem], to new: [ReceiptItem]) {
+        let total = ExpenseAmounts(items: new, adjustments: adjustmentsBinding.wrappedValue).totalCents
+        if mode == .existing { internalTotal = total }
+        amountsEdited = true
+        sharesBinding.wrappedValue = ShareAdjuster.applyingItemChanges(
+            from: old, to: new, shares: sharesBinding.wrappedValue, owners: owners(of:), people: participants, total: total
+        )
     }
 }

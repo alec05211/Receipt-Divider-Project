@@ -50,17 +50,18 @@ extension Array where Element == ReceiptItem {
         }
     }
 
-    /// Applies `adjustments` like `applyAdjustments`, except that each adjustment in `resolving` keeps its amount and has
-    /// its rate worked out from it instead, as when someone types that amount. One with nothing to apply to comes to zero.
+    /// Spreads `adjustments` over these items without changing any amount: each keeps the dollars it holds, and its rate
+    /// is worked out from that amount and what it applied to, for the record. A discount can at most take what it
+    /// applies to down to zero. Anything else with nothing to apply to (tax when nothing is taxed, or every row at $0)
+    /// is spread equally over the item rows, so the amounts still add up to the total.
     @discardableResult
-    mutating func applyAdjustments(_ adjustments: [ReceiptAdjustment], resolving ids: Set<UUID>) -> [ReceiptAdjustment] {
-        walk(adjustments) { adjustment, base in
-            guard ids.contains(adjustment.id) else { return adjustment.rate }
-            return base > 0 ? Double(adjustment.amountCents) / Double(base) : 0
+    mutating func distributeAdjustments(_ adjustments: [ReceiptAdjustment]) -> [ReceiptAdjustment] {
+        walk(adjustments, keepsAmounts: true) { adjustment, base in
+            base > 0 ? Double(adjustment.amountCents) / Double(base) : 0
         }
     }
 
-    private mutating func walk(_ adjustments: [ReceiptAdjustment], rate: (ReceiptAdjustment, Int) -> Double) -> [ReceiptAdjustment] {
+    private mutating func walk(_ adjustments: [ReceiptAdjustment], keepsAmounts: Bool = false, rate: (ReceiptAdjustment, Int) -> Double) -> [ReceiptAdjustment] {
         var running = map(\.netCents)
         // The tips' running cost, which surcharges after them apply to like an item's.
         var tips = 0
@@ -72,14 +73,25 @@ extension Array where Element == ReceiptItem {
                 tips += applied[index].amountCents
                 continue
             }
-            let targets = indices.filter { row in
+            var targets = indices.filter { row in
                 running[row] > 0 && (kind == .surcharge || (self[row].kind == .item && (kind != .tax || self[row].taxed)))
             }
-            let weights = targets.map { running[$0] } + (kind == .surcharge && tips > 0 ? [tips] : [])
+            var weights = targets.map { running[$0] } + (kind == .surcharge && tips > 0 ? [tips] : [])
             let base = weights.reduce(0, +)
-            // A discount can at most take a row's cost to zero.
-            applied[index].rate = Swift.min(Swift.max(0, rate(applied[index], base)), kind == .discount ? 1 : .infinity)
-            let amount = Int((applied[index].rate * Double(base)).rounded())
+            let amount: Int
+            if keepsAmounts {
+                let kept = Swift.max(0, applied[index].amountCents)
+                amount = kind == .discount ? Swift.min(kept, base) : kept
+                applied[index].rate = Swift.max(0, rate(ReceiptAdjustment(kind: kind, amountCents: amount), base))
+                if base == 0, amount > 0 {
+                    targets = indices.filter { self[$0].kind == .item }
+                    weights = targets.map { _ in 1 }
+                }
+            } else {
+                // A discount can at most take a row's cost to zero.
+                applied[index].rate = Swift.min(Swift.max(0, rate(applied[index], base)), kind == .discount ? 1 : .infinity)
+                amount = Int((applied[index].rate * Double(base)).rounded())
+            }
             applied[index].amountCents = amount
             let shares = ReceiptMath.distribute(amount, over: weights)
             for (row, share) in zip(targets, shares) { running[row] += kind == .discount ? -share : share }
