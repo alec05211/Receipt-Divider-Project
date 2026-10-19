@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { amountsSummary, calculateBalances, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, nextUpdatedAt, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -174,16 +174,28 @@ export class MemoryRepository implements LedgerRepository {
       if (existing.fingerprint !== requestFingerprint) throw new ApiError(409, "clientRequestId was already used with different data", "idempotency_conflict");
       return structuredClone(existing.value as Expense);
     }
-    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: expenseItems(input), adjustments: expenseAdjustments(input), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt: new Date().toISOString() };
+    const createdAt = new Date().toISOString();
+    const expense: Expense = { ...structuredClone(input), category: input.category ?? null, items: expenseItems(input), adjustments: expenseAdjustments(input), evidenceIds: [...(input.evidenceIds ?? [])], id: randomUUID(), creatorId, createdAt, updatedAt: createdAt };
     this.expenses.push(expense); this.requests.set(key, { fingerprint: requestFingerprint, value: expense });
     return structuredClone(expense);
   }
 
   async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
-    const { description, transactionDate } = validateExpenseChanges(changes);
+    const { description, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
     const expense = this.visibleExpenses(userId).find((candidate) => candidate.id === expenseId);
     if (!expense) throw new ApiError(404, "expense not found", "not_found");
     requireManager(expense, userId);
+    requireCurrentVersion(expectedUpdatedAt, expense.updatedAt);
+    if (amounts) {
+      const input = editedExpenseInput(expense, description ?? expense.description, transactionDate ?? expense.transactionDate, amounts);
+      const onExpense = new Set([expense.creatorId, expense.payerId, ...expense.allocations.map((allocation) => allocation.userId)]);
+      this.requireFriends(expense.creatorId, input.allocations.map((allocation) => allocation.userId).filter((id) => !onExpense.has(id)));
+      const edited = { totalCents: input.totalCents, items: expenseItems(input), adjustments: expenseAdjustments(input), allocations: input.allocations.map(({ userId: id, amountCents }) => ({ userId: id, amountCents })) };
+      if (!sameAmounts(expense, edited)) {
+        this.auditEvents.push({ actorId: userId, eventType: "expense.amounts_updated", entityId: expenseId, details: { from: amountsSummary(expense), to: amountsSummary(edited) } });
+        Object.assign(expense, edited);
+      }
+    }
     if (description !== undefined && expense.description !== description) {
       this.auditEvents.push({ actorId: userId, eventType: "expense.description_changed", entityId: expenseId, details: { from: expense.description, to: description } });
       expense.description = description;
@@ -192,6 +204,7 @@ export class MemoryRepository implements LedgerRepository {
       this.auditEvents.push({ actorId: userId, eventType: "expense.date_changed", entityId: expenseId, details: { from: expense.transactionDate, to: transactionDate } });
       expense.transactionDate = transactionDate;
     }
+    expense.updatedAt = nextUpdatedAt(expense.updatedAt);
     return structuredClone(expense);
   }
 

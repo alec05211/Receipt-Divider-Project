@@ -96,8 +96,19 @@ export type AdjustmentKind = typeof adjustmentKinds[number];
  * the items it applies to (0.06 for 6% tax) and is null for a tip. `amountCents` is what it came to in this expense.
  */
 export interface ExpenseAdjustment { kind: AdjustmentKind; amountCents: number; rate: number | null; }
-/** The fields of an existing expense that can be edited; omitted fields are left as they are. */
-export interface ExpenseChanges { description?: string; transactionDate?: string; }
+/** An expense's amounts, edited together: they replace its total, items, adjustments and allocations as a whole. */
+export interface ExpenseAmounts { totalCents: number; items: ExpenseItemInput[]; adjustments: ExpenseAdjustment[]; allocations: AllocationInput[]; }
+/** One side of an `expense.amounts_updated` revision. */
+export interface ExpenseAmountsSummary {
+  totalCents: number;
+  adjustments: Array<Pick<ExpenseAdjustment, "kind" | "amountCents">>;
+  allocations: AllocationInput[];
+}
+/**
+ * The fields of an existing expense that can be edited; omitted fields are left as they are. `expectedUpdatedAt` is the
+ * `updatedAt` the editor last saw; if the expense has changed since, the edit is refused (409 `stale_expense`).
+ */
+export interface ExpenseChanges { description?: string; transactionDate?: string; amounts?: ExpenseAmounts; expectedUpdatedAt?: string; }
 export interface AllocationInput { userId: UUID; amountCents: number; }
 
 /** The payer and everyone allocated a share must be the creator or one of the creator's friends. */
@@ -126,6 +137,8 @@ export interface Expense extends Omit<CreateExpenseInput, "items" | "adjustments
   adjustments: ExpenseAdjustment[];
   evidenceIds: UUID[];
   createdAt: string;
+  /** Set when the expense is created and moved forward by every edit. */
+  updatedAt: string;
 }
 
 /** One side of the payment must be the person recording it. */
@@ -198,9 +211,11 @@ export interface LedgerRepository {
   putEvidenceText(uploaderId: UUID, evidenceId: UUID, text: string, diagnostics?: object | null): Promise<boolean>;
   createExpense(creatorId: UUID, input: CreateExpenseInput): Promise<Expense>;
   /**
-   * Edits an active expense's name and/or transaction date. Only its payer or creator may edit it (403 for anyone else
-   * on it); to anyone not on it, it doesn't exist (404). Each changed field is recorded as an attributable revision holding the
-   * old and new values. Amounts and allocations are untouched, so balances don't change.
+   * Edits an expense's name, transaction date, and/or amounts. Only its payer or creator may edit it (403 for anyone else
+   * on it); to anyone not on it, it doesn't exist (404). An edit carrying `expectedUpdatedAt` that no longer matches is
+   * refused (409) and changes nothing. New amounts follow the rules for a new expense, and anyone not already on the
+   * expense must be its payer or a friend of its creator. Each changed name or date, and any change of amounts, is
+   * recorded as an attributable revision holding the old and new values. Every successful edit moves `updatedAt`.
    */
   updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense>;
   /**
