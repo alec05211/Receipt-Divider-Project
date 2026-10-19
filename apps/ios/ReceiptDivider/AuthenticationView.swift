@@ -10,13 +10,13 @@ struct AppRootView: View {
         Group {
             switch authentication.state {
             case .loading:
-                ProgressView("Restoring your session…")
+                ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .signedOut:
                 AuthenticationView()
             case .authenticated:
                 if let userID = authentication.userID { ConnectedLedgerView(userID: userID) }
-                else { ProgressView("Preparing your account…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
             case .resettingPassword:
                 NewPasswordView()
             case .configurationMissing:
@@ -52,7 +52,7 @@ private struct ConnectedLedgerView: View {
                     Button("Try again") { Task { await connect() } }.buttonStyle(.borderedProminent)
                 }
             } else {
-                ProgressView("Loading your ledger…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .task(id: userID) { await connect() }
