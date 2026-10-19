@@ -2,19 +2,10 @@ import XCTest
 @testable import ReceiptDivider
 
 final class CentsEntryTests: XCTestCase {
-    /// Types each key at the end of the field, reformatting after every keystroke as `CentsField` does.
-    private func type(_ keys: String, from cents: Int = 0) -> Int {
-        keys.reduce(cents) { value, key in
-            let text = CentsEntry.format(value)
-            return CentsEntry.cents(editing: text, to: text + String(key))
-        }
-    }
-
-    private func backspace(_ times: Int, from cents: Int) -> Int {
-        (0..<times).reduce(cents) { value, _ in
-            let text = CentsEntry.format(value)
-            return CentsEntry.cents(editing: text, to: String(text.dropLast()))
-        }
+    /// Types each key at the end of the field, as `CentsField` applies it.
+    private func type(_ keys: String, from text: String = "") -> (text: String, cents: Int) {
+        let result = keys.reduce(text) { text, key in CentsEntry.sanitize(text + String(key)) ?? text }
+        return (result, CentsEntry.cents(from: result))
     }
 
     func testFormatAlwaysShowsTwoDecimals() {
@@ -25,64 +16,52 @@ final class CentsEntryTests: XCTestCase {
         XCTAssertEqual(CentsEntry.format(-50), "0.00")
     }
 
-    func testDigitsShiftInFromTheRight() {
-        XCTAssertEqual(type("1"), 1)
-        XCTAssertEqual(type("12"), 12)
-        XCTAssertEqual(type("123"), 123)
-        XCTAssertEqual(type("1234"), 1_234)
+    func testTypingStartsInTheDollarsPlace() {
+        XCTAssertEqual(type("5").cents, 500)
+        XCTAssertEqual(type("45").cents, 4_500)
+        XCTAssertEqual(type("45.").cents, 4_500)
+        XCTAssertEqual(type("45.2").cents, 4_520)
+        XCTAssertEqual(type("45.24").cents, 4_524)
+        XCTAssertEqual(type(".5").cents, 50)
     }
 
-    func testLeadingZerosAreIgnored() {
-        XCTAssertEqual(type("0"), 0)
-        XCTAssertEqual(type("005"), 5)
-        XCTAssertEqual(CentsEntry.cents(fromDigits: "000120"), 120)
+    func testEmptyFieldIsZero() {
+        XCTAssertEqual(CentsEntry.cents(from: ""), 0)
+        XCTAssertEqual(CentsEntry.cents(from: "."), 0)
     }
 
-    func testBackspaceDropsTheLastDigit() {
-        XCTAssertEqual(backspace(1, from: 1_234), 123)
-        XCTAssertEqual(backspace(3, from: 1_234), 1)
-        XCTAssertEqual(backspace(6, from: 1_234), 0)
-        XCTAssertEqual(backspace(1, from: 0), 0)
+    func testRefusesASecondDecimalPointOrAThirdDecimal() {
+        XCTAssertEqual(type("1.2.3").text, "1.23")
+        XCTAssertEqual(type("1.234").text, "1.23")
+        XCTAssertNil(CentsEntry.sanitize("1..2"))
+        XCTAssertNil(CentsEntry.sanitize("12a"))
     }
 
-    func testPrefilledValueKeepsTakingDigits() {
-        XCTAssertEqual(type("5", from: 1_234), 12_345)
-        XCTAssertEqual(type("99", from: backspace(4, from: 1_234)), 99)
+    func testLeadingZerosAreTrimmed() {
+        XCTAssertEqual(type("05").text, "5")
+        XCTAssertEqual(type("0.5").text, "0.5")
+        XCTAssertEqual(type("00").text, "0")
     }
 
-    func testEditsAnywhereActAtTheEnd() {
-        // A digit typed with the cursor before the decimal point still enters from the right.
-        XCTAssertEqual(CentsEntry.cents(editing: "12.34", to: "125.34"), 12_345)
-        // Deleting the decimal point drops the last digit, like backspace.
-        XCTAssertEqual(CentsEntry.cents(editing: "12.34", to: "1234"), 123)
-        // Deleting a selection drops as many digits as it held.
-        XCTAssertEqual(CentsEntry.cents(editing: "12.34", to: "1"), 1)
+    func testEditingAPrefilledAmount() {
+        // Backspace at the end of $12.34.
+        XCTAssertEqual(CentsEntry.sanitize("12.3").map(CentsEntry.cents(from:)), 1_230)
+        // Inserting a digit before the decimal point.
+        XCTAssertEqual(CentsEntry.sanitize("125.34").map(CentsEntry.cents(from:)), 12_534)
+        // Deleting the decimal point.
+        XCTAssertEqual(CentsEntry.sanitize("1234").map(CentsEntry.cents(from:)), 123_400)
+        // Typing past the cents on a formatted amount is refused.
+        XCTAssertNil(CentsEntry.sanitize("12.345"))
     }
 
-    func testReplacingEverythingStartsOver() {
-        XCTAssertEqual(CentsEntry.cents(editing: "12.34", to: "7"), 7)
-        XCTAssertEqual(CentsEntry.cents(editing: "12.34", to: ""), 0)
+    func testDollarDigitLimit() {
+        XCTAssertEqual(type("12345678").text, "1234567")
+        XCTAssertEqual(type("9999999.99").cents, 999_999_999)
     }
 
-    func testDigitsPastTheLimitAreIgnored() {
-        XCTAssertEqual(type("1234567890"), 123_456_789)
-        XCTAssertEqual(type("5", from: 999_999_999), 999_999_999)
-    }
-
-    func testPastedAmountWithDecimalPointIsReadAsWritten() {
-        XCTAssertEqual(CentsEntry.cents(editing: "0.00", to: "0.0012.5"), 1_250)
-        XCTAssertEqual(CentsEntry.cents(editing: "0.00", to: "$1,234.56"), 123_456)
-        XCTAssertEqual(CentsEntry.cents(editing: "3.00", to: "3.00.99"), 99)
-        // A pasted run of digits enters like typing.
-        XCTAssertEqual(CentsEntry.cents(editing: "0.00", to: "0.001234"), 1_234)
-    }
-
-    func testParseAmount() {
-        XCTAssertEqual(CentsEntry.parseAmount("7"), 700)
-        XCTAssertEqual(CentsEntry.parseAmount(".5"), 50)
-        XCTAssertEqual(CentsEntry.parseAmount("12.345"), 1_234)
-        XCTAssertNil(CentsEntry.parseAmount("."))
-        XCTAssertNil(CentsEntry.parseAmount("1.2.3"))
-        XCTAssertNil(CentsEntry.parseAmount("123456789.00"))
+    func testPastedAmountsDropSymbols() {
+        XCTAssertEqual(CentsEntry.sanitize("$1,234.56"), "1234.56")
+        XCTAssertEqual(CentsEntry.sanitize(" 7 "), "7")
+        XCTAssertNil(CentsEntry.sanitize("12.345"))
     }
 }

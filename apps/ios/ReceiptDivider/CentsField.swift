@@ -1,8 +1,9 @@
 import SwiftUI
 import Foundation
 
-/// Edits a dollar amount the way a cash register does: the field shows the amount with two decimals, each digit typed
-/// shifts in from the right (1, 2, 3, 4 reads $12.34), and backspace drops the last digit.
+/// Edits a dollar amount as typed on the decimal pad: an empty field shows $0.00, and typing starts in the dollars
+/// place, so "5" reads $5 and "45.24" reads $45.24. Focusing a field that holds an amount puts the cursor at the end, and
+/// the text can be edited anywhere like any text field. Once editing ends the amount shows with two decimals.
 struct CentsField: View {
     let title: String
     @Binding var cents: Int
@@ -10,6 +11,7 @@ struct CentsField: View {
     var onFocusChange: ((Bool) -> Void)?
     var fontWeight: Font.Weight?
     @State private var text = ""
+    @State private var selection: TextSelection?
     @FocusState private var isFocused: Bool
 
     init(
@@ -38,8 +40,8 @@ struct CentsField: View {
             HStack(spacing: 1) {
                 Text("$").foregroundStyle(.secondary)
                     .fontWeight(fontWeight)
-                TextField(title, text: $text)
-                    .keyboardType(.numberPad)
+                TextField(title, text: $text, selection: $selection)
+                    .keyboardType(.decimalPad)
                     .focused($isFocused)
                     .multilineTextAlignment(.trailing)
                     .fixedSize()
@@ -52,17 +54,28 @@ struct CentsField: View {
             }
         }
         .onAppear { text = CentsEntry.format(cents) }
-        // The text always mirrors `cents`, so a value set elsewhere, or clamped by the binding, shows even mid-edit.
+        // A value set elsewhere, or clamped by the binding, shows even mid-edit; typed text that already means the
+        // same amount, such as "12." or "12.5", is left alone.
         .onChange(of: cents) { _, newCents in
-            let formatted = CentsEntry.format(newCents)
-            if text != formatted { text = formatted }
+            if isFocused {
+                if CentsEntry.cents(from: text) != newCents { text = CentsEntry.format(newCents) }
+            } else {
+                let formatted = CentsEntry.format(newCents)
+                if text != formatted { text = formatted }
+            }
         }
         .onChange(of: isFocused) { _, focused in
             if isFocusedBinding?.wrappedValue != focused {
                 isFocusedBinding?.wrappedValue = focused
             }
             onFocusChange?(focused)
-            text = CentsEntry.format(cents)
+            if focused {
+                text = cents == 0 ? "" : CentsEntry.format(cents)
+                // After the tap has placed the cursor, move it to the end.
+                DispatchQueue.main.async { selection = TextSelection(insertionPoint: text.endIndex) }
+            } else {
+                text = CentsEntry.format(cents)
+            }
         }
         .onChange(of: isFocusedBinding?.wrappedValue) { _, externalFocused in
             if let externalFocused, isFocused != externalFocused {
@@ -70,68 +83,53 @@ struct CentsField: View {
             }
         }
         .onChange(of: text) { oldText, newText in
-            guard newText != CentsEntry.format(cents) else { return }
-            if isFocused {
-                let newCents = CentsEntry.cents(editing: oldText, to: newText)
-                if newCents != cents { cents = newCents }
+            guard isFocused else { return }
+            guard let cleaned = CentsEntry.sanitize(newText) else {
+                text = oldText
+                return
             }
+            if cleaned != newText { text = cleaned }
+            let typed = CentsEntry.cents(from: cleaned)
+            if typed != cents { cents = typed }
             // Read back through the binding, which may clamp the value.
-            let formatted = CentsEntry.format(cents)
-            if text != formatted { text = formatted }
+            if cents != typed { text = CentsEntry.format(cents) }
         }
         .keyboardDoneButton($isFocused)
     }
 }
 
-/// The cash-register entry rules behind `CentsField`, kept free of SwiftUI so they can be unit tested. The field's text
-/// is always `format(cents)`; an edit is read as the characters it removed and inserted rather than by cursor position,
-/// so digits always enter from the right and deletions always drop the rightmost digits.
+/// The entry rules behind `CentsField`, kept free of SwiftUI so they can be unit tested.
 enum CentsEntry {
     /// $9,999,999.99, which keeps every amount well within `Int`.
-    static let maxDigits = 9
+    static let maxDollarDigits = 7
 
     static func format(_ cents: Int) -> String {
         let cents = max(0, cents)
         return "\(cents / 100)." + String(format: "%02d", cents % 100)
     }
 
-    /// The amount a run of typed digits stands for, ignoring leading zeros and any digits past `maxDigits`.
-    static func cents(fromDigits text: String) -> Int {
-        let digits = text.filter(\.isASCIIDigit).drop(while: { $0 == "0" })
-        return Int(String(digits.prefix(maxDigits))) ?? 0
+    /// The field text an edit leaves, or nil when the edit should be refused. Pasted symbols ("$", ",", spaces) are
+    /// dropped and leading zeros before a digit are trimmed. Refused: a second decimal point, more than two decimals,
+    /// more than `maxDollarDigits` dollar digits, or any other character.
+    static func sanitize(_ text: String) -> String? {
+        let kept = text.filter { !($0 == "$" || $0 == "," || $0.isWhitespace) }
+        guard kept.allSatisfy({ $0.isASCIIDigit || $0 == "." }) else { return nil }
+        let parts = kept.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count <= 2 else { return nil }
+        var dollars = Substring(parts[0])
+        while dollars.count > 1, dollars.first == "0" { dollars = dollars.dropFirst() }
+        guard dollars.count <= maxDollarDigits else { return nil }
+        guard parts.count == 2 else { return String(dollars) }
+        guard parts[1].count <= 2 else { return nil }
+        return "\(dollars).\(parts[1])"
     }
 
-    /// The amount after the field's text changes from `oldText` to `newText`.
-    static func cents(editing oldText: String, to newText: String) -> Int {
-        let old = Array(oldText), new = Array(newText)
-        var prefix = 0
-        while prefix < old.count, prefix < new.count, old[prefix] == new[prefix] { prefix += 1 }
-        var suffix = 0
-        while suffix < old.count - prefix, suffix < new.count - prefix,
-              old[old.count - 1 - suffix] == new[new.count - 1 - suffix] { suffix += 1 }
-        let removed = old[prefix..<(old.count - suffix)]
-        let inserted = String(new[prefix..<(new.count - suffix)])
-
-        // A pasted amount with a decimal point, such as "12.5" or "$1,234.56", replaces the value as written.
-        if inserted.contains("."), let pasted = parseAmount(inserted) { return pasted }
-
-        let oldCents = cents(fromDigits: oldText)
-        var buffer = oldCents > 0 ? String(oldCents) : ""
-        // Deleting only the decimal point still drops a digit, as backspace would.
-        let dropCount = removed.isEmpty ? 0 : max(1, removed.filter(\.isASCIIDigit).count)
-        buffer.removeLast(min(dropCount, buffer.count))
-        return cents(fromDigits: buffer + inserted.filter(\.isASCIIDigit))
-    }
-
-    /// Parses text like "12.5", "$1,234.56" or "7" as dollars, or nil when it is not an amount that fits.
-    static func parseAmount(_ text: String) -> Int? {
-        let cleaned = text.filter { $0.isASCIIDigit || $0 == "." }
-        let parts = cleaned.split(separator: ".", omittingEmptySubsequences: false)
-        guard !cleaned.isEmpty, parts.count <= 2 else { return nil }
-        let dollars = parts[0].drop(while: { $0 == "0" })
-        let fraction = parts.count == 2 ? String(parts[1]) : ""
-        guard dollars.count <= maxDigits - 2, !(dollars.isEmpty && fraction.isEmpty) else { return nil }
-        return (Int(String(dollars)) ?? 0) * 100 + (Int(String((fraction + "00").prefix(2))) ?? 0)
+    /// The amount sanitized text stands for: "" is 0, "5" is 500, "12." is 1200, ".5" is 50.
+    static func cents(from text: String) -> Int {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        let dollars = Int(parts.first.map(String.init) ?? "") ?? 0
+        let fraction = parts.count > 1 ? String((parts[1] + "00").prefix(2)) : "00"
+        return dollars * 100 + (Int(fraction) ?? 0)
     }
 }
 
