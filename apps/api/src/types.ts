@@ -108,8 +108,11 @@ export interface ExpenseAmountsSummary {
  * The fields of an existing expense that can be edited; omitted fields are left as they are. `expectedUpdatedAt` is the
  * `updatedAt` the editor last saw; if the expense has changed since, the edit is refused (409 `stale_expense`).
  */
-/** `category` null clears it; undefined leaves it as it is. */
-export interface ExpenseChanges { description?: string; category?: ExpenseCategory | null; transactionDate?: string; amounts?: ExpenseAmounts; expectedUpdatedAt?: string; }
+/**
+ * `category` null clears it; undefined leaves it as it is. A new `payerId` must already be on the expense or be one of
+ * the creator's friends, and every item owner must still be the payer or have an allocation.
+ */
+export interface ExpenseChanges { description?: string; category?: ExpenseCategory | null; transactionDate?: string; payerId?: UUID; amounts?: ExpenseAmounts; expectedUpdatedAt?: string; }
 export interface AllocationInput { userId: UUID; amountCents: number; }
 
 /** The payer and everyone allocated a share must be the creator or one of the creator's friends. */

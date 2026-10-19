@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { amountsSummary, calculateBalances, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, nextUpdatedAt, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { amountsSummary, calculateBalances, currentAmounts, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, nextUpdatedAt, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
 import type { CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseChanges, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, Relationship, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -181,19 +181,25 @@ export class MemoryRepository implements LedgerRepository {
   }
 
   async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
-    const { description, category, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
+    const { description, category, transactionDate, payerId, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
     const expense = this.visibleExpenses(userId).find((candidate) => candidate.id === expenseId);
     if (!expense) throw new ApiError(404, "expense not found", "not_found");
     requireManager(expense, userId);
     requireCurrentVersion(expectedUpdatedAt, expense.updatedAt);
-    if (amounts) {
-      const input = editedExpenseInput(expense, description ?? expense.description, transactionDate ?? expense.transactionDate, amounts);
+    const payerChanged = payerId !== undefined && payerId !== expense.payerId;
+    if (amounts || payerChanged) {
+      // A new payer is checked against the amounts too, since items without other owners are the payer's.
+      const input = editedExpenseInput(expense, description ?? expense.description, transactionDate ?? expense.transactionDate, amounts ?? currentAmounts(expense), payerId ?? expense.payerId);
       const onExpense = new Set([expense.creatorId, expense.payerId, ...expense.allocations.map((allocation) => allocation.userId)]);
-      this.requireFriends(expense.creatorId, input.allocations.map((allocation) => allocation.userId).filter((id) => !onExpense.has(id)));
+      this.requireFriends(expense.creatorId, [input.payerId, ...input.allocations.map((allocation) => allocation.userId)].filter((id) => !onExpense.has(id)));
       const edited = { totalCents: input.totalCents, items: expenseItems(input), adjustments: expenseAdjustments(input), allocations: input.allocations.map(({ userId: id, amountCents }) => ({ userId: id, amountCents })) };
       if (!sameAmounts(expense, edited)) {
         this.auditEvents.push({ actorId: userId, eventType: "expense.amounts_updated", entityId: expenseId, details: { from: amountsSummary(expense), to: amountsSummary(edited) } });
         Object.assign(expense, edited);
+      }
+      if (payerChanged) {
+        this.auditEvents.push({ actorId: userId, eventType: "expense.payer_changed", entityId: expenseId, details: { from: expense.payerId, to: input.payerId } });
+        expense.payerId = input.payerId;
       }
     }
     if (description !== undefined && expense.description !== description) {

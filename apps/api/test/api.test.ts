@@ -443,6 +443,71 @@ test("amount edits are refused unless they come from the payer or creator and fo
   assert.equal(repository.auditEvents.length, events);
 });
 
+test("an expense's payer or creator can change who paid, which moves the balances and is recorded as a revision", async () => {
+  const { app, repository, dinner } = await setupDinner();
+  const path = `/v1/expenses/${dinner.id}`;
+  assert.equal((await snapshot(app, alex)).balances[jamie], -1500);
+
+  // Jamie paid but didn't add it, and can say Alex paid instead.
+  const changed = await jsonRequest(app, path, jamie, "PATCH", { payerId: alex.toUpperCase(), expectedUpdatedAt: dinner.updatedAt });
+  assert.equal(changed.status, 200);
+  const body = await changed.json() as SavedExpense & { payerId: string };
+  assert.equal(body.payerId, alex);
+  assert.equal(body.totalCents, 3000);
+  assert.ok(Date.parse(body.updatedAt) > Date.parse(dinner.updatedAt));
+  assert.deepEqual(repository.auditEvents, [{ actorId: jamie, eventType: "expense.payer_changed", entityId: dinner.id, details: { from: jamie, to: alex } }]);
+  assert.equal((await snapshot(app, alex)).balances[jamie], 1500);
+  assert.equal((await snapshot(app, jamie)).balances[alex], -1500);
+
+  // Jamie is no longer the payer and didn't add it, so can't change it back.
+  assert.equal((await jsonRequest(app, path, jamie, "PATCH", { payerId: jamie })).status, 403);
+  // An edit based on the version before the change is stale.
+  const stale = await jsonRequest(app, path, alex, "PATCH", { payerId: jamie, expectedUpdatedAt: dinner.updatedAt });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json() as { error: { code: string } }).error.code, "stale_expense");
+  assert.equal((await snapshot(app, alex)).expenses[0]!.payerId, alex);
+
+  // The creator may name a friend who isn't on it yet, alongside new amounts.
+  const withMorgan = await jsonRequest(app, path, alex, "PATCH", { ...dinnerAmounts(1400), payerId: morgan, expectedUpdatedAt: body.updatedAt });
+  assert.equal(withMorgan.status, 200);
+  assert.equal((await withMorgan.json() as { payerId: string }).payerId, morgan);
+  assert.deepEqual(repository.auditEvents.slice(-2).map((event) => event.eventType), ["expense.amounts_updated", "expense.payer_changed"]);
+  assert.equal((await snapshot(app, morgan)).balances[alex], 1700);
+});
+
+test("a payer change is refused unless it comes from the payer or creator and leaves every item with a valid owner", async () => {
+  const { app, repository, dinner } = await setupDinner();
+  const path = `/v1/expenses/${dinner.id}`;
+  const { updatedAt } = dinner;
+  // Morgan isn't on it; the stranger isn't the creator's friend; the payer must be a UUID.
+  assert.equal((await jsonRequest(app, path, morgan, "PATCH", { payerId: morgan })).status, 404);
+  const strangerPays = await jsonRequest(app, path, alex, "PATCH", { payerId: stranger });
+  assert.equal(strangerPays.status, 422);
+  assert.equal((await strangerPays.json() as { error: { code: string } }).error.code, "invalid_person");
+  assert.equal((await jsonRequest(app, path, alex, "PATCH", { payerId: "alex" })).status, 400);
+  assert.equal((await jsonRequest(app, path, alex, "PATCH", { payerId: 7 })).status, 400);
+
+  // Morgan has a share of Alex's lunch but neither paid nor added it.
+  const lunch = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("51000000-0000-4000-8000-000000000002", alex, [[jamie, 1000], [morgan, 1000]], {
+    description: "Lunch", items: [{ name: "Soup", amountCents: 2000 }],
+  }));
+  assert.equal(lunch.status, 201);
+  const lunchId = (await lunch.json() as SavedExpense).id;
+  const forbidden = await jsonRequest(app, `/v1/expenses/${lunchId}`, morgan, "PATCH", { payerId: morgan });
+  assert.equal(forbidden.status, 403);
+  assert.equal((await forbidden.json() as { error: { code: string } }).error.code, "forbidden");
+  // The soup has no other owner, so it's Alex's as payer; Alex has no share, so Jamie can't become the payer without new amounts.
+  const orphaned = await jsonRequest(app, `/v1/expenses/${lunchId}`, alex, "PATCH", { payerId: jamie });
+  assert.equal(orphaned.status, 422);
+  assert.equal((await orphaned.json() as { error: { code: string } }).error.code, "invalid_owner");
+
+  // Nothing was changed by any of them.
+  const after = await snapshot(app, alex);
+  assert.deepEqual(after.expenses.map((saved) => saved.payerId).sort(), [alex, jamie]);
+  assert.equal((after.expenses.find((saved) => saved.id === dinner.id) as unknown as SavedExpense).updatedAt, updatedAt);
+  assert.equal(repository.auditEvents.length, 0);
+});
+
 test("raising the tip after settling up leaves the new difference owed", async () => {
   const { app, dinner } = await setupDinner();
   assert.equal((await jsonRequest(app, "/v1/payments", alex, "POST", { clientRequestId: "52000000-0000-4000-8000-000000000001", fromUserId: alex, toUserId: jamie, amountCents: 1500, transactionDate: "2026-09-19" })).status, 201);

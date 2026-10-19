@@ -127,6 +127,7 @@ export function createApp(
     if (body.description !== undefined) changes.description = stringField(body, "description");
     if (body.category !== undefined) changes.category = body.category as ExpenseCategory | null;
     if (body.transactionDate !== undefined) changes.transactionDate = stringField(body, "transactionDate");
+    if (body.payerId !== undefined) changes.payerId = stringField(body, "payerId");
     if (body.expectedUpdatedAt !== undefined) changes.expectedUpdatedAt = stringField(body, "expectedUpdatedAt");
     const amountFields = ["totalCents", "items", "adjustments", "allocations"] as const;
     const sent = amountFields.filter((key) => body[key] !== undefined);

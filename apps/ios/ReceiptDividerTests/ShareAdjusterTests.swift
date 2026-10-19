@@ -147,4 +147,9 @@ final class UpdateExpenseEncodingTests: XCTestCase {
         XCTAssertEqual(try json(UpdateAPIExpense(category: "movie")), #"{"category":"movie"}"#)
         XCTAssertEqual(try json(UpdateAPIExpense(category: .some(nil))), #"{"category":null}"#)
     }
+
+    func testPayerIsSentAsPayerId() throws {
+        let payer = UUID(uuidString: "00000000-0000-4000-8000-000000000002")!
+        XCTAssertEqual(try json(UpdateAPIExpense(payerId: payer)), #"{"payerId":"00000000-0000-4000-8000-000000000002"}"#)
+    }
 }

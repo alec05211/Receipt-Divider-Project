@@ -239,13 +239,15 @@ struct CreateAPIExpense: Encodable, Sendable {
 }
 
 /// The editable fields of an expense; nil fields are left out of the request. The four amount fields are sent together
-/// or not at all, and replace the expense's amounts. `expectedUpdatedAt` is the `updatedAt` the edit started from; the
+/// or not at all, and replace the expense's amounts. A new `payerId` must leave every item owned by the payer or someone
+/// with an allocation. `expectedUpdatedAt` is the `updatedAt` the edit started from; the
 /// server refuses the edit with "stale_expense" if the expense has changed since. `category` is `.some(nil)` to clear it,
 /// which encodes as null.
 struct UpdateAPIExpense: Encodable, Sendable {
     var description: String?
     var category: String??
     var transactionDate: String?
+    var payerId: UUID?
     var totalCents: Int?
     var items: [APIExpenseItem]?
     var adjustments: [APIAdjustment]?

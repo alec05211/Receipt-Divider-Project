@@ -41,13 +41,14 @@ export function requireDescription(value: unknown): string {
  * are checked against the expense once it's loaded, by `editedExpenseInput`.
  */
 export function validateExpenseChanges(changes: ExpenseChanges): ExpenseChanges {
-  if (changes.description === undefined && changes.category === undefined && changes.transactionDate === undefined && changes.amounts === undefined) {
-    throw new ApiError(400, "provide description, category, transactionDate, or amounts", "invalid_input");
+  if (changes.description === undefined && changes.category === undefined && changes.transactionDate === undefined && changes.payerId === undefined && changes.amounts === undefined) {
+    throw new ApiError(400, "provide description, category, transactionDate, payerId, or amounts", "invalid_input");
   }
   const result: ExpenseChanges = {};
   if (changes.description !== undefined) result.description = requireDescription(changes.description);
   if (changes.category !== undefined) result.category = optionalCategory(changes.category);
   if (changes.transactionDate !== undefined) { requireDate(changes.transactionDate); result.transactionDate = changes.transactionDate; }
+  if (changes.payerId !== undefined) result.payerId = requireUuid(changes.payerId, "payerId");
   if (changes.amounts !== undefined) result.amounts = changes.amounts;
   if (changes.expectedUpdatedAt !== undefined) {
     if (typeof changes.expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(changes.expectedUpdatedAt))) throw new ApiError(400, "expectedUpdatedAt must be an ISO 8601 date-time", "invalid_input");
@@ -69,12 +70,12 @@ export function nextUpdatedAt(previous: string): string {
 }
 
 /**
- * The expense as it would be saved with new amounts, checked by the same rules as a new expense, with its IDs
- * lowercased. Payer, currency and evidence stay as they are; category is edited separately.
+ * The expense as it would be saved with new amounts and payer, checked by the same rules as a new expense, with its IDs
+ * lowercased. Currency and evidence stay as they are; category is edited separately.
  */
-export function editedExpenseInput(expense: Expense, description: string, transactionDate: string, amounts: ExpenseAmounts): CreateExpenseInput {
+export function editedExpenseInput(expense: Expense, description: string, transactionDate: string, amounts: ExpenseAmounts, payerId: UUID): CreateExpenseInput {
   const input: CreateExpenseInput = {
-    clientRequestId: expense.clientRequestId, description, transactionDate, payerId: expense.payerId, currency: expense.currency,
+    clientRequestId: expense.clientRequestId, description, transactionDate, payerId, currency: expense.currency,
     totalCents: amounts.totalCents, items: amounts.items, adjustments: amounts.adjustments, allocations: amounts.allocations,
   };
   validateExpenseAmounts(input);
@@ -82,6 +83,11 @@ export function editedExpenseInput(expense: Expense, description: string, transa
 }
 
 type Amounts = Pick<Expense, "totalCents" | "items" | "adjustments" | "allocations">;
+
+/** An expense's saved amounts, copied so validating them as an edit can't change the expense. */
+export function currentAmounts(expense: Expense): ExpenseAmounts {
+  return structuredClone({ totalCents: expense.totalCents, items: expense.items, adjustments: expense.adjustments, allocations: expense.allocations.map(({ userId, amountCents }) => ({ userId, amountCents })) });
+}
 
 /** Whether two versions of an expense have the same amounts, whatever order allocations and item owners are listed in. */
 export function sameAmounts(left: Amounts, right: Amounts): boolean {

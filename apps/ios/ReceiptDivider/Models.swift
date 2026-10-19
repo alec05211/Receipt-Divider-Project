@@ -504,12 +504,12 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
         var shares: [UUID: Int]
     }
 
-    /// Applies a name, category, or date edit immediately and restores the previous values if the server rejects it. New `amounts`
-    /// are saved first and then the ledger reloads, since balances come from the server; if someone changed the expense
+    /// Applies a name, category, or date edit immediately and restores the previous values if the server rejects it. A new
+    /// `payer` or new `amounts` are saved first and then the ledger reloads, since balances come from the server; if someone changed the expense
     /// in the meantime, the ledger reloads and `LedgerAPIClientError.staleExpense` is thrown. Only the payer or creator
     /// may edit; a blank name is ignored, and a call that changes nothing does nothing.
-    func updateExpense(_ expenseID: UUID, description: String? = nil, category: ExpenseCategory?? = nil, transactionDate: Date? = nil, amounts: AmountsEdit? = nil,
-                       accessToken: String) async throws {
+    func updateExpense(_ expenseID: UUID, description: String? = nil, category: ExpenseCategory?? = nil, transactionDate: Date? = nil, payer: UUID? = nil,
+                       amounts: AmountsEdit? = nil, accessToken: String) async throws {
         guard let api else { throw LedgerAPIClientError.configurationMissing }
         guard let index = expenses.firstIndex(where: { $0.id == expenseID }) else { return }
         let previous = expenses[index]
@@ -522,6 +522,11 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             changes.allocations = Self.apiAllocations(amounts.shares)
             changes.expectedUpdatedAt = previous.updatedAt
         }
+        if let payer, payer != previous.payer {
+            changes.payerId = payer
+            changes.expectedUpdatedAt = previous.updatedAt
+        }
+        let reloads = changes.payerId != nil || amounts != nil
         if let name = description?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty, name != previous.description {
             edited.description = name
             changes.description = name
@@ -537,12 +542,12 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                 changes.transactionDate = day
             }
         }
-        guard changes.description != nil || changes.category != nil || changes.transactionDate != nil || amounts != nil else { return }
+        guard changes.description != nil || changes.category != nil || changes.transactionDate != nil || reloads else { return }
         expenses[index] = edited
         do {
             let saved = try await api.updateExpense(id: expenseID, changes: changes, token: accessToken)
             if let index = expenses.firstIndex(where: { $0.id == expenseID }) {
-                if amounts != nil {
+                if reloads {
                     expenses[index] = Self.expense(from: saved)
                 } else {
                     expenses[index].description = saved.description
@@ -551,7 +556,7 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
                     expenses[index].updatedAt = saved.updatedAt
                 }
             }
-            if amounts != nil {
+            if reloads {
                 do { try await refresh(accessToken: accessToken) }
                 catch { syncError = error.localizedDescription }
             }

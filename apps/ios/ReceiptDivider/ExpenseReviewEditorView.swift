@@ -593,6 +593,7 @@ struct ExpenseReviewEditorView: View {
                         description: descriptionBinding.wrappedValue,
                         category: .some(categoryBinding.wrappedValue),
                         transactionDate: dateBinding.wrappedValue,
+                        payer: payerBinding.wrappedValue,
                         amounts: edit,
                         accessToken: token
                     )

@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { amountsSummary, calculateBalances, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import { amountsSummary, calculateBalances, currentAmounts, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
 import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseAmountsSummary, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
@@ -185,7 +185,7 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
-    const { description, category, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
+    const { description, category, transactionDate, payerId, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
     return this.sql.begin(async (tx) => {
       // The row lock holds off concurrent edits until this one commits, so the version check below can't race.
       const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
@@ -195,11 +195,13 @@ export class PostgresRepository implements LedgerRepository {
       const revisions: Array<{ eventType: string; from: string | null | ExpenseAmountsSummary; to: string | null | ExpenseAmountsSummary }> = [];
       const currentDate = toDay(row.transaction_date);
       let totalCents = Number(row.total_cents);
-      if (amounts) {
+      const payerChanged = payerId !== undefined && payerId !== row.payer_id;
+      if (amounts || payerChanged) {
         const current = await this.loadExpense(tx, row);
-        const input = editedExpenseInput(current, description ?? current.description, transactionDate ?? currentDate, amounts);
+        // A new payer is checked against the amounts too, since items without other owners are the payer's.
+        const input = editedExpenseInput(current, description ?? current.description, transactionDate ?? currentDate, amounts ?? currentAmounts(current), payerId ?? current.payerId);
         const onExpense = new Set([current.creatorId, current.payerId, ...current.allocations.map((a) => a.userId)]);
-        await requireFriends(tx, current.creatorId, input.allocations.map((a) => a.userId).filter((id) => !onExpense.has(id)));
+        await requireFriends(tx, current.creatorId, [input.payerId, ...input.allocations.map((a) => a.userId)].filter((id) => !onExpense.has(id)));
         const edited = { totalCents: input.totalCents, items: expenseItems(input), adjustments: expenseAdjustments(input), allocations: input.allocations };
         if (!sameAmounts(current, edited)) {
           revisions.push({ eventType: "expense.amounts_updated", from: amountsSummary(current), to: amountsSummary(edited) });
@@ -213,13 +215,14 @@ export class PostgresRepository implements LedgerRepository {
           for (const allocation of edited.allocations) await tx`INSERT INTO expense_allocations (expense_id, user_id, amount_cents) VALUES (${expenseId}, ${allocation.userId}, ${allocation.amountCents})`;
           for (const [position, item] of edited.items.entries()) for (const ownerId of item.ownerIds) await tx`INSERT INTO expense_item_owners (expense_id, position, user_id) VALUES (${expenseId}, ${position}, ${ownerId})`;
         }
+        if (payerChanged) revisions.push({ eventType: "expense.payer_changed", from: current.payerId, to: input.payerId });
       }
       if (description !== undefined && row.description !== description) revisions.push({ eventType: "expense.description_changed", from: row.description, to: description });
       const currentCategory = row.category ?? null;
       if (category !== undefined && currentCategory !== category) revisions.push({ eventType: "expense.category_changed", from: currentCategory, to: category });
       if (transactionDate !== undefined && currentDate !== transactionDate) revisions.push({ eventType: "expense.date_changed", from: currentDate, to: transactionDate });
       // Every successful edit moves updated_at, by at least a millisecond so the API's millisecond timestamps differ.
-      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, category=${category === undefined ? currentCategory : category}, transaction_date=${transactionDate ?? currentDate}, total_cents=${totalCents}, updated_at=greatest(now(), updated_at + interval '1 millisecond') WHERE id=${expenseId} RETURNING *`;
+      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, payer_id=${payerId ?? row.payer_id}, category=${category === undefined ? currentCategory : category}, transaction_date=${transactionDate ?? currentDate}, total_cents=${totalCents}, updated_at=greatest(now(), updated_at + interval '1 millisecond') WHERE id=${expenseId} RETURNING *`;
       for (const { eventType, from, to } of revisions) {
         await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, ${eventType}, ${expenseId}, ${tx.json({ from, to } as any)})`;
       }
