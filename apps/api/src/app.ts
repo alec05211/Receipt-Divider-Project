@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { hasImageSignature, requireUuid } from "./domain.ts";
 import { createOpenAIReceiptParser } from "./receipt-vision.ts";
-import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UserSettings, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, EvidenceKind, ExpenseAmounts, ExpenseChanges, LedgerRepository, ReceiptVisionParser, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 const avatarLimit = 5 * 1024 * 1024;
@@ -126,6 +126,11 @@ export function createApp(
     const changes: ExpenseChanges = {};
     if (body.description !== undefined) changes.description = stringField(body, "description");
     if (body.transactionDate !== undefined) changes.transactionDate = stringField(body, "transactionDate");
+    if (body.expectedUpdatedAt !== undefined) changes.expectedUpdatedAt = stringField(body, "expectedUpdatedAt");
+    const amountFields = ["totalCents", "items", "adjustments", "allocations"] as const;
+    const sent = amountFields.filter((key) => body[key] !== undefined);
+    if (sent.length && sent.length < amountFields.length) throw new ApiError(400, "totalCents, items, adjustments, and allocations must be sent together", "invalid_input");
+    if (sent.length) changes.amounts = { totalCents: body.totalCents, items: body.items, adjustments: body.adjustments, allocations: body.allocations } as ExpenseAmounts;
     return context.json(await repository.updateExpense(userId(context), requireUuid(context.req.param("expenseId"), "expenseId"), changes));
   });
   app.delete("/v1/expenses/:expenseId", async (context) => {

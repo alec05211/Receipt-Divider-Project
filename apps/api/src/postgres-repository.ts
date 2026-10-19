@@ -1,6 +1,6 @@
 import postgres from "postgres";
-import { calculateBalances, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
-import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
+import { amountsSummary, calculateBalances, editedExpenseInput, expenseAdjustments, expenseItems, filterTransactions, fingerprint, imageEtag, requireCurrentVersion, sameAmounts, searchTerm, validateExpenseChanges, validateExpense, validatePayment } from "./domain.ts";
+import type { AllocationInput, CreateExpenseInput, CreatePaymentInput, EvidenceAsset, EvidenceKind, Expense, ExpenseAdjustment, ExpenseAmountsSummary, ExpenseChanges, ExpenseItem, FriendConnection, LedgerPerson, LedgerRepository, LedgerSnapshot, Payment, Profile, ProfileIdentity, SavedFilter, StoredImage, UserSearchResult, UserSettings, UUID } from "./types.ts";
 import { ApiError } from "./types.ts";
 
 export class PostgresRepository implements LedgerRepository {
@@ -185,19 +185,41 @@ export class PostgresRepository implements LedgerRepository {
   }
 
   async updateExpense(userId: UUID, expenseId: UUID, changes: ExpenseChanges): Promise<Expense> {
-    const { description, transactionDate } = validateExpenseChanges(changes);
+    const { description, transactionDate, amounts, expectedUpdatedAt } = validateExpenseChanges(changes);
     return this.sql.begin(async (tx) => {
+      // The row lock holds off concurrent edits until this one commits, so the version check below can't race.
       const [row] = await tx`SELECT e.* FROM expenses e WHERE e.id=${expenseId} AND e.status='active' AND ${visibleTo(tx, userId)} FOR UPDATE OF e`;
       if (!row) throw new ApiError(404, "expense not found", "not_found");
       requireManager(row, userId);
-      const revisions: Array<{ eventType: string; from: string; to: string }> = [];
-      if (description !== undefined && row.description !== description) revisions.push({ eventType: "expense.description_changed", from: row.description, to: description });
+      requireCurrentVersion(expectedUpdatedAt, toIso(row.updated_at));
+      const revisions: Array<{ eventType: string; from: string | ExpenseAmountsSummary; to: string | ExpenseAmountsSummary }> = [];
       const currentDate = toDay(row.transaction_date);
+      let totalCents = Number(row.total_cents);
+      if (amounts) {
+        const current = await this.loadExpense(tx, row);
+        const input = editedExpenseInput(current, description ?? current.description, transactionDate ?? currentDate, amounts);
+        const onExpense = new Set([current.creatorId, current.payerId, ...current.allocations.map((a) => a.userId)]);
+        await requireFriends(tx, current.creatorId, input.allocations.map((a) => a.userId).filter((id) => !onExpense.has(id)));
+        const edited = { totalCents: input.totalCents, items: expenseItems(input), adjustments: expenseAdjustments(input), allocations: input.allocations };
+        if (!sameAmounts(current, edited)) {
+          revisions.push({ eventType: "expense.amounts_updated", from: amountsSummary(current), to: amountsSummary(edited) });
+          totalCents = edited.totalCents;
+          // Item owners cascade with their items.
+          await tx`DELETE FROM expense_items WHERE expense_id=${expenseId}`;
+          await tx`DELETE FROM expense_adjustments WHERE expense_id=${expenseId}`;
+          await tx`DELETE FROM expense_allocations WHERE expense_id=${expenseId}`;
+          for (const [position, item] of edited.items.entries()) await tx`INSERT INTO expense_items (expense_id, position, name, amount_cents, local_offset_cents, global_offset_cents, kind, taxed) VALUES (${expenseId}, ${position}, ${item.name}, ${item.amountCents}, ${item.localOffsetCents}, ${item.globalOffsetCents}, ${item.kind}, ${item.taxed})`;
+          for (const [position, adjustment] of edited.adjustments.entries()) await tx`INSERT INTO expense_adjustments (expense_id, position, kind, amount_cents, rate) VALUES (${expenseId}, ${position}, ${adjustment.kind}, ${adjustment.amountCents}, ${adjustment.rate})`;
+          for (const allocation of edited.allocations) await tx`INSERT INTO expense_allocations (expense_id, user_id, amount_cents) VALUES (${expenseId}, ${allocation.userId}, ${allocation.amountCents})`;
+          for (const [position, item] of edited.items.entries()) for (const ownerId of item.ownerIds) await tx`INSERT INTO expense_item_owners (expense_id, position, user_id) VALUES (${expenseId}, ${position}, ${ownerId})`;
+        }
+      }
+      if (description !== undefined && row.description !== description) revisions.push({ eventType: "expense.description_changed", from: row.description, to: description });
       if (transactionDate !== undefined && currentDate !== transactionDate) revisions.push({ eventType: "expense.date_changed", from: currentDate, to: transactionDate });
-      if (!revisions.length) return this.loadExpense(tx, row);
-      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, transaction_date=${transactionDate ?? currentDate} WHERE id=${expenseId} RETURNING *`;
+      // Every successful edit moves updated_at, by at least a millisecond so the API's millisecond timestamps differ.
+      const [updated] = await tx`UPDATE expenses SET description=${description ?? row.description}, transaction_date=${transactionDate ?? currentDate}, total_cents=${totalCents}, updated_at=greatest(now(), updated_at + interval '1 millisecond') WHERE id=${expenseId} RETURNING *`;
       for (const { eventType, from, to } of revisions) {
-        await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, ${eventType}, ${expenseId}, ${tx.json({ from, to })})`;
+        await tx`INSERT INTO audit_events (actor_id, event_type, entity_id, details) VALUES (${userId}, ${eventType}, ${expenseId}, ${tx.json({ from, to } as any)})`;
       }
       return this.loadExpense(tx, updated!);
     });
@@ -312,7 +334,7 @@ function mapItems(rows: any[], owners: any[]): ExpenseItem[] {
 }
 function mapAdjustment(row: any): ExpenseAdjustment { return { kind: row.kind, amountCents: Number(row.amount_cents), rate: row.rate === null ? null : Number(row.rate) }; }
 function mapAllocation(row: any): AllocationInput { return { userId: row.user_id, amountCents: Number(row.amount_cents) }; }
-function mapExpense(row: any, items: ExpenseItem[], adjustments: ExpenseAdjustment[], allocations: AllocationInput[], evidenceIds: UUID[]): Expense { return { id: row.id, creatorId: row.creator_id, clientRequestId: row.client_request_id, description: row.description, category: row.category ?? null, transactionDate: toDay(row.transaction_date), payerId: row.payer_id, currency: row.currency, totalCents: Number(row.total_cents), items, adjustments, allocations, evidenceIds, createdAt: toIso(row.created_at) }; }
+function mapExpense(row: any, items: ExpenseItem[], adjustments: ExpenseAdjustment[], allocations: AllocationInput[], evidenceIds: UUID[]): Expense { return { id: row.id, creatorId: row.creator_id, clientRequestId: row.client_request_id, description: row.description, category: row.category ?? null, transactionDate: toDay(row.transaction_date), payerId: row.payer_id, currency: row.currency, totalCents: Number(row.total_cents), items, adjustments, allocations, evidenceIds, createdAt: toIso(row.created_at), updatedAt: toIso(row.updated_at) }; }
 function mapPayment(row: any): Payment { return { id: row.id, recorderId: row.recorder_id, clientRequestId: row.client_request_id, fromUserId: row.from_user_id, toUserId: row.to_user_id, amountCents: Number(row.amount_cents), transactionDate: toDay(row.transaction_date), createdAt: toIso(row.created_at) }; }
 function mapFriend(row: any, direction: FriendConnection["direction"]): FriendConnection { return { requestId: row.request_id, userId: row.user_id, displayName: row.display_name, username: row.username, avatarEtag: row.avatar_etag, status: row.status, direction }; }
 function toBytes(value: unknown): Uint8Array { if (value instanceof Uint8Array) return value; throw new Error("PostgreSQL returned an unexpected bytea value"); }

@@ -14,14 +14,15 @@ function request(app: ReturnType<typeof createApp>, path: string, userId: string
 async function jsonRequest(app: ReturnType<typeof createApp>, path: string, userId: string, method: string, body: unknown) { return request(app, path, userId, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); }
 
 async function setup(developerIds = new Set<string>()) {
-  const app = createApp(new MemoryRepository(developerIds), async (context) => context.req.header("x-user-id") ?? null);
+  const repository = new MemoryRepository(developerIds);
+  const app = createApp(repository, async (context) => context.req.header("x-user-id") ?? null);
   for (const user of [alex, jamie, stranger, morgan]) assert.equal((await request(app, "/v1/profile", user, { method: "PUT" })).status, 200);
-  return { app };
+  return { app, repository };
 }
 
 /** Alex is friends with Jamie and Morgan; the stranger is nobody's friend. */
 async function setupFriends(developerIds?: Set<string>) {
-  const { app } = await setup(developerIds);
+  const { app, repository } = await setup(developerIds);
   const names: Array<[string, string, string]> = [[alex, "Alex", "alex"], [jamie, "Jamie", "jamie"], [stranger, "Sam", "stranger"], [morgan, "Morgan", "morgan"]];
   for (const [user, firstName, username] of names) assert.equal((await jsonRequest(app, "/v1/profile/identity", user, "PUT", { firstName, lastName: "Test", username })).status, 200);
   for (const [friend, username] of [[jamie, "jamie"], [morgan, "morgan"]] as const) {
@@ -29,7 +30,7 @@ async function setupFriends(developerIds?: Set<string>) {
     const { requestId } = await invite.json() as { requestId: string };
     assert.equal((await jsonRequest(app, `/v1/friend-requests/${requestId}/accept`, friend, "POST", {})).status, 200);
   }
-  return { app };
+  return { app, repository };
 }
 
 interface Snapshot { people: Array<{ userId: string }>; expenses: Array<{ id: string; description: string; payerId: string }>; payments: unknown[]; balances: Record<string, number>; netBalance: number; appliedFilterId?: string; }
@@ -308,6 +309,134 @@ test("only the payer or creator can edit an expense's name and date, and each ch
   // The creator can edit it too, though someone else paid.
   assert.equal((await jsonRequest(app, `/v1/expenses/${id}`, alex, "PATCH", { description: "Market run" })).status, 200);
   assert.deepEqual(repository.auditEvents.at(-1), { actorId: alex, eventType: "expense.description_changed", entityId: id, details: { from: "Farmers market", to: "Market run" } });
+});
+
+interface SavedExpense { id: string; totalCents: number; updatedAt: string; createdAt: string; description: string; items: Array<{ name: string; amountCents: number; kind: string; ownerIds: string[] }>; adjustments: Array<{ kind: string; amountCents: number; rate: number | null }>; allocations: Array<{ userId: string; amountCents: number }>; }
+
+/** Alex adds a $30 dinner Jamie paid: $20 of food split evenly, a $10 tip split evenly. */
+async function setupDinner() {
+  const { app, repository } = await setupFriends();
+  const created = await jsonRequest(app, "/v1/expenses", alex, "POST", expense("51000000-0000-4000-8000-000000000001", jamie, [[alex, 1500], [jamie, 1500]], {
+    description: "Dinner",
+    items: [{ name: "Pasta", amountCents: 2000, ownerIds: [alex, jamie] }, { name: "Tip", amountCents: 1000, kind: "tip", ownerIds: [alex, jamie] }],
+    adjustments: [{ kind: "tip", amountCents: 1000, rate: null }],
+  }));
+  assert.equal(created.status, 201);
+  return { app, repository, dinner: await created.json() as SavedExpense };
+}
+
+/** The dinner's amounts with the tip raised to `tipCents`, split evenly. */
+function dinnerAmounts(tipCents: number, extra: Record<string, unknown> = {}) {
+  const totalCents = 2000 + tipCents;
+  return {
+    totalCents,
+    items: [{ name: "Pasta", amountCents: 2000, ownerIds: [alex, jamie] }, { name: "Tip", amountCents: tipCents, kind: "tip", ownerIds: [alex, jamie] }],
+    adjustments: [{ kind: "tip", amountCents: tipCents, rate: null }],
+    allocations: [{ userId: alex, amountCents: totalCents / 2 }, { userId: jamie, amountCents: totalCents / 2 }],
+    ...extra,
+  };
+}
+
+test("an expense's payer or creator can edit its amounts, which replace the old ones and are recorded as a revision", async () => {
+  const { app, repository, dinner } = await setupDinner();
+  assert.equal(dinner.updatedAt, dinner.createdAt);
+
+  // Jamie paid but didn't add it, and can still raise the tip.
+  const edited = await jsonRequest(app, `/v1/expenses/${dinner.id}`, jamie, "PATCH", dinnerAmounts(1400, { expectedUpdatedAt: dinner.updatedAt }));
+  assert.equal(edited.status, 200);
+  const body = await edited.json() as SavedExpense;
+  assert.equal(body.totalCents, 3400);
+  assert.deepEqual(body.adjustments, [{ kind: "tip", amountCents: 1400, rate: null }]);
+  assert.deepEqual(body.allocations, [{ userId: alex, amountCents: 1700 }, { userId: jamie, amountCents: 1700 }]);
+  assert.deepEqual(body.items.map((item) => [item.name, item.amountCents, item.kind, item.ownerIds]), [["Pasta", 2000, "item", [alex, jamie]], ["Tip", 1400, "tip", [alex, jamie]]]);
+  assert.equal(body.description, "Dinner");
+  assert.ok(Date.parse(body.updatedAt) > Date.parse(dinner.updatedAt));
+  assert.deepEqual(repository.auditEvents, [{
+    actorId: jamie, eventType: "expense.amounts_updated", entityId: dinner.id, details: {
+      from: { totalCents: 3000, adjustments: [{ kind: "tip", amountCents: 1000 }], allocations: [{ userId: alex, amountCents: 1500 }, { userId: jamie, amountCents: 1500 }] },
+      to: { totalCents: 3400, adjustments: [{ kind: "tip", amountCents: 1400 }], allocations: [{ userId: alex, amountCents: 1700 }, { userId: jamie, amountCents: 1700 }] },
+    },
+  }]);
+
+  // Everyone on it sees the new version, with its new updatedAt.
+  const seen = (await snapshot(app, alex)).expenses[0] as unknown as SavedExpense;
+  assert.equal(seen.totalCents, 3400); assert.equal(seen.updatedAt, body.updatedAt);
+
+  // The edit was made against the old version, so repeating it is refused and changes nothing.
+  const stale = await jsonRequest(app, `/v1/expenses/${dinner.id}`, alex, "PATCH", dinnerAmounts(2000, { expectedUpdatedAt: dinner.updatedAt }));
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json() as { error: { code: string } }).error.code, "stale_expense");
+  assert.equal(((await snapshot(app, alex)).expenses[0] as unknown as SavedExpense).totalCents, 3400);
+  assert.equal(repository.auditEvents.length, 1);
+
+  // A name-only edit also moves updatedAt, so an amount edit based on the version before it is stale.
+  const renamed = await jsonRequest(app, `/v1/expenses/${dinner.id}`, alex, "PATCH", { description: "Dinner out", expectedUpdatedAt: body.updatedAt });
+  assert.equal(renamed.status, 200);
+  const renamedBody = await renamed.json() as SavedExpense;
+  assert.ok(Date.parse(renamedBody.updatedAt) > Date.parse(body.updatedAt));
+  assert.equal((await jsonRequest(app, `/v1/expenses/${dinner.id}`, alex, "PATCH", dinnerAmounts(2000, { expectedUpdatedAt: body.updatedAt }))).status, 409);
+
+  // The creator can edit amounts too, and may add a friend who wasn't on it.
+  const withMorgan = await jsonRequest(app, `/v1/expenses/${dinner.id}`, alex, "PATCH", {
+    totalCents: 3000, items: [{ name: "Pasta", amountCents: 3000, ownerIds: [alex, jamie, morgan] }], adjustments: [],
+    allocations: [{ userId: alex, amountCents: 1000 }, { userId: jamie, amountCents: 1000 }, { userId: morgan.toUpperCase(), amountCents: 1000 }],
+    expectedUpdatedAt: renamedBody.updatedAt,
+  });
+  assert.equal(withMorgan.status, 200);
+  assert.deepEqual((await withMorgan.json() as SavedExpense).adjustments, []);
+  assert.equal((await snapshot(app, morgan)).balances[jamie], -1000);
+  assert.equal(repository.auditEvents.at(-1)!.eventType, "expense.amounts_updated");
+});
+
+test("amount edits are refused unless they come from the payer or creator and follow the rules for a new expense", async () => {
+  const { app, repository, dinner } = await setupDinner();
+  const path = `/v1/expenses/${dinner.id}`;
+  // Morgan isn't on it; once Morgan has a share they still can't edit it.
+  assert.equal((await jsonRequest(app, path, morgan, "PATCH", dinnerAmounts(1400))).status, 404);
+  const shared = await jsonRequest(app, path, alex, "PATCH", { ...dinnerAmounts(1000), allocations: [{ userId: alex, amountCents: 1000 }, { userId: jamie, amountCents: 1000 }, { userId: morgan, amountCents: 1000 }] });
+  assert.equal(shared.status, 200);
+  const forbidden = await jsonRequest(app, path, morgan, "PATCH", dinnerAmounts(1400));
+  assert.equal(forbidden.status, 403);
+  assert.equal((await forbidden.json() as { error: { code: string } }).error.code, "forbidden");
+  const events = repository.auditEvents.length;
+  const { updatedAt } = (await snapshot(app, alex)).expenses[0] as unknown as SavedExpense;
+
+  // The amount fields go together.
+  const { totalCents, items, adjustments, allocations } = dinnerAmounts(1400);
+  for (const body of [{ totalCents }, { items, adjustments, allocations }, { totalCents, items, adjustments }, { description: "Dinner", allocations }]) {
+    const response = await jsonRequest(app, path, jamie, "PATCH", body);
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.equal((await response.json() as { error: { code: string } }).error.code, "invalid_input");
+  }
+  // Allocations must add up to the total, exactly as for a new expense.
+  const mismatch = await jsonRequest(app, path, jamie, "PATCH", { ...dinnerAmounts(1400), totalCents: 3500 });
+  assert.equal(mismatch.status, 422);
+  assert.equal((await mismatch.json() as { error: { code: string } }).error.code, "allocation_mismatch");
+  // Other new-expense rules: adjustment kinds and rates, item owners, and people who aren't the creator's friends.
+  const invalid: Array<[Record<string, unknown>, number]> = [
+    [dinnerAmounts(1400, { adjustments: [{ kind: "bribe", amountCents: 1400, rate: null }] }), 400],
+    [dinnerAmounts(1400, { adjustments: [{ kind: "tax", amountCents: 1400, rate: 1000 }] }), 400],
+    [dinnerAmounts(1400, { allocations: [] }), 400],
+    [dinnerAmounts(1400, { totalCents: 0, allocations: [{ userId: alex, amountCents: 0 }] }), 400],
+    [dinnerAmounts(1400, { items: [{ name: "Pasta", amountCents: 3400, ownerIds: [stranger] }] }), 422],
+    [{ totalCents: 3400, items: [], adjustments: [], allocations: [{ userId: alex, amountCents: 1700 }, { userId: stranger, amountCents: 1700 }] }, 422],
+    [dinnerAmounts(1400, { expectedUpdatedAt: "yesterday" }), 400],
+  ];
+  for (const [body, status] of invalid) assert.equal((await jsonRequest(app, path, jamie, "PATCH", body)).status, status, JSON.stringify(body));
+  // Nothing was changed by any of them.
+  const after = (await snapshot(app, alex)).expenses[0] as unknown as SavedExpense;
+  assert.equal(after.totalCents, 3000); assert.equal(after.updatedAt, updatedAt);
+  assert.equal(repository.auditEvents.length, events);
+});
+
+test("raising the tip after settling up leaves the new difference owed", async () => {
+  const { app, dinner } = await setupDinner();
+  assert.equal((await jsonRequest(app, "/v1/payments", alex, "POST", { clientRequestId: "52000000-0000-4000-8000-000000000001", fromUserId: alex, toUserId: jamie, amountCents: 1500, transactionDate: "2026-09-19" })).status, 201);
+  assert.equal((await snapshot(app, alex)).balances[jamie], 0);
+  assert.equal((await jsonRequest(app, `/v1/expenses/${dinner.id}`, jamie, "PATCH", dinnerAmounts(1400, { expectedUpdatedAt: dinner.updatedAt }))).status, 200);
+  const mine = await snapshot(app, alex), theirs = await snapshot(app, jamie);
+  assert.equal(mine.balances[jamie], -200); assert.equal(theirs.balances[alex], 200);
+  assert.equal(mine.payments.length, 1);
 });
 
 test("the payer or creator can delete an expense, which removes it and everything tied to it for everyone", async () => {

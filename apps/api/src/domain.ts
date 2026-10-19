@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseAdjustment, ExpenseCategory, ExpenseChanges, ExpenseItem, Payment, UUID } from "./types.ts";
+import type { CreateExpenseInput, CreatePaymentInput, Expense, ExpenseAdjustment, ExpenseAmounts, ExpenseAmountsSummary, ExpenseCategory, ExpenseChanges, ExpenseItem, Payment, UUID } from "./types.ts";
 import { adjustmentKinds, ApiError, expenseCategories, expenseItemKinds } from "./types.ts";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -36,15 +36,70 @@ export function requireDescription(value: unknown): string {
   return value.trim();
 }
 
-/** Validates the fields of an expense edit, which must change at least one of them; returns them normalized. */
+/**
+ * Validates the fields of an expense edit, which must change at least one of them; returns them normalized. New amounts
+ * are checked against the expense once it's loaded, by `editedExpenseInput`.
+ */
 export function validateExpenseChanges(changes: ExpenseChanges): ExpenseChanges {
-  if (changes.description === undefined && changes.transactionDate === undefined) {
-    throw new ApiError(400, "provide description or transactionDate", "invalid_input");
+  if (changes.description === undefined && changes.transactionDate === undefined && changes.amounts === undefined) {
+    throw new ApiError(400, "provide description, transactionDate, or amounts", "invalid_input");
   }
   const result: ExpenseChanges = {};
   if (changes.description !== undefined) result.description = requireDescription(changes.description);
   if (changes.transactionDate !== undefined) { requireDate(changes.transactionDate); result.transactionDate = changes.transactionDate; }
+  if (changes.amounts !== undefined) result.amounts = changes.amounts;
+  if (changes.expectedUpdatedAt !== undefined) {
+    if (typeof changes.expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(changes.expectedUpdatedAt))) throw new ApiError(400, "expectedUpdatedAt must be an ISO 8601 date-time", "invalid_input");
+    result.expectedUpdatedAt = changes.expectedUpdatedAt;
+  }
   return result;
+}
+
+/** Refuses an edit made against an older version of the expense than the one saved now. */
+export function requireCurrentVersion(expectedUpdatedAt: string | undefined, updatedAt: string): void {
+  if (expectedUpdatedAt !== undefined && Date.parse(expectedUpdatedAt) !== Date.parse(updatedAt)) {
+    throw new ApiError(409, "this expense was changed since you opened it", "stale_expense");
+  }
+}
+
+/** The `updatedAt` an edit saves: now, or a millisecond after `previous` if the clock hasn't passed it, so every edit is distinct. */
+export function nextUpdatedAt(previous: string): string {
+  return new Date(Math.max(Date.now(), Date.parse(previous) + 1)).toISOString();
+}
+
+/**
+ * The expense as it would be saved with new amounts, checked by the same rules as a new expense, with its IDs
+ * lowercased. Payer, currency, evidence and category stay as they are.
+ */
+export function editedExpenseInput(expense: Expense, description: string, transactionDate: string, amounts: ExpenseAmounts): CreateExpenseInput {
+  const input: CreateExpenseInput = {
+    clientRequestId: expense.clientRequestId, description, transactionDate, payerId: expense.payerId, currency: expense.currency,
+    totalCents: amounts.totalCents, items: amounts.items, adjustments: amounts.adjustments, allocations: amounts.allocations,
+  };
+  validateExpenseAmounts(input);
+  return input;
+}
+
+type Amounts = Pick<Expense, "totalCents" | "items" | "adjustments" | "allocations">;
+
+/** Whether two versions of an expense have the same amounts, whatever order allocations and item owners are listed in. */
+export function sameAmounts(left: Amounts, right: Amounts): boolean {
+  const normalized = (expense: Amounts) => ({
+    totalCents: expense.totalCents,
+    items: expense.items.map((item) => ({ ...item, ownerIds: [...item.ownerIds].sort() })),
+    adjustments: expense.adjustments.map(({ kind, amountCents, rate }) => ({ kind, amountCents, rate })),
+    allocations: [...expense.allocations].sort((a, b) => a.userId.localeCompare(b.userId)).map(({ userId, amountCents }) => ({ userId, amountCents })),
+  });
+  return fingerprint(normalized(left)) === fingerprint(normalized(right));
+}
+
+/** One side of an amount edit's revision: enough for a client to show what changed. */
+export function amountsSummary(expense: Pick<Expense, "totalCents" | "adjustments" | "allocations">): ExpenseAmountsSummary {
+  return {
+    totalCents: expense.totalCents,
+    adjustments: expense.adjustments.map(({ kind, amountCents }) => ({ kind, amountCents })),
+    allocations: expense.allocations.map(({ userId, amountCents }) => ({ userId, amountCents })),
+  };
 }
 
 /** Returns the category, or null when none is given. */
@@ -64,11 +119,27 @@ export function validateExpense(input: CreateExpenseInput): void {
   input.clientRequestId = requireUuid(input.clientRequestId, "clientRequestId");
   input.payerId = requireUuid(input.payerId, "payerId");
   requireCurrency(input.currency);
-  requireCents(input.totalCents, "totalCents", false);
   requireDescription(input.description);
   const category = optionalCategory(input.category);
   if (category) input.category = category; else delete input.category;
   requireDate(input.transactionDate);
+  validateExpenseAmounts(input);
+  const evidenceIds = input.evidenceIds ?? [];
+  if (!Array.isArray(evidenceIds) || evidenceIds.length > 10) throw new ApiError(400, "an expense may have at most 10 evidence images", "invalid_input");
+  const uniqueEvidence = new Set<string>();
+  if (input.evidenceIds) input.evidenceIds = evidenceIds.map((id) => requireUuid(id, "evidenceId"));
+  for (const evidenceId of input.evidenceIds ?? []) {
+    if (uniqueEvidence.has(evidenceId)) throw new ApiError(400, "evidenceIds must be unique", "invalid_input");
+    uniqueEvidence.add(evidenceId);
+  }
+}
+
+/**
+ * Validates an expense's total, items, adjustments and allocations against its payer, lowercasing IDs in place. New
+ * expenses and amount edits share it so both follow the same rules.
+ */
+export function validateExpenseAmounts(input: CreateExpenseInput): void {
+  requireCents(input.totalCents, "totalCents", false);
   const items = input.items ?? [];
   if (!Array.isArray(items) || items.length > 250) {
     throw new ApiError(400, "an expense may have at most 250 items", "invalid_input");
@@ -116,14 +187,6 @@ export function validateExpense(input: CreateExpenseInput): void {
   }
   for (const item of expenseItems(input)) {
     if (item.ownerIds.some((id) => id !== input.payerId && !memberIds.has(id))) throw new ApiError(422, "every item owner must be the payer or have an allocation", "invalid_owner");
-  }
-  const evidenceIds = input.evidenceIds ?? [];
-  if (!Array.isArray(evidenceIds) || evidenceIds.length > 10) throw new ApiError(400, "an expense may have at most 10 evidence images", "invalid_input");
-  const uniqueEvidence = new Set<string>();
-  if (input.evidenceIds) input.evidenceIds = evidenceIds.map((id) => requireUuid(id, "evidenceId"));
-  for (const evidenceId of input.evidenceIds ?? []) {
-    if (uniqueEvidence.has(evidenceId)) throw new ApiError(400, "evidenceIds must be unique", "invalid_input");
-    uniqueEvidence.add(evidenceId);
   }
 }
 

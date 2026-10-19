@@ -15,7 +15,7 @@ This is the stateless transaction-ledger backend. It uses Hono, Supabase Auth ac
 - Atomic expenses, repayments, audit events, exact-cent validation, idempotent retries, and server-derived balances.
 - A saved filter uses **any-person/OR matching**: a transaction is included if its payer, allocation, sender, or recipient overlaps the filter. Returned balances are unchanged; selecting a filter never creates or calculates a separate group pool.
 
-The deliberately unanswered production decisions are edit and deletion policy, image retention, extraction provider, and eventual multi-currency behavior. Supabase Edge Functions are the selected production API runtime.
+The deliberately unanswered production decisions are image retention, extraction provider, and eventual multi-currency behavior. Supabase Edge Functions are the selected production API runtime.
 
 ## Run locally
 
@@ -30,7 +30,7 @@ This mode is non-persistent. Send a UUID in `x-user-id`, create the profile with
 
 ## Supabase PostgreSQL
 
-1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `010_expense_item_owners.sql`) in its SQL editor or migration runner.
+1. Create a Supabase project and apply the files in `db/migrations/` in order (`001_initial.sql` through `017_expense_updated_at.sql`) in its SQL editor or migration runner.
 2. For the local Node test harness, copy Supabase’s **Session pooler** URI into `DATABASE_URL`, set `SUPABASE_URL`, and leave `ALLOW_INSECURE_DEV_AUTH` false. Copy `.env.example` to the Git-ignored `.env.local` and run `npm run dev:local`.
 3. Run this API as a trusted backend. Public tables have RLS enabled and direct `anon`/`authenticated` grants revoked; mobile clients use only the API.
 
@@ -61,8 +61,8 @@ Every `/v1` route requires `Authorization: Bearer <Supabase access token>` in pr
 | `GET` | `/v1/evidence/{evidenceId}/image` | Read evidence you uploaded or that is attached to an expense you're on. |
 | `PUT` | `/v1/evidence/{evidenceId}/text` | Store the text your device recognized in evidence you uploaded (`{ "text": … }`), kept in `extracted_data` for troubleshooting. |
 | `POST` | `/v1/receipts/parse` | Read receipt image bytes (JPEG, PNG, WebP) with OpenAI `gpt-6.1-sol`: returns the merchant, category, date, expense name, and every printed row with its text, its printed price, its label, and for items a tidied name (`item`, `tax`, `total`, …). An optional `?note=` describes a first reading's problem for a re-read. Needs `OPENAI_API_KEY`. |
-| `POST` | `/v1/expenses` | Atomically post a reviewed general expense between you and your friends, with an optional `category` (`groceries`, `restaurant`, `movie`, or `concert`; returned as `null` when absent). |
-| `PATCH` | `/v1/expenses/:expenseId` | Payer only: change `description` and/or `transactionDate` (`YYYY-MM-DD`). Records one revision per changed field with the old and new value; amounts and balances are untouched. Other participants get 403; anyone else 404. |
+| `POST` | `/v1/expenses` | Atomically post a reviewed general expense between you and your friends, with an optional `category` (`groceries`, `restaurant`, `movie`, or `concert`; returned as `null` when absent). Expenses are returned with `createdAt` and `updatedAt` (equal until the first edit). |
+| `PATCH` | `/v1/expenses/:expenseId` | Payer or creator only (other participants get 403 `forbidden`; anyone else 404): change `description`, `transactionDate` (`YYYY-MM-DD`), and/or the amounts. Amounts are `totalCents`, `items`, `adjustments`, and `allocations`, sent all four together (400 `invalid_input` otherwise); they replace the expense's current ones and are validated exactly like a new expense (e.g. 422 `allocation_mismatch`, `invalid_owner`), and anyone not already on the expense must be the payer or a friend of its creator (422 `invalid_person`). Payer, currency, category, and evidence don't change. Send `expectedUpdatedAt` (the `updatedAt` you last saw) to have the edit refused with 409 `stale_expense` if the expense changed since; nothing changes then. Every successful edit moves `updatedAt`. Records one revision per changed name or date with the old and new value, and an amount change as `expense.amounts_updated` with `{ from, to }`, each `{ totalCents, adjustments: [{ kind, amountCents }], allocations: [{ userId, amountCents }] }`. Returns the updated expense; balances follow the new allocations. |
 | `POST` | `/v1/payments` | Record a repayment you sent or received (`fromUserId`, `toUserId`). |
 | `POST` | `/v1/developer/reset-ledger` | Developer accounts only (`user_profiles.is_developer`; others get 403): with `{ "confirm": "DELETE" }`, deletes the expenses the caller (or, with `X-Identity: dev`, their dev account) is on, with their evidence and revision history, and the payments they're part of. Profiles, settings, friendships, and saved filters are kept. |
 | `GET` | `/v1/transactions?filterId={id}` | Read every transaction you're on, the people in them, and your balance with each person, optionally filtered by a saved filter. |
