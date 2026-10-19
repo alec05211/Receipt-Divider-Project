@@ -50,6 +50,16 @@ extension Array where Element == ReceiptItem {
         }
     }
 
+    /// Applies `adjustments` like `applyAdjustments`, except that each adjustment in `resolving` keeps its amount and has
+    /// its rate worked out from it instead, as when someone types that amount. One with nothing to apply to comes to zero.
+    @discardableResult
+    mutating func applyAdjustments(_ adjustments: [ReceiptAdjustment], resolving ids: Set<UUID>) -> [ReceiptAdjustment] {
+        walk(adjustments) { adjustment, base in
+            guard ids.contains(adjustment.id) else { return adjustment.rate }
+            return base > 0 ? Double(adjustment.amountCents) / Double(base) : 0
+        }
+    }
+
     private mutating func walk(_ adjustments: [ReceiptAdjustment], rate: (ReceiptAdjustment, Int) -> Double) -> [ReceiptAdjustment] {
         var running = map(\.netCents)
         // The tips' running cost, which surcharges after them apply to like an item's.

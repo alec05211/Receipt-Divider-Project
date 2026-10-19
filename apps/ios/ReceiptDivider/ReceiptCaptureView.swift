@@ -417,26 +417,21 @@ struct ReceiptCaptureView: View {
         }
     }
     /// Re-applies the adjustments whenever rows or rates change, so every row's global offset and the total stay current.
-    /// A tip adjustment goes when its row is deleted. On final review, contributions follow the new amounts.
+    /// A tip adjustment goes when its row is deleted. On final review, contributions follow the new amounts whenever
+    /// they no longer add up to the total, including after final review has already applied the change.
     private func applyAdjustments() {
         var updated = items
         let applied = updated.applyAdjustments(adjustments)
         let changed = updated != items || applied != adjustments
         if updated != items { items = updated }
         if applied != adjustments { adjustments = applied }
-        if step == .split, changed {
+        if step == .split, changed || allocationTotal != total {
             shares = assignedShares()
         }
     }
     private var totalBinding: Binding<Int> {
-        Binding(get: { total }, set: { cents in
-            splitsPrintedTotal = false
-            guard items.count == 1 else { return }
-            let net = max(0, cents - adjustments.reduce(0) { $0 + $1.amountCents })
-            items[0].cents = net
-            items[0].localOffsetCents = 0
-            applyAdjustments()
-        })
+        // Final review edits the items and adjustments the total comes from, then sets it; an edit ends Split All.
+        Binding(get: { total }, set: { _ in splitsPrintedTotal = false })
     }
     /// Keeps a lone item's printed price while recording the difference to the receipt total as its own offset.
     private func matchPrintedTotal(_ printed: Int) {

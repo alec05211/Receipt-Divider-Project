@@ -95,7 +95,7 @@ struct AssignItemsView: View {
                 }
                 if isEditable && !assignmentsLocked {
                     Button("Add item", systemImage: "plus") {
-                        let item = ReceiptItem(name: "", cents: 0)
+                        let item = ReceiptItem(name: "", cents: 0, isSelected: true)
                         items.append(item)
                         if assignsNewItemsToAll { itemAssignments[item.id] = Set(participants) }
                         editingItemID = item.id
