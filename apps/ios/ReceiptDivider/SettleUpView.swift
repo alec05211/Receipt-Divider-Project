@@ -12,6 +12,9 @@ struct SettleUpView: View {
     @State private var didSave = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    /// Kept while retrying a payment that may already have reached the server, so it's recorded once; any change to
+    /// the payment starts a new one.
+    @State private var paymentID = UUID()
 
     /// People you owe or who owe you, then any other friends.
     private var candidates: [LedgerPerson] {
@@ -65,7 +68,10 @@ struct SettleUpView: View {
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(isSaving ? "Recording…" : "Record", action: save).disabled(amount <= 0 || other == nil || isSaving) } }
         .sensoryFeedback(.success, trigger: didSave)
         .onAppear { if other == nil { select(initialPerson ?? candidates.first?.id) } }
-        .onChange(of: other) { _, _ in suggestAmount() }
+        .onChange(of: other) { _, _ in suggestAmount(); paymentID = UUID() }
+        .onChange(of: theyPaidMe) { _, _ in paymentID = UUID() }
+        .onChange(of: amount) { _, _ in paymentID = UUID() }
+        .onChange(of: date) { _, _ in paymentID = UUID() }
     }
 
     private func select(_ person: UUID?) { other = person; suggestAmount() }
@@ -79,7 +85,7 @@ struct SettleUpView: View {
 
     private func save() {
         guard let me = store.activeUserID, let other else { return }
-        let payment = Payment(amount: amount, from: theyPaidMe ? other : me, to: theyPaidMe ? me : other, transactionDate: date)
+        let payment = Payment(id: paymentID, amount: amount, from: theyPaidMe ? other : me, to: theyPaidMe ? me : other, transactionDate: date)
         isSaving = true
         errorMessage = nil
         Task {

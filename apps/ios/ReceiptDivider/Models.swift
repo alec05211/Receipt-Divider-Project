@@ -605,7 +605,10 @@ struct LedgerPerson: Identifiable, Hashable, Codable {
             ),
             token: accessToken
         )
-        try await refresh(accessToken: accessToken)
+        // Once the server has the payment, a failed reload is reported in `syncError` rather than thrown, so the
+        // payment isn't recorded again.
+        do { try await refresh(accessToken: accessToken) }
+        catch { syncError = error.localizedDescription }
     }
 
     /// Developer-only: deletes the current account's expenses and payments on the server, then reloads.
