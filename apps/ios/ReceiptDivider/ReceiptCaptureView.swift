@@ -36,8 +36,6 @@ struct ReceiptCaptureView: View {
     @State private var shares: [UUID: Int] = [:]
     /// Who owns each row. An unassigned row belongs to the payer.
     @State private var itemAssignments: [UUID: Set<UUID>] = [:]
-    /// Tracks whose contribution the user has fixed, so edits only move everyone else.
-    @State private var balancer = ContributionBalancer()
     @State private var description = "Shared Expense"
     @State private var payer: UUID?
     @State private var category: ExpenseCategory?
@@ -428,7 +426,6 @@ struct ReceiptCaptureView: View {
         if applied != adjustments { adjustments = applied }
         if step == .split, changed {
             shares = assignedShares()
-            balancer = ContributionBalancer()
         }
     }
     private var totalBinding: Binding<Int> {
@@ -518,7 +515,6 @@ struct ReceiptCaptureView: View {
             itemAssignments[item.id] = [newPayer]
         }
         shares = assignedShares()
-        balancer = ContributionBalancer()
     }
     private func undoAssignmentConfirmation() {
         withAnimation(.snappy(duration: 0.2)) {
@@ -548,16 +544,9 @@ struct ReceiptCaptureView: View {
     private func setDefaultPayer() {
         if payer.map(selectedPeople.contains) != true { payer = selectedPeople.contains(store.activeUserID ?? UUID()) ? store.activeUserID : orderedSelection.first }
     }
-    /// Editing one contribution rebalances the others so they always add up to the total.
-    private func shareBinding(for person: UUID) -> Binding<Int> {
-        Binding(get: { shares[person] ?? 0 }, set: { cents in
-            shares = balancer.set(person, to: cents, in: shares, total: total, people: orderedSelection)
-        })
-    }
     /// Sets contributions from item ownership and defaults the payer to the signed-in participant.
     private func setItemSplit() {
         shares = printedTotalShares ?? ownershipShares(expenseItems)
-        balancer = ContributionBalancer()
         setDefaultPayer()
     }
     private func prepareFinalSplit() {
@@ -595,7 +584,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; isExtracting = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; balancer = ContributionBalancer(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func reset() { receiptAnalysisID = nil; isExtracting = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; assignmentsLocked = false; assignmentsBeforeLock = nil; personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
     private func triggerScannerShortcut() {
         guard canScan else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -617,52 +606,6 @@ struct ReceiptCaptureView: View {
         case .contributions: step = .split
         default: break
         }
-    }
-}
-
-/// Keeps contributions adding up to the total. Touching a contribution fixes it; the change is split equally among
-/// everyone not fixed. One person always stays free: touching the last free one frees whoever was touched longest ago.
-struct ContributionBalancer {
-    /// People whose contribution is fixed, least recently touched first.
-    private(set) var fixed: [UUID] = []
-    /// Everyone's shares from when the person being edited was first touched. Each edit spreads from these rather than
-    /// the last update, so rounding cents don't pile onto one person over the course of a drag.
-    private var start: (person: UUID, shares: [UUID: Int])?
-
-    /// Sets `person`'s contribution and returns the rebalanced shares. The value is capped so the free people never drop
-    /// below zero. With only one person, their contribution is always the whole total.
-    mutating func set(_ person: UUID, to cents: Int, in shares: [UUID: Int], total: Int, people: [UUID]) -> [UUID: Int] {
-        var result = shares.filter { people.contains($0.key) }
-        guard people.count > 1, people.contains(person) else { result[person] = total; return result }
-        if start?.person != person { start = (person, result) }
-        fixed.removeAll { $0 == person || !people.contains($0) }
-        fixed.append(person)
-        if fixed.count == people.count { fixed.removeFirst() }
-        let base = start?.shares ?? result
-        let otherFixed = fixed.dropLast().reduce(0) { $0 + (base[$1] ?? 0) }
-        let value = min(max(cents, 0), total - otherFixed)
-        let free = people.filter { !fixed.contains($0) }
-        let change = total - otherFixed - value - free.reduce(0) { $0 + (base[$1] ?? 0) }
-        result[person] = value
-        for (other, cents) in zip(free, Self.spread(change, over: free.map { base[$0] ?? 0 })) { result[other] = cents }
-        return result
-    }
-
-    /// Adds `amount` to `values` in equal parts, leftover cents going to the first. Anyone reaching zero stops shrinking
-    /// and the rest is shared among the others.
-    static func spread(_ amount: Int, over values: [Int]) -> [Int] {
-        var values = values, remaining = amount
-        while remaining != 0 {
-            let open = values.indices.filter { remaining > 0 || values[$0] > 0 }
-            guard !open.isEmpty else { break }
-            let part = remaining / open.count
-            for index in open where remaining != 0 {
-                let applied = max(part != 0 ? part : remaining.signum(), -values[index])
-                values[index] += applied
-                remaining -= applied
-            }
-        }
-        return values
     }
 }
 
