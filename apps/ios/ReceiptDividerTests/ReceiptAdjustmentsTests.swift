@@ -247,6 +247,50 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         XCTAssertEqual(extraction.items.map(\.cents), [1_500, 400])
     }
 
+    func testRowsReadTrailingTaxLettersAndUnitPriceLines() {
+        let untaxed = ReceiptRow("GREEK YOGURT 6.98 F")
+        XCTAssertEqual(untaxed.taxedFlag, false)
+        XCTAssertEqual(ReceiptRow("PAPER TOWELS 8.99 T").taxedFlag, true)
+        XCTAssertNil(ReceiptRow("Brisket 36.00").taxedFlag)
+
+        let unitLine = ReceiptRow("Hot Tea 2 x $3.25")
+        XCTAssertEqual(unitLine.name, "Hot Tea")
+        XCTAssertEqual(unitLine.quantity, 2)
+        XCTAssertEqual(unitLine.amountCents, 650)
+        XCTAssertFalse(unitLine.isQuantityDetail)
+    }
+
+    func testTiltedRightColumnPricesPairWithTheirLeftColumnNames() {
+        let fragments = [
+            ReceiptTextRecognizer.Fragment(text: "Burger", box: CGRect(x: 0.08, y: 0.80, width: 0.3, height: 0.02)),
+            ReceiptTextRecognizer.Fragment(text: "16.00", box: CGRect(x: 0.78, y: 0.79, width: 0.12, height: 0.02)),
+            ReceiptTextRecognizer.Fragment(text: "Fries", box: CGRect(x: 0.08, y: 0.74, width: 0.3, height: 0.02)),
+            ReceiptTextRecognizer.Fragment(text: "5.00", box: CGRect(x: 0.78, y: 0.722, width: 0.12, height: 0.02)),
+        ]
+        XCTAssertEqual(ReceiptTextRecognizer.layoutRows(fragments), ["Burger  16.00", "Fries  5.00"])
+    }
+
+    func testOnDeviceTidiedNamesApplyOnlyWhenCredibleAndAligned() {
+        XCTAssertTrue(ReceiptExtraction.needsTidying("BBU Chicken Club"))
+        XCTAssertTrue(ReceiptExtraction.needsTidying("CHKN SNDWCH"))
+        XCTAssertTrue(ReceiptExtraction.needsTidying("GREEK YOGURT"))
+        XCTAssertFalse(ReceiptExtraction.needsTidying("16oz Ribeye"))
+        XCTAssertFalse(ReceiptExtraction.needsTidying("Pulled Pork Sandwich"))
+
+        var extraction = ReceiptExtraction(items: [
+            ReceiptItem(name: "BBU Chicken Club", cents: 1_500),
+            ReceiptItem(name: "CHKN SNDWCH", cents: 1_200),
+            ReceiptItem(name: "Fries", cents: 400),
+        ])
+        extraction.applyTidiedNames([
+            (original: "BBU Chicken Club", tidied: "BBQ Chicken Club"),
+            (original: "CHKN SNDWCH", tidied: "Chicken Sandwich"),
+            // A mismatched name from another row is rejected.
+            (original: "Fries", tidied: "BBQ Chicken Club"),
+        ])
+        XCTAssertEqual(extraction.items.map(\.name), ["BBQ Chicken Club", "Chicken Sandwich", "Fries"])
+    }
+
     private func cloudReading(_ rows: [(String, String, String, Bool)]) -> APIReceiptReading {
         APIReceiptReading(merchant: "Smokehouse", category: "restaurant", purchaseDate: "2026-10-05",
                           rows: rows.map { .init(text: $0.0, price: $0.1, kind: $0.2, taxed: $0.3) }, expenseName: "")

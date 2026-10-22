@@ -354,7 +354,7 @@ struct ReceiptCaptureView: View {
         isExtracting = true
         continuesAfterExtraction = false
         Task { @MainActor in
-            // Cloud vision reads the photo while the device recognizes its text; the on-device reader is the fallback.
+            // On-device Vision and Apple Intelligence read the receipt first; cloud vision is the fallback when needed.
             let cloud = cloudReader(image)
             let recognized = await ReceiptReader.recognize(image)
             guard receiptAnalysisID == analysisID else { return }
@@ -371,10 +371,10 @@ struct ReceiptCaptureView: View {
         }
     }
     private func cloudReader(_ image: UIImage) -> CloudReader? {
-        guard let jpeg = image.jpegData(compressionQuality: 0.8) else { return nil }
         let store = store, authentication = authentication
         return CloudReader { note in
-            try await store.readReceiptImage(jpeg, note: note, accessToken: authentication.accessToken())
+            guard let jpeg = image.jpegData(compressionQuality: 0.8) else { throw URLError(.cannotDecodeRawData) }
+            return try await store.readReceiptImage(jpeg, note: note, accessToken: authentication.accessToken())
         }
     }
     private func apply(_ extraction: ReceiptExtraction) {

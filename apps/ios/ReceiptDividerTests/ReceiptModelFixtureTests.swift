@@ -24,13 +24,10 @@ final class ReceiptModelFixtureTests: XCTestCase {
             YOU SAVED 1.00
             """)
         XCTAssertEqual(extraction.items.first { $0.name.localizedCaseInsensitiveContains("towel") }?.localOffsetCents, -100)
-        // A known gap in the model's reading, logged without failing the run until it's addressed.
         XCTAssertEqual(extraction.items.filter { $0.name.localizedCaseInsensitiveContains("yogurt") }.map(\.cents), [349, 349])
         XCTAssertEqual(extraction.adjustments.map(\.kind), [.tax])
         XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
-        XCTExpectFailure("Tax letters aren't read as untaxed items", strict: false) {
-            XCTAssertEqual(extraction.items.filter { !$0.taxed }.count, 3)
-        }
+        XCTAssertEqual(extraction.items.filter { !$0.taxed }.count, 3)
     }
 
     func testRestaurantWithTipSuggestedTipsAndSurcharge() async throws {

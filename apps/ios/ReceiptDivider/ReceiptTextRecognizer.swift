@@ -319,18 +319,61 @@ enum ReceiptTextRecognizer {
         for fragment in fragments.sorted(by: { $0.box.midY > $1.box.midY }) {
             // A piece joins the nearest row it shares a line with and doesn't overlap horizontally.
             let candidates = rows.indices.filter { index in
-                let anchor = rows[index][0].box
+                let anchor = nearestBox(in: rows[index], to: fragment.box)
                 return abs(anchor.midY - fragment.box.midY) < min(anchor.height, fragment.box.height) * 0.6
                     && !rows[index].contains { $0.box.minX < fragment.box.maxX && fragment.box.minX < $0.box.maxX }
             }
-            if let index = candidates.min(by: { abs(rows[$0][0].box.midY - fragment.box.midY) < abs(rows[$1][0].box.midY - fragment.box.midY) }) {
+            if let index = candidates.min(by: {
+                abs(nearestBox(in: rows[$0], to: fragment.box).midY - fragment.box.midY)
+                    < abs(nearestBox(in: rows[$1], to: fragment.box).midY - fragment.box.midY)
+            }) {
                 rows[index].append(fragment)
             } else {
                 rows.append([fragment])
             }
         }
+        rows = pairDriftedPrices(rows.sorted { $0[0].box.midY > $1[0].box.midY })
         return rows.sorted { $0[0].box.midY > $1[0].box.midY }
             .map { $0.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: "  ") }
+    }
+
+    private static func nearestBox(in row: [Fragment], to box: CGRect) -> CGRect {
+        row.min(by: { abs($0.box.midX - box.midX) < abs($1.box.midX - box.midX) })?.box ?? row[0].box
+    }
+
+    /// On a tilted or curved receipt, a right-hand price can sit slightly higher or lower than its left-hand label.
+    /// Any standalone right-column price is paired with the nearest unpriced left-column row after allowing for drift.
+    private static func pairDriftedPrices(_ sortedRows: [[Fragment]]) -> [[Fragment]] {
+        var rows = sortedRows
+        var drift: CGFloat = 0
+        var removedIndices: Set<Int> = []
+        for index in rows.indices {
+            let ordered = rows[index].sorted { $0.box.minX < $1.box.minX }
+            if ordered.count > 1, let first = ordered.first, let last = ordered.last,
+               first.box.minX < 0.45, last.box.minX > 0.5, priced("Item \(last.text)") != nil {
+                drift = last.box.midY - first.box.midY
+                continue
+            }
+            guard ordered.count == 1, let price = ordered.first, price.box.minX > 0.5,
+                  priced("Item \(price.text)") != nil else { continue }
+            let candidates = rows.indices.filter { candidateIndex in
+                guard candidateIndex != index, !removedIndices.contains(candidateIndex) else { return false }
+                let candidate = rows[candidateIndex].sorted { $0.box.minX < $1.box.minX }
+                let text = candidate.map(\.text).joined(separator: " ")
+                guard text.contains(where: \.isLetter), priced(text) == nil,
+                      candidate.allSatisfy({ $0.box.maxX < price.box.minX }) else { return false }
+                let anchor = candidate[0].box
+                return abs((anchor.midY + drift) - price.box.midY) < min(anchor.height, price.box.height) * 1.25
+            }
+            if let target = candidates.min(by: {
+                abs((rows[$0][0].box.midY + drift) - price.box.midY) < abs((rows[$1][0].box.midY + drift) - price.box.midY)
+            }) {
+                drift = price.box.midY - rows[target][0].box.midY
+                rows[target].append(price)
+                removedIndices.insert(index)
+            }
+        }
+        return rows.enumerated().compactMap { removedIndices.contains($0.offset) ? nil : $0.element }
     }
 
     /// The accurate OCR pass's lines, which fill in what document recognition misses.
