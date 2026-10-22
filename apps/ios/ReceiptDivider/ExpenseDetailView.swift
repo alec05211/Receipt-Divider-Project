@@ -151,11 +151,6 @@ struct ExpenseDetailView: View {
                 } else {
                     ContentUnavailableView("No receipt", systemImage: "doc.text.image")
                 }
-                if current.itemDiscountTotal != 0 { LabeledContent("Item discounts", value: signed(current.itemDiscountTotal)) }
-                ForEach(current.adjustments) { adjustment in
-                    LabeledContent(adjustment.kind.title, value: signed(adjustment.kind == .discount ? -adjustment.amountCents : adjustment.amountCents))
-                }
-                if current.adjustments.isEmpty, current.globalOffsetTotal != 0 { LabeledContent("Tax and discounts", value: signed(current.globalOffsetTotal)) }
             }
 
             Section("Recent expenses with these people") {
@@ -239,7 +234,6 @@ struct ExpenseDetailView: View {
 }
 
 extension ExpenseDetailView {
-    private func signed(_ cents: Int) -> String { cents < 0 ? "−\((-cents).usd)" : cents.usd }
     private func loadReceipt() async {
         guard receipt == nil, current.receiptImageData == nil, let evidenceID = current.evidenceIDs.first else { return }
         isLoadingReceipt = true

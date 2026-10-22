@@ -137,6 +137,64 @@ private extension Character {
     var isASCIIDigit: Bool { isASCII && isNumber }
 }
 
+/// Compact inline currency input without a leading spacer, styled as a tappable pill for inline sentence rows.
+struct InlineCentsInput: View {
+    @Binding var cents: Int
+    @State private var text = ""
+    @State private var selection: TextSelection?
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 1) {
+            Text("$")
+                .foregroundStyle(.secondary)
+                .fontWeight(.medium)
+            TextField("0.00", text: $text, selection: $selection)
+                .keyboardType(.decimalPad)
+                .focused($isFocused)
+                .multilineTextAlignment(.leading)
+                .fixedSize()
+                .autocorrectionDisabled()
+                .fontWeight(.semibold)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { isFocused = true }
+        .onAppear { text = CentsEntry.format(cents) }
+        .onChange(of: cents) { _, newCents in
+            if isFocused {
+                if CentsEntry.cents(from: text) != newCents { text = CentsEntry.format(newCents) }
+            } else {
+                let formatted = CentsEntry.format(newCents)
+                if text != formatted { text = formatted }
+            }
+        }
+        .onChange(of: isFocused) { _, focused in
+            if focused {
+                text = cents == 0 ? "" : CentsEntry.format(cents)
+                DispatchQueue.main.async { selection = TextSelection(insertionPoint: text.endIndex) }
+            } else {
+                text = CentsEntry.format(cents)
+            }
+        }
+        .onChange(of: text) { oldText, newText in
+            guard isFocused else { return }
+            guard let cleaned = CentsEntry.sanitize(newText) else {
+                text = oldText
+                return
+            }
+            if cleaned != newText { text = cleaned }
+            let typed = CentsEntry.cents(from: cleaned)
+            if typed != cents { cents = typed }
+            if cents != typed { text = CentsEntry.format(cents) }
+        }
+        .keyboardDoneButton($isFocused)
+        .accessibilityLabel("Amount")
+    }
+}
+
 /// Edits an amount in cents as a percent of `total`, to up to two decimal places. The typed text is kept while editing so
 /// partial entries like "12." aren't reformatted; it reflects `cents` again once editing ends or the value moves elsewhere.
 struct PercentField: View {

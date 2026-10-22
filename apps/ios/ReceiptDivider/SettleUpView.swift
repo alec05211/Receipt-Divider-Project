@@ -9,6 +9,7 @@ struct SettleUpView: View {
     @State private var theyPaidMe = true
     @State private var amount = 0
     @State private var date = Date()
+    @State private var isPickingDate = false
     @State private var didSave = false
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -22,7 +23,13 @@ struct SettleUpView: View {
         let friends = store.splitCandidates.filter { $0.id != store.activeUserID && !owing.map(\.id).contains($0.id) }
         return owing + friends
     }
+    private var selectablePeople: [LedgerPerson] {
+        let me = store.activeUserID.map { [store.person(for: $0)] } ?? []
+        return me + candidates
+    }
     private var balance: Int { other.flatMap { store.balances[$0] } ?? 0 }
+    private var payerID: UUID? { theyPaidMe ? other : store.activeUserID }
+    private var recipientID: UUID? { theyPaidMe ? store.activeUserID : other }
 
     var body: some View {
         Form {
@@ -30,10 +37,9 @@ struct SettleUpView: View {
                 ContentUnavailableView("No one to settle with", systemImage: "person.2")
             } else {
                 Section {
-                    Picker("With", selection: $other) {
-                        ForEach(candidates) { Text($0.name).tag(Optional($0.id)) }
-                    }
-                    if let other { LabeledContent("Current balance", value: store.describeBalance(balance, with: store.person(for: other).name)) }
+                    paymentRow
+                        .frame(minHeight: 36)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                 }
 
                 if let other, let me = store.activeUserID {
@@ -50,16 +56,6 @@ struct SettleUpView: View {
                         }
                     }
                 }
-
-                Section("Record payment") {
-                    Picker("Direction", selection: $theyPaidMe) {
-                        Text("They paid me").tag(true)
-                        Text("I paid them").tag(false)
-                    }
-                    .pickerStyle(.segmented)
-                    CentsField(title: "Amount", cents: $amount)
-                    DatePicker("Payment date", selection: $date, displayedComponents: .date)
-                }
             }
             if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
         }
@@ -68,13 +64,104 @@ struct SettleUpView: View {
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(isSaving ? "Recording…" : "Record", action: save).disabled(amount <= 0 || other == nil || isSaving) } }
         .sensoryFeedback(.success, trigger: didSave)
         .onAppear { if other == nil { select(initialPerson ?? candidates.first?.id) } }
-        .onChange(of: other) { _, _ in suggestAmount(); paymentID = UUID() }
+        .onChange(of: other) { _, _ in paymentID = UUID() }
         .onChange(of: theyPaidMe) { _, _ in paymentID = UUID() }
         .onChange(of: amount) { _, _ in paymentID = UUID() }
         .onChange(of: date) { _, _ in paymentID = UUID() }
     }
 
-    private func select(_ person: UUID?) { other = person; suggestAmount() }
+    private var paymentRow: some View {
+        HStack(spacing: 5) {
+            personPicker(selectedID: payerID, accessibilityRole: "Payer", onSelect: selectPayer)
+            Text("paid")
+                .foregroundStyle(.secondary)
+            personPicker(selectedID: recipientID, accessibilityRole: "Recipient", onSelect: selectRecipient)
+            InlineCentsInput(cents: $amount)
+            Text("on")
+                .foregroundStyle(.secondary)
+            Button {
+                isPickingDate = true
+            } label: {
+                Text(date.formatted(date: .abbreviated, time: .omitted))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Payment date")
+            .popover(isPresented: $isPickingDate) {
+                DatePicker("Payment date", selection: $date, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .padding()
+                    .frame(width: 320)
+                    .presentationCompactAdaptation(.popover)
+            }
+        }
+        .font(.subheadline)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+        .allowsTightening(true)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func personPicker(selectedID: UUID?, accessibilityRole: String, onSelect: @escaping (UUID) -> Void) -> some View {
+        let person = selectedID.map { store.person(for: $0) }
+        return Menu {
+            ForEach(selectablePeople) { candidate in
+                Button {
+                    onSelect(candidate.id)
+                } label: {
+                    if candidate.id == selectedID {
+                        Label(candidate.name, systemImage: "checkmark")
+                    } else {
+                        Text(candidate.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if let person {
+                    AvatarView(userID: person.id, name: person.name, etag: person.avatarEtag, size: 20)
+                }
+                Text(person?.firstName ?? "Choose")
+                    .fontWeight(.medium)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .accessibilityLabel("\(accessibilityRole): \(person?.firstName ?? "")")
+    }
+
+    private func select(_ person: UUID?) {
+        other = person
+        suggestAmount()
+    }
+
+    private func selectPayer(_ id: UUID) {
+        if id == store.activeUserID {
+            theyPaidMe = false
+        } else {
+            let changedFriend = (other != id)
+            other = id
+            theyPaidMe = true
+            if changedFriend { amount = abs(store.balances[id] ?? 0) }
+        }
+    }
+
+    private func selectRecipient(_ id: UUID) {
+        if id == store.activeUserID {
+            theyPaidMe = true
+        } else {
+            let changedFriend = (other != id)
+            other = id
+            theyPaidMe = false
+            if changedFriend { amount = abs(store.balances[id] ?? 0) }
+        }
+    }
 
     /// Defaults to settling the whole balance in whichever direction clears it.
     private func suggestAmount() {
