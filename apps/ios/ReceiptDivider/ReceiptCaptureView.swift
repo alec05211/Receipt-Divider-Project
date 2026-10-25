@@ -47,6 +47,8 @@ struct ReceiptCaptureView: View {
     @State private var receiptAnalysisID: UUID?
     /// True while the receipt's items are still being read, after its text has been recognized.
     @State private var isExtracting = false
+    /// True once the on-device parse fails or fails reconciliation and falls back to the cloud vision model.
+    @State private var isUsingCloudFallback = false
     /// Set when the user confirms participants before the items are read; the flow continues once they are.
     @State private var continuesAfterExtraction = false
     /// Manual entries have no total until Review expense, so participant selection can't require one.
@@ -123,7 +125,17 @@ struct ReceiptCaptureView: View {
                 }
                 if step == .review {
                     ToolbarItem(placement: .principal) {
-                        Text("Select participants").font(.headline)
+                        VStack(spacing: 1) {
+                            Text("Select participants").font(.headline)
+                            if let status = readingStatusText {
+                                HStack(spacing: 4) {
+                                    if isExtracting { ProgressView().controlSize(.mini) }
+                                    Text(status)
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button { advanceFromReview() } label: {
@@ -175,8 +187,26 @@ struct ReceiptCaptureView: View {
         }
         .onAppear { ReceiptReader.prewarm() }
     }
+    private var readingStatusText: String? {
+        guard !isManualEntry else { return nil }
+        if isExtracting {
+            return isUsingCloudFallback ? "On-device failed · Sending to cloud…" : "Reading on device…"
+        }
+        switch diagnostics?.reader {
+        case "model", "parser": return "Read on device"
+        case "cloud": return "Sent to cloud"
+        default: return nil
+        }
+    }
     private var readingScreen: some View {
-        VStack(spacing: 16) { ProgressView().controlSize(.large); Text("Finding items").font(.headline) }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 16) {
+            ProgressView().controlSize(.large)
+            Text(isUsingCloudFallback ? "On-device read failed, sending to cloud…" : "Reading on device…")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     /// Participant selection screen after recognition.
     private var reviewScreen: some View {
@@ -337,6 +367,7 @@ struct ReceiptCaptureView: View {
     /// Screenshots are read as they are.
     private func load(_ photo: PhotosPickerItem?) {
         guard let photo else { return }
+        isUsingCloudFallback = false
         step = .reading
         Task { @MainActor in
             guard let data = try? await photo.loadTransferable(type: Data.self),
@@ -352,10 +383,11 @@ struct ReceiptCaptureView: View {
         receiptAnalysisID = analysisID
         isManualEntry = false
         isExtracting = true
+        isUsingCloudFallback = false
         continuesAfterExtraction = false
         Task { @MainActor in
             // On-device Vision and Apple Intelligence read the receipt first; cloud vision is the fallback when needed.
-            let cloud = cloudReader(image)
+            let cloud = cloudReader(image, analysisID: analysisID)
             let recognized = await ReceiptReader.recognize(image)
             guard receiptAnalysisID == analysisID else { return }
             recognizedText = recognized.text
@@ -364,15 +396,21 @@ struct ReceiptCaptureView: View {
             guard receiptAnalysisID == analysisID else { return }
             apply(extraction)
             isExtracting = false
+            isUsingCloudFallback = false
             if continuesAfterExtraction {
                 continuesAfterExtraction = false
                 advanceFromReview()
             }
         }
     }
-    private func cloudReader(_ image: UIImage) -> CloudReader? {
+    private func cloudReader(_ image: UIImage, analysisID: UUID) -> CloudReader? {
         let store = store, authentication = authentication
         return CloudReader { note in
+            await MainActor.run {
+                if self.receiptAnalysisID == analysisID {
+                    self.isUsingCloudFallback = true
+                }
+            }
             guard let jpeg = image.jpegData(compressionQuality: 0.8) else { throw URLError(.cannotDecodeRawData) }
             return try await store.readReceiptImage(jpeg, note: note, accessToken: authentication.accessToken())
         }
@@ -572,7 +610,7 @@ struct ReceiptCaptureView: View {
             isSaving = false
         }
     }
-    private func reset() { receiptAnalysisID = nil; isExtracting = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; confirmation.reset(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
+    private func reset() { receiptAnalysisID = nil; isExtracting = false; isUsingCloudFallback = false; isManualEntry = false; continuesAfterExtraction = false; step = .capture; image = nil; selectedPhoto = nil; items = []; adjustments = []; printedTotalCents = nil; splitsPrintedTotal = false; selectedPeople = []; payer = nil; shares = [:]; itemAssignments = [:]; confirmation.reset(); personSearch = ""; purchaseDate = Date(); recognizedText = nil; diagnostics = nil; error = nil; description = "Shared Expense"; category = nil }
     private func triggerScannerShortcut() {
         guard canScan else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -585,7 +623,7 @@ struct ReceiptCaptureView: View {
         switch step {
         case .review:
             // Going back abandons this receipt, so a reading still in progress can't fill in a later manual entry.
-            personSearch = ""; receiptAnalysisID = nil; isExtracting = false; continuesAfterExtraction = false; diagnostics = nil; step = .capture
+            personSearch = ""; receiptAnalysisID = nil; isExtracting = false; isUsingCloudFallback = false; continuesAfterExtraction = false; diagnostics = nil; step = .capture
         case .assign:
             if confirmation.isLocked { undoAssignmentConfirmation() }
             else { step = .split }

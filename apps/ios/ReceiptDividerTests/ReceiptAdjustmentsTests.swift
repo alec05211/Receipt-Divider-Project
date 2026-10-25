@@ -280,6 +280,7 @@ final class ReceiptAdjustmentsTests: XCTestCase {
         var extraction = ReceiptExtraction(items: [
             ReceiptItem(name: "BBU Chicken Club", cents: 1_500),
             ReceiptItem(name: "CHKN SNDWCH", cents: 1_200),
+            ReceiptItem(name: "GREEK YOGURT", cents: 698),
             ReceiptItem(name: "Fries", cents: 400),
         ])
         extraction.applyTidiedNames([
@@ -288,7 +289,47 @@ final class ReceiptAdjustmentsTests: XCTestCase {
             // A mismatched name from another row is rejected.
             (original: "Fries", tidied: "BBQ Chicken Club"),
         ])
-        XCTAssertEqual(extraction.items.map(\.name), ["BBQ Chicken Club", "Chicken Sandwich", "Fries"])
+        extraction.titleCaseRemainingAllCapsNames()
+        XCTAssertEqual(extraction.items.map(\.name), ["BBQ Chicken Club", "Chicken Sandwich", "Greek Yogurt", "Fries"])
+    }
+
+    func testSummaryOnlyLabelsStillReadAllItemsAndIgnoreSavingsSummaryTotals() {
+        let rows = [
+            "WEG GRK YOGURT  1.39 F",
+            "COUPON  -0.40",
+            "2.56",
+            "SUBTOTAL  0.99",
+            "TAX  0.00",
+            "TOTAL  0.99",
+            "SAVINGS SUMMARY",
+            "DIGITAL COUPONS  0.40",
+            "TOTAL  0.40",
+        ].map(ReceiptRow.init)
+        let labels = ReceiptLabels(merchant: "Wegmans", category: .groceries, purchaseDate: "2026-10-08", rows: [
+            .init(row: 3, kind: .subtotal, taxed: true),
+            .init(row: 4, kind: .tax, taxed: true),
+            .init(row: 5, kind: .total, taxed: true),
+        ], expenseName: "Wegmans Groceries")
+        let extraction = ReceiptExtraction(rows: rows, labels: labels, text: "")
+        XCTAssertEqual(extraction.items.map(\.name), ["WEG GRK YOGURT"])
+        XCTAssertEqual(extraction.items.map(\.cents), [139])
+        XCTAssertEqual(extraction.items.map(\.localOffsetCents), [-40])
+        XCTAssertEqual(extraction.printedTotalCents, 99)
+        XCTAssertTrue(extraction.issues.isEmpty, extraction.issues.joined(separator: " "))
+    }
+
+    func testNormalizedRightColumnPricesCleanEdgeNoiseAndMissingDecimals() {
+        let fragments = [
+            ReceiptTextRecognizer.Fragment(text: "MILK", box: CGRect(x: 0.26, y: 0.80, width: 0.20, height: 0.015)),
+            ReceiptTextRecognizer.Fragment(text: "3.79 For", box: CGRect(x: 0.65, y: 0.805, width: 0.12, height: 0.015)),
+            ReceiptTextRecognizer.Fragment(text: "EGGS", box: CGRect(x: 0.26, y: 0.77, width: 0.20, height: 0.015)),
+            ReceiptTextRecognizer.Fragment(text: "2.795", box: CGRect(x: 0.65, y: 0.775, width: 0.12, height: 0.015)),
+            ReceiptTextRecognizer.Fragment(text: "BREAD", box: CGRect(x: 0.26, y: 0.74, width: 0.20, height: 0.015)),
+            ReceiptTextRecognizer.Fragment(text: "199 F", box: CGRect(x: 0.65, y: 0.745, width: 0.12, height: 0.015)),
+        ]
+        let rows = ReceiptTextRecognizer.layoutRows(fragments).map(ReceiptRow.init)
+        XCTAssertEqual(rows.map(\.amountCents), [379, 279, 199])
+        XCTAssertEqual(rows.map(\.taxedFlag), [false, false, false])
     }
 
     private func cloudReading(_ rows: [(String, String, String, Bool)]) -> APIReceiptReading {

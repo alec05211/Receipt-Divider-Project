@@ -315,26 +315,107 @@ enum ReceiptTextRecognizer {
 
     /// The printed rows of `layoutText`.
     static func layoutRows(_ fragments: [Fragment]) -> [String] {
+        let meaningful = fragments.filter { fragment in
+            plainASCII(fragment.text).contains { $0.isLetter || $0.isNumber }
+        }.map { fragment -> Fragment in
+            guard fragment.box.minX > 0.38 else { return fragment }
+            var copy = fragment
+            copy.text = normalizedPriceFragment(fragment.text)
+            return copy
+        }
+        let slope = estimateTiltSlope(meaningful)
+        let adjustedMidY = { (box: CGRect) in box.midY - slope * box.midX }
         var rows: [[Fragment]] = []
-        for fragment in fragments.sorted(by: { $0.box.midY > $1.box.midY }) {
+        for fragment in meaningful.sorted(by: { adjustedMidY($0.box) > adjustedMidY($1.box) }) {
             // A piece joins the nearest row it shares a line with and doesn't overlap horizontally.
             let candidates = rows.indices.filter { index in
                 let anchor = nearestBox(in: rows[index], to: fragment.box)
-                return abs(anchor.midY - fragment.box.midY) < min(anchor.height, fragment.box.height) * 0.6
+                return abs(adjustedMidY(anchor) - adjustedMidY(fragment.box)) < min(anchor.height, fragment.box.height) * 0.5
                     && !rows[index].contains { $0.box.minX < fragment.box.maxX && fragment.box.minX < $0.box.maxX }
             }
             if let index = candidates.min(by: {
-                abs(nearestBox(in: rows[$0], to: fragment.box).midY - fragment.box.midY)
-                    < abs(nearestBox(in: rows[$1], to: fragment.box).midY - fragment.box.midY)
+                abs(adjustedMidY(nearestBox(in: rows[$0], to: fragment.box)) - adjustedMidY(fragment.box))
+                    < abs(adjustedMidY(nearestBox(in: rows[$1], to: fragment.box)) - adjustedMidY(fragment.box))
             }) {
                 rows[index].append(fragment)
             } else {
                 rows.append([fragment])
             }
         }
-        rows = pairDriftedPrices(rows.sorted { $0[0].box.midY > $1[0].box.midY })
-        return rows.sorted { $0[0].box.midY > $1[0].box.midY }
+        rows = pairDriftedPrices(rows.sorted { adjustedMidY($0[0].box) > adjustedMidY($1[0].box) }, adjustedMidY: adjustedMidY)
+        return rows.sorted { adjustedMidY($0[0].box) > adjustedMidY($1[0].box) }
             .map { $0.sorted { $0.box.minX < $1.box.minX }.map(\.text).joined(separator: "  ") }
+    }
+
+    private static func plainASCII(_ text: String) -> String {
+        String(text.replacingOccurrences(of: "×", with: "x").precomposedStringWithCompatibilityMapping
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .unicodeScalars.map { $0.isASCII ? Character($0) : " " })
+    }
+
+    /// Cleans a right-column price fragment when OCR reads paper-edge noise after the cents digits ("3.79 For",
+    /// "2.49F3", "3.99 F -", "2.795" where F was read as 5) or drops the decimal point before a tax flag ("199 F", "3 99 F").
+    private static func normalizedPriceFragment(_ raw: String) -> String {
+        let s = plainASCII(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let match = s.firstMatch(of: /^(-?)\s*\$?\s*(-?)(\d{1,5})[.,]\s*(\d{2})(?:(\d)|(\s*-)?\s*([A-Za-z]{1,3})?[\s\d?\-.:]*)$/) {
+            let isNegative = !match.1.isEmpty || !match.2.isEmpty || (match.6 != nil && match.7 == nil)
+            let sign = isNegative ? "-" : ""
+            let flag: String
+            if match.5 == "5" {
+                flag = " F"
+            } else if let letters = match.7, let first = letters.first {
+                flag = " \(first.uppercased())"
+            } else {
+                flag = ""
+            }
+            return "\(sign)\(match.3).\(match.4)\(flag)"
+        }
+        if let match = s.firstMatch(of: /^(-?)\s*\$?\s*(\d{1,3})\s*(\d{2})\s*(-?)\s*([FTNABEftnabe])\b[\s\d?\-.:]*$/) {
+            let sign = (!match.1.isEmpty || !match.4.isEmpty) ? "-" : ""
+            return "\(sign)\(match.2).\(match.3) \(match.5.uppercased())"
+        }
+        return raw
+    }
+
+    /// Finds the vertical-per-horizontal tilt slope that best aligns the right-hand price column with the left-hand labels.
+    private static func estimateTiltSlope(_ fragments: [Fragment]) -> CGFloat {
+        let lefts = fragments.filter { $0.box.minX < 0.40 && $0.box.maxX < 0.72 && plainASCII($0.text).contains(where: \.isLetter) }
+        let rights = fragments.filter { $0.box.minX > 0.38 && priced("Item \(normalizedPriceFragment($0.text))") != nil }
+        guard !lefts.isEmpty, !rights.isEmpty else { return 0 }
+        let heights = (lefts + rights).map(\.box.height).sorted()
+        let medianHeight = heights[heights.count / 2]
+        let sigma = max(0.002, medianHeight * 0.22)
+        var candidates: [CGFloat] = [0]
+        for left in lefts {
+            for right in rights {
+                let dx = right.box.midX - left.box.midX
+                let dy = right.box.midY - left.box.midY
+                if dx > 0.20, abs(dy) < medianHeight * 1.5 {
+                    candidates.append(dy / dx)
+                }
+            }
+        }
+        var bestSlope: CGFloat = 0
+        var bestScore: Double = -1
+        for slope in candidates {
+            var score = 0.0
+            for right in rights {
+                var minDiff = CGFloat.greatestFiniteMagnitude
+                for left in lefts {
+                    let expectedY = left.box.midY + slope * (right.box.midX - left.box.midX)
+                    let diff = abs(right.box.midY - expectedY)
+                    if diff < minDiff { minDiff = diff }
+                }
+                let z = Double(minDiff / sigma)
+                score += exp(-0.5 * z * z)
+            }
+            score -= Double(abs(slope)) * 0.05
+            if score > bestScore {
+                bestScore = score
+                bestSlope = slope
+            }
+        }
+        return bestSlope
     }
 
     private static func nearestBox(in row: [Fragment], to box: CGRect) -> CGRect {
@@ -343,18 +424,18 @@ enum ReceiptTextRecognizer {
 
     /// On a tilted or curved receipt, a right-hand price can sit slightly higher or lower than its left-hand label.
     /// Any standalone right-column price is paired with the nearest unpriced left-column row after allowing for drift.
-    private static func pairDriftedPrices(_ sortedRows: [[Fragment]]) -> [[Fragment]] {
+    private static func pairDriftedPrices(_ sortedRows: [[Fragment]], adjustedMidY: (CGRect) -> CGFloat) -> [[Fragment]] {
         var rows = sortedRows
         var drift: CGFloat = 0
         var removedIndices: Set<Int> = []
         for index in rows.indices {
             let ordered = rows[index].sorted { $0.box.minX < $1.box.minX }
             if ordered.count > 1, let first = ordered.first, let last = ordered.last,
-               first.box.minX < 0.45, last.box.minX > 0.5, priced("Item \(last.text)") != nil {
-                drift = last.box.midY - first.box.midY
+               first.box.minX < 0.40, last.box.minX > 0.38, priced("Item \(last.text)") != nil {
+                drift = adjustedMidY(last.box) - adjustedMidY(first.box)
                 continue
             }
-            guard ordered.count == 1, let price = ordered.first, price.box.minX > 0.5,
+            guard ordered.count == 1, let price = ordered.first, price.box.minX > 0.38,
                   priced("Item \(price.text)") != nil else { continue }
             let candidates = rows.indices.filter { candidateIndex in
                 guard candidateIndex != index, !removedIndices.contains(candidateIndex) else { return false }
@@ -363,12 +444,13 @@ enum ReceiptTextRecognizer {
                 guard text.contains(where: \.isLetter), priced(text) == nil,
                       candidate.allSatisfy({ $0.box.maxX < price.box.minX }) else { return false }
                 let anchor = candidate[0].box
-                return abs((anchor.midY + drift) - price.box.midY) < min(anchor.height, price.box.height) * 1.25
+                return abs((adjustedMidY(anchor) + drift) - adjustedMidY(price.box)) < min(anchor.height, price.box.height) * 1.25
             }
             if let target = candidates.min(by: {
-                abs((rows[$0][0].box.midY + drift) - price.box.midY) < abs((rows[$1][0].box.midY + drift) - price.box.midY)
+                abs((adjustedMidY(rows[$0][0].box) + drift) - adjustedMidY(price.box))
+                    < abs((adjustedMidY(rows[$1][0].box) + drift) - adjustedMidY(price.box))
             }) {
-                drift = price.box.midY - rows[target][0].box.midY
+                drift = adjustedMidY(price.box) - adjustedMidY(rows[target][0].box)
                 rows[target].append(price)
                 removedIndices.insert(index)
             }
@@ -382,7 +464,7 @@ enum ReceiptTextRecognizer {
     }
 
     /// Document recognition's lines completed with the accurate pass's. Document recognition can drop a short line,
-    /// such as a price, or merge two stacked prices into one tall line. Accurate lines are added where no document line
+    /// such as a price, or merge stacked prices into one tall line. Accurate lines are added where no document line
     /// covers them, and a document line spanning several of them is replaced by them.
     static func merge(document: [Fragment], accurate: [Fragment]) -> [Fragment] {
         let heights = document.map(\.box.height).sorted()
@@ -390,9 +472,22 @@ enum ReceiptTextRecognizer {
         let lineHeight = heights[heights.count / 2]
         var result: [Fragment] = []
         for line in document {
-            let inside = accurate.filter { overlap(line.box, $0.box) > 0.5 && $0.box.height < lineHeight * 1.3 }
+            let isTall = line.box.height > lineHeight * 1.6
+            let minOverlap: CGFloat = isTall ? 0.2 : 0.5
+            let inside = accurate.filter { overlap(line.box, $0.box) > minOverlap && $0.box.height < lineHeight * 1.3 }
             let stacked = Set(inside.map { Int(($0.box.midY / lineHeight).rounded()) }).count > 1
-            if line.box.height > lineHeight * 1.6, stacked { result += inside } else { result.append(line) }
+            if isTall, stacked {
+                result += inside
+            } else if isTall, line.box.height > line.box.width {
+                // A vertical strip across several rows (such as leading digits read top-to-bottom) is replaced by horizontal lines.
+                result += inside
+            } else if line.box.minX > 0.5, line.text.contains(where: \.isNumber),
+                      priced("Item \(normalizedPriceFragment(line.text))") == nil,
+                      inside.contains(where: { priced("Item \(normalizedPriceFragment($0.text))") != nil }) {
+                result += inside
+            } else {
+                result.append(line)
+            }
         }
         result += accurate.filter { candidate in !result.contains { overlap($0.box, candidate.box) > 0.3 } }
         return result
