@@ -31,6 +31,9 @@ No certificate or private signing key is uploaded to GitHub.
    set `LAUNCH_APP=true`. The phone may need to be unlocked for installation or
    launch. A successful install followed by a failed launch still leaves the new
    app installed. Personal Team provisioning expires and may require refreshing.
+   A phone missing from the provisioning profile (new phone or new team) is
+   registered with the team and the app rebuilt for it automatically; it must be
+   reachable for that.
 
 ## Register the GitHub runner
 

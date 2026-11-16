@@ -37,12 +37,12 @@ xcrun --find devicectl >/dev/null 2>&1 || fail 'devicectl is missing. Check the 
 STEP="listing paired iPhones"
 DEVICE_LIST="$(mktemp)"
 xcrun devicectl list devices --json-output "$DEVICE_LIST" >/dev/null 2>&1 || fail 'Could not list paired iPhones with devicectl.'
-# One "identifier<TAB>name" line per iPhone; with "all", only paired ones.
+# One "identifier<TAB>name<TAB>hardware UDID" line per iPhone; with "all", only paired ones.
 DEVICE_ROWS="$(/usr/bin/python3 -c 'import json, sys
 for d in json.load(open(sys.argv[1]))["result"]["devices"]:
     if d["hardwareProperties"].get("platform") != "iOS": continue
     if sys.argv[2] == "all" and d["connectionProperties"].get("pairingState") != "paired": continue
-    print(d["identifier"] + "\t" + d["deviceProperties"].get("name", d["identifier"]))' "$DEVICE_LIST" "$IPHONE_ID")"
+    print("\t".join([d["identifier"], d["deviceProperties"].get("name", d["identifier"]), d["hardwareProperties"].get("udid", "")]))' "$DEVICE_LIST" "$IPHONE_ID")"
 rm -f "$DEVICE_LIST"
 if [[ "$IPHONE_ID" == all ]]; then
   CANDIDATES=()
@@ -51,11 +51,12 @@ else
   IFS=', ' read -r -a CANDIDATES <<< "$IPHONE_ID"
 fi
 (( ${#CANDIDATES[@]} > 0 )) || fail 'No paired iPhone found. Pair one in Xcode (Window > Devices and Simulators).'
-# Parallel to CANDIDATES: display name, whether it's installed, and why the last attempt failed.
-NAMES=(); DONE=(); REASONS=()
+# Parallel to CANDIDATES: display name, hardware UDID, whether it's installed, and why the last attempt failed.
+NAMES=(); UDIDS=(); DONE=(); REASONS=()
 for device in "${CANDIDATES[@]}"; do
   name="$(awk -F'\t' -v id="$device" '$1 == id { print $2; exit }' <<< "$DEVICE_ROWS")"
-  NAMES+=("${name:-$device}"); DONE+=(false); REASONS+=("")
+  udid="$(awk -F'\t' -v id="$device" '$1 == id { print $3; exit }' <<< "$DEVICE_ROWS")"
+  NAMES+=("${name:-$device}"); UDIDS+=("$udid"); DONE+=(false); REASONS+=("")
 done
 echo "Installing on: ${NAMES[*]}"
 cd "$IOS_DIR"
@@ -65,12 +66,15 @@ if [[ "$SIGNING_CONFIG" -ef "$IOS_DIR/Signing.local.xcconfig" ]]; then :; else c
 STEP="generating the Xcode project"
 xcodegen generate
 STEP="building the app"
+# Takes an xcodebuild destination. Building for a specific phone registers it with the signing team, which a
+# generic build never does, so a phone the provisioning profile doesn't cover gets rebuilt for (see below).
+build_app() {
 BUILD_LOG="$(mktemp)"
 if ! xcodebuild \
   -project ReceiptDivider.xcodeproj \
   -scheme ReceiptDivider \
   -configuration Debug \
-  -destination 'generic/platform=iOS' \
+  -destination "$1" \
   -derivedDataPath "$DERIVED_DATA" \
   -xcconfig "$SIGNING_CONFIG" \
   -allowProvisioningUpdates \
@@ -82,6 +86,8 @@ if ! xcodebuild \
   fail "Build failed${error:+: $error}"
 fi
 rm -f "$BUILD_LOG"
+}
+build_app 'generic/platform=iOS'
 
 APP_PATH="$DERIVED_DATA/Build/Products/Debug-iphoneos/Receipt Divider.app"
 [[ -d "$APP_PATH" ]] || fail "The build finished but produced no app at $APP_PATH."
@@ -93,6 +99,7 @@ install_error() {
     *[Tt]imed\ out* | *[Tt]imeout*) echo "timed out during the install." ;;
     *[Ll]ocked*) echo "locked. Unlock it and keep it awake." ;;
     *[Dd]eveloper\ [Mm]ode*) echo "needs Developer Mode turned on." ;;
+    *0xe8008012*) echo "isn't registered with the signing team. Open Xcode and run the app on it once." ;;
     *) local line; line="$(grep -m 1 'ERROR:' <<< "$1" | sed -E 's/^.*ERROR: *//; s/ \(com\.apple[^)]*\)//' | cut -c1-160 || true)"
        echo "install failed${line:+: $line}" ;;
   esac
@@ -117,11 +124,20 @@ while :; do
       REASONS[$i]="not reachable. Unlock it and check it's on the same Wi-Fi as the Mac."
       echo "${NAMES[$i]}: ${REASONS[$i]}"; continue
     fi
-    if ! output="$(xcrun devicectl --timeout 120 device install app --device "$device" "$APP_PATH" 2>&1)"; then
+    output="$(xcrun devicectl --timeout 120 device install app --device "$device" "$APP_PATH" 2>&1)" || {
+      # The profile doesn't list this phone (new phone or new signing team): register it and try once more.
+      if [[ "$output" == *0xe8008012* && -n "${UDIDS[$i]}" ]]; then
+        echo "${NAMES[$i]} isn't in the provisioning profile. Registering it and rebuilding."
+        STEP="registering ${NAMES[$i]} with the signing team"
+        build_app "id=${UDIDS[$i]}"
+        STEP="installing on the iPhones"
+        output="$(xcrun devicectl --timeout 120 device install app --device "$device" "$APP_PATH" 2>&1)"
+      else false; fi
+    } || {
       echo "$output"
       REASONS[$i]="$(install_error "$output")"
       echo "${NAMES[$i]}: ${REASONS[$i]}"; continue
-    fi
+    }
     echo "$output"
     DONE[$i]=true; installed=$(( installed + 1 ))
     echo "Installed on ${NAMES[$i]}."
